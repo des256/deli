@@ -1,0 +1,8 @@
+[package]
+name = "deli-image"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+deli-base = { path = "../deli-base" }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "tiff", "webp"] }
