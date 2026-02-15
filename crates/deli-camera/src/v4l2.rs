@@ -41,10 +41,11 @@ impl Camera for V4l2Camera {
             .as_mut()
             .ok_or_else(|| CameraError::Channel("Receiver not initialized".to_string()))?;
 
-        receiver
-            .recv()
-            .await
-            .ok_or_else(|| CameraError::Channel("Channel closed".to_string()))?
+        receiver.recv().await.ok_or_else(|| {
+            CameraError::Stream(
+                "Capture thread terminated; recreate V4l2Camera to restart".to_string(),
+            )
+        })?
     }
 }
 
@@ -118,9 +119,7 @@ impl V4l2Camera {
 
         // Spawn capture thread
         let handle = thread::spawn(move || {
-            if let Err(e) = Self::capture_loop(device, tx, buffer_count) {
-                eprintln!("Capture thread error: {}", e);
-            }
+            Self::capture_loop(device, tx, buffer_count);
         });
 
         self.receiver = Some(rx);
@@ -131,43 +130,50 @@ impl V4l2Camera {
 
     /// Background thread capture loop.
     ///
-    /// Reads frames from V4L2, decodes MJPEG, and sends tensors through the channel.
-    fn capture_loop(
-        device: Device,
-        tx: mpsc::Sender<FrameResult>,
-        buffer_count: usize,
-    ) -> Result<(), CameraError> {
+    /// Reads frames from V4L2, decodes MJPEG, and sends results through the channel.
+    /// Errors are sent as `Err(CameraError)` so the consumer sees the root cause.
+    /// Uses `try_send` to drop frames when the channel is full rather than blocking.
+    fn capture_loop(device: Device, tx: mpsc::Sender<FrameResult>, buffer_count: usize) {
         // Create mmap stream
-        let mut stream = MmapStream::with_buffers(&device, Type::VideoCapture, buffer_count as u32)?;
+        let mut stream = match MmapStream::with_buffers(&device, Type::VideoCapture, buffer_count as u32) {
+            Ok(s) => s,
+            Err(e) => {
+                let _ = tx.blocking_send(Err(CameraError::Stream(e.to_string())));
+                return;
+            }
+        };
 
         loop {
             // Get next frame
-            let (frame_data, _metadata) = CaptureStream::next(&mut stream)?;
+            let frame_result = match CaptureStream::next(&mut stream) {
+                Ok((frame_data, _metadata)) => {
+                    // Copy frame data (buffer is borrowed and only valid until next call)
+                    let frame_vec = frame_data.to_vec();
 
-            // Copy frame data (buffer is borrowed and only valid until next call)
-            let frame_vec = frame_data.to_vec();
-
-            // Decode MJPEG to tensor
-            let decoded = deli_image::decode_image(&frame_vec)?;
-
-            // Extract Tensor<u8> from DecodedImage
-            let tensor = match decoded {
-                DecodedImage::U8(t) => t,
-                DecodedImage::U16(_) | DecodedImage::F32(_) => {
-                    return Err(CameraError::Decode(deli_image::ImageError::Decode(
-                        "Unexpected pixel format (expected U8)".to_string(),
-                    )));
+                    // Decode MJPEG to tensor
+                    match deli_image::decode_image(&frame_vec) {
+                        Ok(DecodedImage::U8(t)) => Ok(t),
+                        Ok(_) => Err(CameraError::Decode(deli_image::ImageError::Decode(
+                            "Unexpected pixel format (expected U8)".to_string(),
+                        ))),
+                        Err(e) => Err(CameraError::Decode(e)),
+                    }
                 }
+                Err(e) => Err(CameraError::Stream(e.to_string())),
             };
 
-            // Send frame through channel (blocking if full)
-            if tx.blocking_send(Ok(tensor)).is_err() {
-                // Receiver dropped - exit thread
-                break;
+            // Send frame through channel, drop if full
+            match tx.try_send(frame_result) {
+                Ok(()) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // Consumer too slow — drop frame silently
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    // Receiver dropped — exit thread
+                    break;
+                }
             }
         }
-
-        Ok(())
     }
 
     /// Get a reference to the configuration.

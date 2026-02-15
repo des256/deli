@@ -1,7 +1,7 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::pose::{Keypoint, KeypointIndex, PoseDetection, COCO_KEYPOINT_COUNT};
-use deli_math::{Rect, Vec2};
+use deli_base::{Rect, Vec2};
 
 #[test]
 fn test_coco_keypoint_count() {

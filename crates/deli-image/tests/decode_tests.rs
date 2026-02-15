@@ -111,6 +111,29 @@ fn test_decode_grayscale_png() {
 }
 
 #[test]
+fn test_decode_gray_alpha_png() {
+    // Create a 2x2 grayscale+alpha PNG (2 channels)
+    let mut buffer = Vec::new();
+    let img = image::GrayAlphaImage::from_fn(2, 2, |x, y| {
+        image::LumaA([(x + y) as u8 * 64, 255])
+    });
+
+    image::codecs::png::PngEncoder::new(&mut buffer)
+        .write_image(img.as_raw(), 2, 2, image::ExtendedColorType::La8)
+        .unwrap();
+
+    let decoded = decode_image(&buffer).unwrap();
+
+    match decoded {
+        DecodedImage::U8(ref tensor) => {
+            assert_eq!(tensor.shape, vec![2, 2, 2]);
+            assert_eq!(decoded.channels(), 2);
+        }
+        _ => panic!("Expected U8 variant"),
+    }
+}
+
+#[test]
 fn test_decode_invalid_data() {
     let result = decode_image(&[0xFF, 0x00, 0x12, 0x34]);
     assert!(result.is_err());

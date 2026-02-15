@@ -1,5 +1,5 @@
 use crate::InferError;
-use deli_math::Tensor;
+use deli_base::Tensor;
 
 use super::types::LetterboxInfo;
 

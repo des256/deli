@@ -12,7 +12,7 @@ fn test_onnx_backend_name() {
 #[test]
 fn test_tensor_to_ndarray_conversion() {
     use deli_infer::backends::onnx::tensor_to_ndarray;
-    use deli_math::Tensor;
+    use deli_base::Tensor;
 
     let tensor = Tensor::new(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
     let array = tensor_to_ndarray(tensor).unwrap();

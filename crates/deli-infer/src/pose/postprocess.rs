@@ -1,5 +1,5 @@
 use crate::InferError;
-use deli_math::{Rect, Tensor, Vec2};
+use deli_base::{Rect, Tensor, Vec2};
 
 use super::types::{Keypoint, LetterboxInfo, PoseDetection};
 

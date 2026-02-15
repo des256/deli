@@ -1,7 +1,7 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::pose::{iou, postprocess, LetterboxInfo};
-use deli_math::{Rect, Tensor, Vec2};
+use deli_base::{Rect, Tensor, Vec2};
 
 #[test]
 fn test_iou_non_overlapping() {

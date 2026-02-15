@@ -11,9 +11,9 @@ const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
 const KEYPOINT_THRESHOLD: f32 = 0.3;
 
-/// Convert deli_base Tensor<u8> to deli_math Tensor<f32> for pose estimator
-fn tensor_u8_to_f32(t: &deli_base::Tensor<u8>) -> Result<deli_math::Tensor<f32>, deli_math::TensorError> {
-    deli_math::Tensor::new(
+/// Convert Tensor<u8> to Tensor<f32> for pose estimator
+fn tensor_u8_to_f32(t: &deli_base::Tensor<u8>) -> Result<deli_base::Tensor<f32>, deli_base::TensorError> {
+    deli_base::Tensor::new(
         t.shape.clone(),
         t.data.iter().map(|&v| v as f32).collect(),
     )
@@ -23,7 +23,7 @@ fn tensor_u8_to_f32(t: &deli_base::Tensor<u8>) -> Result<deli_math::Tensor<f32>,
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get model path from environment or use default
     let model_path: PathBuf = env::var("DELI_MODEL_PATH")
-        .unwrap_or_else(|_| "models/yolov8n-pose.onnx".to_string())
+        .unwrap_or_else(|_| "/home/desmond/models/yolo26n-pose-uint8.onnx".to_string())
         .into();
 
     println!("Camera Pose Experiment");
@@ -75,27 +75,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
 
+        // Use actual frame dimensions (V4L2 may negotiate different resolution)
+        let frame_h = frame.shape[0];
+        let frame_w = frame.shape[1];
+
         // Convert u8 → f32 for pose estimator
         let frame_f32 = tensor_u8_to_f32(&frame)?;
 
         // Run pose estimation
-        let detections = estimator.estimate(&frame_f32)?;
+        let detections = match estimator.estimate(&frame_f32) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Estimation error: {e}");
+                continue;
+            }
+        };
 
         // Draw skeletons on frame
         let mut rgb_buf = frame.data; // Take ownership of buffer
         for detection in &detections {
             draw_skeleton(
                 &mut rgb_buf,
-                WIDTH,
-                HEIGHT,
+                frame_w,
+                frame_h,
                 detection,
                 KEYPOINT_THRESHOLD,
             );
         }
 
         // Convert RGB → ARGB and display
-        let argb = rgb_to_argb(&rgb_buf, WIDTH, HEIGHT);
-        window.update_with_buffer(&argb, WIDTH, HEIGHT)?;
+        let argb = rgb_to_argb(&rgb_buf, frame_w, frame_h);
+        window.update_with_buffer(&argb, frame_w, frame_h)?;
     }
 
     println!("Exiting...");

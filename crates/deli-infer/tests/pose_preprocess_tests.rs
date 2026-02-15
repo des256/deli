@@ -1,7 +1,7 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::pose::{preprocess, LetterboxInfo};
-use deli_math::Tensor;
+use deli_base::Tensor;
 
 #[test]
 fn test_letterbox_info_creation() {

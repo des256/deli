@@ -1,7 +1,7 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::{create_registry, Device, InferError, ModelSource};
-use deli_math::Tensor;
+use deli_base::Tensor;
 use std::fs;
 
 #[test]

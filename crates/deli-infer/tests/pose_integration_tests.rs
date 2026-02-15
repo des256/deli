@@ -1,7 +1,7 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::{Device, ModelSource, YoloPoseEstimator};
-use deli_math::Tensor;
+use deli_base::Tensor;
 use std::path::Path;
 
 /// Helper function to load a JPEG image as Tensor<f32> in HWC format

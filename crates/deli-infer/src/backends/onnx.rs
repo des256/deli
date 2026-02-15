@@ -1,5 +1,5 @@
 use crate::{Backend, Device, InferError, ModelSource, Session};
-use deli_math::Tensor;
+use deli_base::Tensor;
 use ndarray::ArrayD;
 use ort::{inputs, session::Session as OrtSession, value::TensorRef};
 use std::collections::HashMap;

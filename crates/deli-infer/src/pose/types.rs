@@ -1,4 +1,4 @@
-use deli_math::{Rect, Vec2};
+use deli_base::{Rect, Vec2};
 
 /// Number of keypoints in COCO pose format
 pub const COCO_KEYPOINT_COUNT: usize = 17;

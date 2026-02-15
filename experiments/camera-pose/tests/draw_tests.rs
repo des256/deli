@@ -1,5 +1,5 @@
 use deli_infer::{Keypoint, KeypointIndex, PoseDetection};
-use deli_math::{Rect, Vec2};
+use deli_base::{Rect, Vec2};
 
 mod draw {
     include!("../src/draw.rs");

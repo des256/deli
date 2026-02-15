@@ -1,7 +1,7 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::{Device, InferError, ModelSource, YoloPoseEstimator};
-use deli_math::Tensor;
+use deli_base::Tensor;
 
 #[test]
 fn test_estimator_construction_fails_for_missing_model() {

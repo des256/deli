@@ -11,6 +11,5 @@ path = "src/main.rs"
 deli-camera = { path = "../../crates/deli-camera", features = ["v4l2"] }
 deli-infer = { path = "../../crates/deli-infer", features = ["onnx"] }
 deli-base = { path = "../../crates/deli-base" }
-deli-math = { path = "../../crates/deli-math" }
 minifb = "0.27"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

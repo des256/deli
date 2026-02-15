@@ -164,6 +164,12 @@ pub fn draw_skeleton(
 
 /// Convert HWC RGB buffer to packed ARGB u32 for minifb
 pub fn rgb_to_argb(buf: &[u8], width: usize, height: usize) -> Vec<u32> {
+    debug_assert!(
+        buf.len() >= width * height * 3,
+        "RGB buffer too small: expected {} bytes, got {}",
+        width * height * 3,
+        buf.len()
+    );
     let mut argb = Vec::with_capacity(width * height);
 
     for y in 0..height {
