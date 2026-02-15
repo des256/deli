@@ -1,12 +1,13 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::backends::OnnxBackend;
-use deli_infer::Backend;
+use deli_infer::{Backend, Device};
 
 #[test]
-fn test_onnx_backend_name() {
-    let backend = OnnxBackend;
-    assert_eq!(backend.name(), "onnx");
+fn test_onnx_backend_load_model() {
+    let backend = OnnxBackend::new(Device::Cpu);
+    let session = backend.load_model(deli_infer::ModelSource::File("tests/fixtures/test_add.onnx".into()));
+    assert!(session.is_ok());
 }
 
 #[test]
@@ -33,15 +34,4 @@ fn test_ndarray_to_tensor_conversion() {
 
     assert_eq!(tensor.shape, vec![2, 3]);
     assert_eq!(tensor.data, vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
-}
-
-#[test]
-fn test_create_registry_includes_onnx() {
-    use deli_infer::create_registry;
-
-    let registry = create_registry();
-    let backends = registry.list();
-
-    assert!(backends.contains(&"onnx"));
-    assert!(registry.get("onnx").is_some());
 }

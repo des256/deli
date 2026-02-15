@@ -33,37 +33,34 @@ fn test_iou_zero_area_boxes() {
     assert_eq!(iou(&a, &b), 0.0);
 }
 
-/// Helper to set value at [0, feature_idx, detection_idx] in a [1, 56, N] tensor
-fn set_detection(data: &mut [f32], n: usize, feature_idx: usize, detection_idx: usize, value: f32) {
-    data[feature_idx * n + detection_idx] = value;
-}
+/// Number of values per detection in YOLO26 end-to-end pose output:
+/// 4 (x1,y1,x2,y2) + 1 (score) + 1 (class_id) + 51 (17*3 keypoints) = 57
+const DET_SIZE: usize = 57;
 
-/// Fill a detection in the tensor data buffer
+/// Fill a detection row in [1, N, 57] tensor data.
+/// All coordinates are normalized (0..1). Confidence is absolute.
 fn fill_detection(
     data: &mut [f32],
-    n: usize,
     det_idx: usize,
-    cx: f32,
-    cy: f32,
-    w: f32,
-    h: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
     conf: f32,
 ) {
-    set_detection(data, n, 0, det_idx, cx);
-    set_detection(data, n, 1, det_idx, cy);
-    set_detection(data, n, 2, det_idx, w);
-    set_detection(data, n, 3, det_idx, h);
-    set_detection(data, n, 4, det_idx, conf);
-    for i in 0..17 {
-        set_detection(data, n, 5 + i * 3, det_idx, 0.0);
-        set_detection(data, n, 5 + i * 3 + 1, det_idx, 0.0);
-        set_detection(data, n, 5 + i * 3 + 2, det_idx, 0.0);
-    }
+    let base = det_idx * DET_SIZE;
+    data[base] = x1;
+    data[base + 1] = y1;
+    data[base + 2] = x2;
+    data[base + 3] = y2;
+    data[base + 4] = conf;
+    data[base + 5] = 0.0; // class_id
+    // keypoints default to 0.0 (already zeroed)
 }
 
 #[test]
 fn test_postprocess_invalid_shape_returns_error() {
-    // Shape [1, 10, 5] is invalid (should be [1, 56, N])
+    // Shape [1, 10, 5] is invalid (should be [1, N, 57])
     let data = vec![0.0; 10 * 5];
     let output = Tensor::new(vec![1, 10, 5], data).unwrap();
     let letterbox = LetterboxInfo {
@@ -72,204 +69,205 @@ fn test_postprocess_invalid_shape_returns_error() {
         pad_y: 0.0,
     };
 
-    let result = postprocess(&output, &letterbox, 0.25, 0.45);
+    let result = postprocess(&output, &letterbox, 0.25);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_postprocess_confidence_filtering() {
-    let mut data = vec![0.0; 56 * 2];
+    let n = 2;
+    let mut data = vec![0.0; n * DET_SIZE];
 
-    // Detection 0: high confidence
-    fill_detection(&mut data, 2, 0, 320.0, 320.0, 100.0, 100.0, 0.8);
+    // Detection 0: high confidence, normalized bbox
+    fill_detection(&mut data, 0, 0.4, 0.4, 0.6, 0.6, 0.8);
     // Detection 1: low confidence
-    fill_detection(&mut data, 2, 1, 100.0, 100.0, 50.0, 50.0, 0.1);
+    fill_detection(&mut data, 1, 0.1, 0.1, 0.2, 0.2, 0.1);
 
-    let output = Tensor::new(vec![1, 56, 2], data).unwrap();
+    let output = Tensor::new(vec![1, n, DET_SIZE], data).unwrap();
     let letterbox = LetterboxInfo {
         scale: 1.0,
         pad_x: 0.0,
         pad_y: 0.0,
     };
 
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
+    let detections = postprocess(&output, &letterbox, 0.25).unwrap();
     assert_eq!(detections.len(), 1);
     assert!((detections[0].confidence - 0.8).abs() < 0.01);
 }
 
 #[test]
-fn test_postprocess_nms_suppression() {
-    let mut data = vec![0.0; 56 * 2];
+fn test_postprocess_sorted_by_confidence() {
+    let n = 3;
+    let mut data = vec![0.0; n * DET_SIZE];
 
-    // Detection 0: confidence 0.9
-    fill_detection(&mut data, 2, 0, 320.0, 320.0, 100.0, 100.0, 0.9);
-    // Detection 1: confidence 0.7, almost same position (high IoU)
-    fill_detection(&mut data, 2, 1, 325.0, 325.0, 100.0, 100.0, 0.7);
+    // Three non-overlapping detections with different confidences (normalized coords)
+    fill_detection(&mut data, 0, 0.1, 0.1, 0.2, 0.2, 0.5);
+    fill_detection(&mut data, 1, 0.4, 0.4, 0.5, 0.5, 0.9);
+    fill_detection(&mut data, 2, 0.7, 0.7, 0.8, 0.8, 0.7);
 
-    let output = Tensor::new(vec![1, 56, 2], data).unwrap();
+    let output = Tensor::new(vec![1, n, DET_SIZE], data).unwrap();
     let letterbox = LetterboxInfo {
         scale: 1.0,
         pad_x: 0.0,
         pad_y: 0.0,
     };
 
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
-    assert_eq!(detections.len(), 1);
-    assert!((detections[0].confidence - 0.9).abs() < 0.01);
-}
-
-#[test]
-fn test_postprocess_nms_identical_confidence_deterministic() {
-    // 3 non-overlapping detections with identical confidence
-    // Sort should be stable (preserve original order by index)
-    let mut data = vec![0.0; 56 * 3];
-
-    // All three at different positions, same confidence
-    fill_detection(&mut data, 3, 0, 100.0, 100.0, 50.0, 50.0, 0.8);
-    fill_detection(&mut data, 3, 1, 300.0, 300.0, 50.0, 50.0, 0.8);
-    fill_detection(&mut data, 3, 2, 500.0, 500.0, 50.0, 50.0, 0.8);
-
-    let output = Tensor::new(vec![1, 56, 3], data).unwrap();
-    let letterbox = LetterboxInfo {
-        scale: 1.0,
-        pad_x: 0.0,
-        pad_y: 0.0,
-    };
-
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
-
-    // All 3 should survive NMS (non-overlapping)
+    let detections = postprocess(&output, &letterbox, 0.25).unwrap();
     assert_eq!(detections.len(), 3);
-
-    // All should have identical confidence
-    for det in &detections {
-        assert!((det.confidence - 0.8).abs() < 0.01);
-    }
-
-    // Run again to verify determinism
-    let data2 = {
-        let mut d = vec![0.0; 56 * 3];
-        fill_detection(&mut d, 3, 0, 100.0, 100.0, 50.0, 50.0, 0.8);
-        fill_detection(&mut d, 3, 1, 300.0, 300.0, 50.0, 50.0, 0.8);
-        fill_detection(&mut d, 3, 2, 500.0, 500.0, 50.0, 50.0, 0.8);
-        d
-    };
-    let output2 = Tensor::new(vec![1, 56, 3], data2).unwrap();
-    let detections2 = postprocess(&output2, &letterbox, 0.25, 0.45).unwrap();
-
-    // Same order both times
-    for (a, b) in detections.iter().zip(detections2.iter()) {
-        assert_eq!(a.bbox.origin.x, b.bbox.origin.x);
-        assert_eq!(a.bbox.origin.y, b.bbox.origin.y);
-    }
+    assert!((detections[0].confidence - 0.9).abs() < 0.01);
+    assert!((detections[1].confidence - 0.7).abs() < 0.01);
+    assert!((detections[2].confidence - 0.5).abs() < 0.01);
 }
 
 #[test]
-fn test_postprocess_coordinate_rescaling_positive() {
-    let mut data = vec![0.0; 56];
+fn test_postprocess_denormalization_no_padding() {
+    // Model input 640x640, original image 640x640 (no padding, scale=1.0)
+    // Normalized coord 0.5 → pixel 320.0 in model space → 320.0 in original
+    let n = 1;
+    let mut data = vec![0.0; n * DET_SIZE];
 
-    // Detection at (400, 400) in model space
-    data[0] = 400.0; // cx
-    data[1] = 400.0; // cy
-    data[2] = 100.0; // w
-    data[3] = 100.0; // h
-    data[4] = 0.8; // confidence
-    data[5] = 400.0; // kp0_x
-    data[6] = 400.0; // kp0_y
-    data[7] = 0.9; // kp0_vis
-    for i in 1..17 {
-        data[5 + i * 3] = 400.0;
-        data[5 + i * 3 + 1] = 400.0;
-        data[5 + i * 3 + 2] = 0.5;
-    }
+    let base = 0;
+    // Normalized bbox: center region of image
+    data[base] = 0.25;     // x1 = 0.25
+    data[base + 1] = 0.25; // y1 = 0.25
+    data[base + 2] = 0.75; // x2 = 0.75
+    data[base + 3] = 0.75; // y2 = 0.75
+    data[base + 4] = 0.8;  // confidence
+    data[base + 5] = 0.0;  // class_id
+    // kp0 at normalized (0.5, 0.5), vis 0.9
+    data[base + 6] = 0.5;
+    data[base + 7] = 0.5;
+    data[base + 8] = 0.9;
 
-    let output = Tensor::new(vec![1, 56, 1], data).unwrap();
+    let output = Tensor::new(vec![1, n, DET_SIZE], data).unwrap();
     let letterbox = LetterboxInfo {
-        scale: 2.0,
-        pad_x: 160.0,
-        pad_y: 160.0,
+        scale: 1.0,
+        pad_x: 0.0,
+        pad_y: 0.0,
     };
 
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
+    let detections = postprocess(&output, &letterbox, 0.25).unwrap();
     assert_eq!(detections.len(), 1);
 
-    // Model space (400, 400) → subtract pad → (240, 240) → divide by scale → (120, 120)
+    // 0.25 * 640 = 160, 0.75 * 640 = 480 → origin=(160,160), size=(320,320)
+    assert!((detections[0].bbox.origin.x - 160.0).abs() < 1.0);
+    assert!((detections[0].bbox.origin.y - 160.0).abs() < 1.0);
+    assert!((detections[0].bbox.size.x - 320.0).abs() < 1.0);
+    assert!((detections[0].bbox.size.y - 320.0).abs() < 1.0);
+
+    // kp0: 0.5 * 640 = 320
     let kp0 = &detections[0].keypoints[0];
-    assert!((kp0.position.x - 120.0).abs() < 1.0);
-    assert!((kp0.position.y - 120.0).abs() < 1.0);
+    assert!((kp0.position.x - 320.0).abs() < 1.0);
+    assert!((kp0.position.y - 320.0).abs() < 1.0);
     assert!((kp0.confidence - 0.9).abs() < 0.01);
 }
 
 #[test]
-fn test_postprocess_empty_input() {
-    let output = Tensor::new(vec![1, 56, 0], vec![]).unwrap();
+fn test_postprocess_denormalization_with_padding() {
+    // Original image: 480x640 (H x W) → letterbox to 640x640
+    // scale = min(640/640, 640/480) = 1.0
+    // new_w = 640, new_h = 480, pad_x = 0, pad_y = 80
+    //
+    // A keypoint at normalized (0.5, 0.5) means:
+    //   pixel in model space = 0.5 * 640 = 320
+    //   x: (320 - 0) / 1.0 = 320 in original
+    //   y: (320 - 80) / 1.0 = 240 in original
+    let n = 1;
+    let mut data = vec![0.0; n * DET_SIZE];
+
+    let base = 0;
+    data[base] = 0.25;     // x1
+    data[base + 1] = 0.25; // y1
+    data[base + 2] = 0.75; // x2
+    data[base + 3] = 0.75; // y2
+    data[base + 4] = 0.8;  // confidence
+    data[base + 5] = 0.0;  // class_id
+    // kp0 at center
+    data[base + 6] = 0.5;
+    data[base + 7] = 0.5;
+    data[base + 8] = 0.9;
+
+    let output = Tensor::new(vec![1, n, DET_SIZE], data).unwrap();
+    let letterbox = LetterboxInfo {
+        scale: 1.0,
+        pad_x: 0.0,
+        pad_y: 80.0,
+    };
+
+    let detections = postprocess(&output, &letterbox, 0.25).unwrap();
+    assert_eq!(detections.len(), 1);
+
+    // kp0: x = (0.5*640 - 0)/1.0 = 320, y = (0.5*640 - 80)/1.0 = 240
+    let kp0 = &detections[0].keypoints[0];
+    assert!((kp0.position.x - 320.0).abs() < 1.0);
+    assert!((kp0.position.y - 240.0).abs() < 1.0);
+
+    // bbox: x1 = (0.25*640 - 0)/1.0 = 160, y1 = (0.25*640 - 80)/1.0 = 80
+    //        x2 = (0.75*640 - 0)/1.0 = 480, y2 = (0.75*640 - 80)/1.0 = 400
+    //        → origin=(160,80), size=(320,320)
+    assert!((detections[0].bbox.origin.x - 160.0).abs() < 1.0);
+    assert!((detections[0].bbox.origin.y - 80.0).abs() < 1.0);
+    assert!((detections[0].bbox.size.x - 320.0).abs() < 1.0);
+    assert!((detections[0].bbox.size.y - 320.0).abs() < 1.0);
+}
+
+#[test]
+fn test_postprocess_empty_detections() {
+    let n = 3;
+    let mut data = vec![0.0; n * DET_SIZE];
+    for i in 0..n {
+        fill_detection(&mut data, i, 0.0, 0.0, 0.0, 0.0, 0.0);
+    }
+
+    let output = Tensor::new(vec![1, n, DET_SIZE], data).unwrap();
     let letterbox = LetterboxInfo {
         scale: 1.0,
         pad_x: 0.0,
         pad_y: 0.0,
     };
 
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
+    let detections = postprocess(&output, &letterbox, 0.25).unwrap();
     assert_eq!(detections.len(), 0);
 }
 
 #[test]
 fn test_postprocess_all_below_threshold() {
-    let mut data = vec![0.0; 56 * 3];
-    for i in 0..3 {
-        fill_detection(&mut data, 3, i, 100.0, 100.0, 50.0, 50.0, 0.1);
+    let n = 3;
+    let mut data = vec![0.0; n * DET_SIZE];
+    for i in 0..n {
+        fill_detection(&mut data, i, 0.1, 0.1, 0.2, 0.2, 0.1);
     }
 
-    let output = Tensor::new(vec![1, 56, 3], data).unwrap();
+    let output = Tensor::new(vec![1, n, DET_SIZE], data).unwrap();
     let letterbox = LetterboxInfo {
         scale: 1.0,
         pad_x: 0.0,
         pad_y: 0.0,
     };
 
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
+    let detections = postprocess(&output, &letterbox, 0.25).unwrap();
     assert_eq!(detections.len(), 0);
 }
 
 #[test]
-fn test_postprocess_bbox_conversion() {
-    let mut data = vec![0.0; 56];
-    // Box at center (100, 100) with size 40x40
-    fill_detection(&mut data, 1, 0, 100.0, 100.0, 40.0, 40.0, 0.8);
-
-    let output = Tensor::new(vec![1, 56, 1], data).unwrap();
-    let letterbox = LetterboxInfo {
-        scale: 1.0,
-        pad_x: 0.0,
-        pad_y: 0.0,
-    };
-
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
-    assert_eq!(detections.len(), 1);
-    // Expected Rect: origin (80, 80), size (40, 40)
-    assert!((detections[0].bbox.origin.x - 80.0).abs() < 0.1);
-    assert!((detections[0].bbox.origin.y - 80.0).abs() < 0.1);
-    assert!((detections[0].bbox.size.x - 40.0).abs() < 0.1);
-    assert!((detections[0].bbox.size.y - 40.0).abs() < 0.1);
-}
-
-#[test]
 fn test_postprocess_round_trip_coordinates() {
-    // Round-trip test: define bbox in original space, convert to model space, postprocess back
-    // Original image: 480x640 (H x W)
-    // Original bbox: center at (200, 300), size 100x80 in original space
-    let orig_cx = 200.0_f32;
-    let orig_cy = 300.0_f32;
+    // Round-trip test: define bbox in original space, convert to normalized model output,
+    // then postprocess back to original space.
+    //
+    // Original image: 480x640 (H x W) → letterbox to 640x640
+    // scale = 1.0, pad_x = 0, pad_y = 80
+    let orig_x1 = 150.0_f32;
+    let orig_y1 = 260.0_f32;
     let orig_w = 100.0_f32;
     let orig_h = 80.0_f32;
+    let orig_x2 = orig_x1 + orig_w;
+    let orig_y2 = orig_y1 + orig_h;
 
-    // Compute letterbox parameters for 480x640 → 640x640
-    // scale = min(640/640, 640/480) = min(1.0, 1.333) = 1.0
     let scale = (640.0_f32 / 640.0).min(640.0 / 480.0);
-    let new_w = (640.0 * scale) as usize; // 640
-    let new_h = (480.0 * scale) as usize; // 480
-    let pad_x = ((640 - new_w) / 2) as f32; // 0
-    let pad_y = ((640 - new_h) / 2) as f32; // 80
+    let new_w = (640.0 * scale) as usize;
+    let new_h = (480.0 * scale) as usize;
+    let pad_x = ((640 - new_w) / 2) as f32;
+    let pad_y = ((640 - new_h) / 2) as f32;
 
     let letterbox = LetterboxInfo {
         scale,
@@ -277,40 +275,40 @@ fn test_postprocess_round_trip_coordinates() {
         pad_y,
     };
 
-    // Convert original coords to model space
-    let model_cx = orig_cx * scale + pad_x;
-    let model_cy = orig_cy * scale + pad_y;
-    let model_w = orig_w * scale;
-    let model_h = orig_h * scale;
+    // Original → model-space pixels → normalized
+    let model_x1 = orig_x1 * scale + pad_x;
+    let model_y1 = orig_y1 * scale + pad_y;
+    let model_x2 = orig_x2 * scale + pad_x;
+    let model_y2 = orig_y2 * scale + pad_y;
+    let norm_x1 = model_x1 / 640.0;
+    let norm_y1 = model_y1 / 640.0;
+    let norm_x2 = model_x2 / 640.0;
+    let norm_y2 = model_y2 / 640.0;
 
-    // Create synthetic output tensor
-    let mut data = vec![0.0; 56];
-    data[0] = model_cx;
-    data[1] = model_cy;
-    data[2] = model_w;
-    data[3] = model_h;
-    data[4] = 0.9; // confidence
+    let mut data = vec![0.0; DET_SIZE];
+    data[0] = norm_x1;
+    data[1] = norm_y1;
+    data[2] = norm_x2;
+    data[3] = norm_y2;
+    data[4] = 0.9;
+    data[5] = 0.0;
 
-    let output = Tensor::new(vec![1, 56, 1], data).unwrap();
-    let detections = postprocess(&output, &letterbox, 0.25, 0.45).unwrap();
+    let output = Tensor::new(vec![1, 1, DET_SIZE], data).unwrap();
+    let detections = postprocess(&output, &letterbox, 0.25).unwrap();
 
     assert_eq!(detections.len(), 1);
 
-    // Recovered bbox center should match original within ±1.0 pixel
-    let recovered_cx = detections[0].bbox.origin.x + detections[0].bbox.size.x / 2.0;
-    let recovered_cy = detections[0].bbox.origin.y + detections[0].bbox.size.y / 2.0;
-
     assert!(
-        (recovered_cx - orig_cx).abs() < 1.0,
-        "Round-trip cx failed: {} vs {}",
-        recovered_cx,
-        orig_cx
+        (detections[0].bbox.origin.x - orig_x1).abs() < 1.0,
+        "Round-trip x1 failed: {} vs {}",
+        detections[0].bbox.origin.x,
+        orig_x1
     );
     assert!(
-        (recovered_cy - orig_cy).abs() < 1.0,
-        "Round-trip cy failed: {} vs {}",
-        recovered_cy,
-        orig_cy
+        (detections[0].bbox.origin.y - orig_y1).abs() < 1.0,
+        "Round-trip y1 failed: {} vs {}",
+        detections[0].bbox.origin.y,
+        orig_y1
     );
     assert!(
         (detections[0].bbox.size.x - orig_w).abs() < 1.0,

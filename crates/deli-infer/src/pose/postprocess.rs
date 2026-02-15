@@ -3,6 +3,14 @@ use deli_base::{Rect, Tensor, Vec2};
 
 use super::types::{Keypoint, LetterboxInfo, PoseDetection};
 
+/// Number of values per detection in YOLO26 end-to-end pose output:
+/// 4 (x1,y1,x2,y2) + 1 (score) + 1 (class_id) + 51 (17*3 keypoints) = 57
+const DET_VALUES: usize = 57;
+
+/// Model input size (matches TARGET_SIZE in preprocess.rs).
+/// Used to denormalize coordinates from 0..1 to pixel space.
+const MODEL_SIZE: f32 = 640.0;
+
 /// Compute Intersection over Union (IoU) between two bounding boxes
 ///
 /// Returns 0.0 for non-overlapping boxes or zero-area boxes (no division by zero).
@@ -32,16 +40,22 @@ pub fn iou(a: &Rect<f32>, b: &Rect<f32>) -> f32 {
     intersection_area / union_area
 }
 
-/// Post-process YOLO pose model output
+/// Post-process YOLO26 end-to-end pose model output
 ///
-/// Takes raw model output tensor [1, 56, N], applies confidence filtering, NMS,
-/// and coordinate rescaling to produce final pose detections.
+/// Takes raw model output tensor [1, N, 57], applies confidence filtering
+/// and coordinate rescaling to produce final pose detections. NMS is not needed
+/// because the YOLO26 end-to-end model applies NMS internally.
+///
+/// Each detection row contains 57 values:
+/// - [0..4]: bounding box in xyxy format (x1, y1, x2, y2)
+/// - [4]: confidence score
+/// - [5]: class id
+/// - [6..57]: 17 keypoints × 3 values (x, y, visibility)
 ///
 /// # Arguments
-/// * `output` - Raw model output tensor with shape [1, 56, N]
+/// * `output` - Raw model output tensor with shape [1, N, 57]
 /// * `letterbox` - Letterbox parameters for coordinate rescaling
 /// * `conf_threshold` - Minimum confidence threshold (default: 0.25)
-/// * `iou_threshold` - IoU threshold for NMS (default: 0.45)
 ///
 /// # Returns
 /// Vector of `PoseDetection` sorted by confidence descending, or `InferError::ShapeMismatch`
@@ -50,45 +64,50 @@ pub fn postprocess(
     output: &Tensor<f32>,
     letterbox: &LetterboxInfo,
     conf_threshold: f32,
-    iou_threshold: f32,
 ) -> Result<Vec<PoseDetection>, InferError> {
-    // Validate output shape
-    if output.shape.len() != 3 || output.shape[0] != 1 || output.shape[1] != 56 {
+    // Validate output shape: [1, N, 57]
+    if output.shape.len() != 3 || output.shape[0] != 1 || output.shape[2] != DET_VALUES {
+        println!(
+            "postprocess: shape mismatch — expected [1, N, {}], got {:?}",
+            DET_VALUES, output.shape
+        );
         return Err(InferError::ShapeMismatch {
-            expected: format!("[1, 56, N]"),
+            expected: format!("[1, N, {}]", DET_VALUES),
             got: format!("{:?}", output.shape),
         });
     }
 
-    let n = output.shape[2];
+    let n = output.shape[1];
+
     if n == 0 {
         return Ok(Vec::new());
     }
 
-    // Transpose from [1, 56, N] to [N, 56] for per-detection iteration
-    // In the flat data, element at [0, row, col] is at index: row * N + col
-    let mut candidates = Vec::new();
+    let mut candidates: Vec<PoseDetection> = Vec::new();
 
     for i in 0..n {
-        // Extract detection data (column i in the transposed view)
-        let cx = output.data[0 * n + i];
-        let cy = output.data[1 * n + i];
-        let w = output.data[2 * n + i];
-        let h = output.data[3 * n + i];
-        let confidence = output.data[4 * n + i];
+        let base = i * DET_VALUES;
+
+        // Read xyxy bbox — coordinates are normalized (0..1), denormalize to model pixels
+        let x1 = output.data[base] * MODEL_SIZE;
+        let y1 = output.data[base + 1] * MODEL_SIZE;
+        let x2 = output.data[base + 2] * MODEL_SIZE;
+        let y2 = output.data[base + 3] * MODEL_SIZE;
+        let confidence = output.data[base + 4];
+        let class_id = output.data[base + 5];
 
         // Filter by confidence threshold
         if confidence < conf_threshold {
             continue;
         }
 
-        // Extract keypoints (17 keypoints x 3 values each)
+        // Extract keypoints (17 keypoints × 3 values each, starting at offset 6)
         let mut keypoints = Vec::with_capacity(17);
         for kp_idx in 0..17 {
-            let base = 5 + kp_idx * 3;
-            let x = output.data[base * n + i];
-            let y = output.data[(base + 1) * n + i];
-            let vis = output.data[(base + 2) * n + i];
+            let kp_base = base + 6 + kp_idx * 3;
+            let x = output.data[kp_base] * MODEL_SIZE;
+            let y = output.data[kp_base + 1] * MODEL_SIZE;
+            let vis = output.data[kp_base + 2];
 
             // Rescale keypoint coordinates from model space to original image
             let rescaled_x = (x - letterbox.pad_x) / letterbox.scale;
@@ -100,58 +119,30 @@ pub fn postprocess(
             });
         }
 
-        // Convert center-based bbox to origin-based Rect
-        // Rescale bbox coordinates
-        let rescaled_cx = (cx - letterbox.pad_x) / letterbox.scale;
-        let rescaled_cy = (cy - letterbox.pad_y) / letterbox.scale;
-        let rescaled_w = w / letterbox.scale;
-        let rescaled_h = h / letterbox.scale;
-
-        // Convert from center to top-left origin
-        let origin_x = rescaled_cx - rescaled_w / 2.0;
-        let origin_y = rescaled_cy - rescaled_h / 2.0;
+        // Convert xyxy bbox to Rect (origin + size), rescaling from model space
+        let rescaled_x1 = (x1 - letterbox.pad_x) / letterbox.scale;
+        let rescaled_y1 = (y1 - letterbox.pad_y) / letterbox.scale;
+        let rescaled_x2 = (x2 - letterbox.pad_x) / letterbox.scale;
+        let rescaled_y2 = (y2 - letterbox.pad_y) / letterbox.scale;
 
         let bbox = Rect::new(
-            Vec2::new(origin_x, origin_y),
-            Vec2::new(rescaled_w, rescaled_h),
+            Vec2::new(rescaled_x1, rescaled_y1),
+            Vec2::new(rescaled_x2 - rescaled_x1, rescaled_y2 - rescaled_y1),
         );
 
-        candidates.push((
+        candidates.push(PoseDetection {
+            bbox,
             confidence,
-            PoseDetection {
-                bbox,
-                confidence,
-                keypoints: keypoints.try_into().unwrap(),
-            },
-        ));
+            keypoints: keypoints.try_into().unwrap(),
+        });
     }
 
     // Sort by confidence descending
-    candidates.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    // Apply NMS (greedy algorithm)
-    let mut keep = Vec::new();
-    let mut suppressed = vec![false; candidates.len()];
-
-    for i in 0..candidates.len() {
-        if suppressed[i] {
-            continue;
-        }
-
-        keep.push(candidates[i].1.clone());
-
-        // Suppress overlapping detections
-        for j in (i + 1)..candidates.len() {
-            if suppressed[j] {
-                continue;
-            }
-
-            let iou_val = iou(&candidates[i].1.bbox, &candidates[j].1.bbox);
-            if iou_val > iou_threshold {
-                suppressed[j] = true;
-            }
-        }
-    }
-
-    Ok(keep)
+    Ok(candidates)
 }

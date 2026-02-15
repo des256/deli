@@ -1,0 +1,2 @@
+- add whisper to deli-infer
+- add piper to deli-infer

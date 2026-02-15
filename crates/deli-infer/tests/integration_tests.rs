@@ -1,17 +1,17 @@
 #![cfg(feature = "onnx")]
 
-use deli_infer::{create_registry, Device, InferError, ModelSource};
+use deli_infer::backends::OnnxBackend;
+use deli_infer::{Backend, Device, InferError, ModelSource};
 use deli_base::Tensor;
 use std::fs;
 
 #[test]
 fn test_integration_onnx_add_from_file() {
-    let registry = create_registry();
-    let backend = registry.get("onnx").expect("onnx backend not found");
+    let backend = OnnxBackend::new(Device::Cpu);
 
     let model_path = "tests/fixtures/test_add.onnx";
     let mut session = backend
-        .load_model(ModelSource::File(model_path.into()), Device::Cpu)
+        .load_model(ModelSource::File(model_path.into()))
         .expect("failed to load model");
 
     // Create input tensors: 2x3 arrays
@@ -29,15 +29,14 @@ fn test_integration_onnx_add_from_file() {
 
 #[test]
 fn test_integration_onnx_add_from_memory() {
-    let registry = create_registry();
-    let backend = registry.get("onnx").expect("onnx backend not found");
+    let backend = OnnxBackend::new(Device::Cpu);
 
     // Load model from file to bytes
     let model_bytes =
         fs::read("tests/fixtures/test_add.onnx").expect("failed to read model file");
 
     let mut session = backend
-        .load_model(ModelSource::Memory(model_bytes), Device::Cpu)
+        .load_model(ModelSource::Memory(model_bytes))
         .expect("failed to load model from memory");
 
     // Create input tensors
@@ -55,14 +54,10 @@ fn test_integration_onnx_add_from_memory() {
 
 #[test]
 fn test_integration_invalid_input_name() {
-    let registry = create_registry();
-    let backend = registry.get("onnx").unwrap();
+    let backend = OnnxBackend::new(Device::Cpu);
 
     let mut session = backend
-        .load_model(
-            ModelSource::File("tests/fixtures/test_add.onnx".into()),
-            Device::Cpu,
-        )
+        .load_model(ModelSource::File("tests/fixtures/test_add.onnx".into()))
         .unwrap();
 
     let x = Tensor::new(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
@@ -82,14 +77,10 @@ fn test_integration_invalid_input_name() {
 
 #[test]
 fn test_integration_session_input_output_names() {
-    let registry = create_registry();
-    let backend = registry.get("onnx").unwrap();
+    let backend = OnnxBackend::new(Device::Cpu);
 
     let session = backend
-        .load_model(
-            ModelSource::File("tests/fixtures/test_add.onnx".into()),
-            Device::Cpu,
-        )
+        .load_model(ModelSource::File("tests/fixtures/test_add.onnx".into()))
         .unwrap();
 
     let input_names = session.input_names();

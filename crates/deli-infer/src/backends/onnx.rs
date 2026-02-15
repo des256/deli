@@ -4,52 +4,70 @@ use ndarray::ArrayD;
 use ort::{inputs, session::Session as OrtSession, value::TensorRef};
 use std::collections::HashMap;
 
-pub struct OnnxBackend;
+pub struct OnnxBackend {
+    device: Device,
+}
+
+impl OnnxBackend {
+    pub fn new(device: Device) -> Self {
+        Self { device }
+    }
+}
 
 impl Backend for OnnxBackend {
-    fn name(&self) -> &str {
-        "onnx"
-    }
-
     fn load_model(
         &self,
         model: ModelSource,
-        device: Device,
     ) -> Result<Box<dyn Session>, InferError> {
+        let device = &self.device;
         let mut builder = OrtSession::builder().map_err(|e| {
             InferError::BackendError(format!("failed to create session builder: {}", e))
         })?;
 
         // Map Device to ort execution providers
         builder = match device {
-            Device::Cpu => builder,
+            Device::Cpu => {
+                println!("[onnx] Using CPU execution provider");
+                builder
+            }
             #[cfg(feature = "cuda")]
             Device::Cuda { device_id } => {
+                use ort::ep::ExecutionProvider;
                 use ort::execution_providers::CUDAExecutionProvider;
+                let ep = CUDAExecutionProvider::default().with_device_id(*device_id);
+                let available = ep.is_available().unwrap_or(false);
+                println!(
+                    "[onnx] CUDA EP requested (device_id={}), available: {}",
+                    device_id, available
+                );
                 builder
-                    .with_execution_providers([CUDAExecutionProvider::default()
-                        .with_device_id(device_id)
-                        .build()])
-                    .map_err(|_| InferError::UnsupportedDevice(Device::Cuda { device_id }))?
+                    .with_execution_providers([ep.build()])
+                    .map_err(|_| InferError::UnsupportedDevice(device.clone()))?
             }
             #[cfg(not(feature = "cuda"))]
             Device::Cuda { .. } => {
-                return Err(InferError::UnsupportedDevice(device));
+                return Err(InferError::UnsupportedDevice(device.clone()));
             }
             #[cfg(feature = "tensorrt")]
             Device::TensorRt { device_id, fp16 } => {
+                use ort::ep::ExecutionProvider;
                 use ort::execution_providers::TensorRTExecutionProvider;
-                let mut ep = TensorRTExecutionProvider::default().with_device_id(device_id);
-                if fp16 {
+                let mut ep = TensorRTExecutionProvider::default().with_device_id(*device_id);
+                if *fp16 {
                     ep = ep.with_fp16(true);
                 }
+                let available = ep.is_available().unwrap_or(false);
+                println!(
+                    "[onnx] TensorRT EP requested (device_id={}, fp16={}), available: {}",
+                    device_id, fp16, available
+                );
                 builder
                     .with_execution_providers([ep.build()])
-                    .map_err(|_| InferError::UnsupportedDevice(device))?
+                    .map_err(|_| InferError::UnsupportedDevice(device.clone()))?
             }
             #[cfg(not(feature = "tensorrt"))]
             Device::TensorRt { .. } => {
-                return Err(InferError::UnsupportedDevice(device));
+                return Err(InferError::UnsupportedDevice(device.clone()));
             }
         };
 

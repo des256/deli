@@ -1,34 +1,30 @@
 #![cfg(feature = "onnx")]
 
 use deli_infer::{Device, InferError, ModelSource, YoloPoseEstimator};
+use deli_infer::backends::OnnxBackend;
 use deli_base::Tensor;
 
 #[test]
 fn test_estimator_construction_fails_for_missing_model() {
+    let backend = OnnxBackend::new(Device::Cpu);
     let result = YoloPoseEstimator::new(
         ModelSource::File("nonexistent.onnx".into()),
-        Device::Cpu,
+        &backend,
     );
     assert!(result.is_err());
 }
 
 #[test]
 fn test_estimator_builder_pattern() {
-    // We can't construct a real estimator without a model file,
-    // but we can verify the builder methods compile and chain correctly
-    // by testing through the error path: construct would fail, but
-    // the type signature is correct.
-
     // Verify the builder methods exist and return Self
     fn _verify_builder_api(estimator: YoloPoseEstimator) -> YoloPoseEstimator {
         estimator
             .with_conf_threshold(0.5)
-            .with_iou_threshold(0.6)
     }
 
     // Verify accessor methods exist
-    fn _verify_accessors(estimator: &YoloPoseEstimator) -> (f32, f32) {
-        (estimator.conf_threshold(), estimator.iou_threshold())
+    fn _verify_accessors(estimator: &YoloPoseEstimator) -> f32 {
+        estimator.conf_threshold()
     }
 }
 
@@ -61,13 +57,13 @@ fn test_postprocess_validates_output_shape() {
         pad_y: 0.0,
     };
 
-    // Wrong second dimension (10 instead of 56)
+    // Wrong third dimension (5 instead of 57)
     let bad_output = Tensor::new(vec![1, 10, 5], vec![0.0; 50]).unwrap();
-    let result = deli_infer::pose::postprocess(&bad_output, &letterbox, 0.25, 0.45);
+    let result = deli_infer::pose::postprocess(&bad_output, &letterbox, 0.25);
     assert!(matches!(result, Err(InferError::ShapeMismatch { .. })));
 
     // 2D tensor instead of 3D
-    let bad_output_2d = Tensor::new(vec![56, 5], vec![0.0; 280]).unwrap();
-    let result = deli_infer::pose::postprocess(&bad_output_2d, &letterbox, 0.25, 0.45);
+    let bad_output_2d = Tensor::new(vec![57, 5], vec![0.0; 285]).unwrap();
+    let result = deli_infer::pose::postprocess(&bad_output_2d, &letterbox, 0.25);
     assert!(matches!(result, Err(InferError::ShapeMismatch { .. })));
 }

@@ -1,29 +1,30 @@
 mod draw;
 
 use deli_camera::{Camera, CameraConfig, V4l2Camera};
+use deli_infer::backends::OnnxBackend;
 use deli_infer::{Device, ModelSource, YoloPoseEstimator};
 use draw::{draw_skeleton, rgb_to_argb};
 use minifb::{Key, Window, WindowOptions};
 use std::env;
 use std::path::PathBuf;
+use std::time::Instant;
 
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
-const KEYPOINT_THRESHOLD: f32 = 0.3;
+const KEYPOINT_THRESHOLD: f32 = 0.001;
 
 /// Convert Tensor<u8> to Tensor<f32> for pose estimator
-fn tensor_u8_to_f32(t: &deli_base::Tensor<u8>) -> Result<deli_base::Tensor<f32>, deli_base::TensorError> {
-    deli_base::Tensor::new(
-        t.shape.clone(),
-        t.data.iter().map(|&v| v as f32).collect(),
-    )
+fn tensor_u8_to_f32(
+    t: &deli_base::Tensor<u8>,
+) -> Result<deli_base::Tensor<f32>, deli_base::TensorError> {
+    deli_base::Tensor::new(t.shape.clone(), t.data.iter().map(|&v| v as f32).collect())
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Get model path from environment or use default
     let model_path: PathBuf = env::var("DELI_MODEL_PATH")
-        .unwrap_or_else(|_| "/home/desmond/models/yolo26n-pose-uint8.onnx".to_string())
+        .unwrap_or_else(|_| "/home/desmond/models/yolo26n-pose.onnx".to_string())
         .into();
 
     println!("Camera Pose Experiment");
@@ -42,10 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize pose estimator
     println!("Loading pose model...");
-    let mut estimator = YoloPoseEstimator::new(
-        ModelSource::File(model_path),
-        Device::Cpu,
-    )?;
+    let backend = OnnxBackend::new(Device::Cuda { device_id: 0 });
+    //let backend = OnnxBackend::new(Device::Cpu);
+    let mut estimator = YoloPoseEstimator::new(ModelSource::File(model_path), &backend)?;
     println!("Model loaded");
 
     // Create display window
@@ -83,6 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let frame_f32 = tensor_u8_to_f32(&frame)?;
 
         // Run pose estimation
+        let t_infer = Instant::now();
         let detections = match estimator.estimate(&frame_f32) {
             Ok(d) => d,
             Err(e) => {
@@ -90,8 +91,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
+        let infer_ms = t_infer.elapsed().as_secs_f64() * 1000.0;
 
         // Draw skeletons on frame
+        let t_rest = Instant::now();
         let mut rgb_buf = frame.data; // Take ownership of buffer
         for detection in &detections {
             draw_skeleton(
@@ -106,6 +109,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Convert RGB → ARGB and display
         let argb = rgb_to_argb(&rgb_buf, frame_w, frame_h);
         window.update_with_buffer(&argb, frame_w, frame_h)?;
+        let rest_ms = t_rest.elapsed().as_secs_f64() * 1000.0;
+
+        println!(
+            "inference: {infer_ms:.1}ms | draw+display: {rest_ms:.1}ms | total: {:.1}ms | detections: {}",
+            infer_ms + rest_ms,
+            detections.len(),
+        );
     }
 
     println!("Exiting...");

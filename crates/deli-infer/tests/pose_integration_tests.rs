@@ -1,5 +1,6 @@
 #![cfg(feature = "onnx")]
 
+use deli_infer::backends::OnnxBackend;
 use deli_infer::{Device, ModelSource, YoloPoseEstimator};
 use deli_base::Tensor;
 use std::path::Path;
@@ -55,9 +56,10 @@ fn test_pose_inference_fp32() {
     println!("Loaded test image: {}x{}", orig_w, orig_h);
 
     // Create estimator
+    let backend = OnnxBackend::new(Device::Cpu);
     let mut estimator = YoloPoseEstimator::new(
         ModelSource::File(model_path.to_path_buf()),
-        Device::Cpu,
+        &backend,
     )
     .expect("Failed to load model");
 
@@ -170,9 +172,10 @@ fn test_pose_inference_uint8() {
     println!("Testing uint8 quantized model");
 
     // Create estimator with uint8 model
+    let backend = OnnxBackend::new(Device::Cpu);
     let mut estimator = YoloPoseEstimator::new(
         ModelSource::File(model_path.to_path_buf()),
-        Device::Cpu,
+        &backend,
     )
     .expect("Failed to load uint8 model");
 
@@ -208,9 +211,10 @@ fn test_estimator_with_custom_thresholds() {
     let image = load_image_as_tensor(&image_path).expect("Failed to load test image");
 
     // Test with high confidence threshold (should return fewer detections)
+    let backend = OnnxBackend::new(Device::Cpu);
     let mut estimator_high_conf = YoloPoseEstimator::new(
         ModelSource::File(model_path.to_path_buf()),
-        Device::Cpu,
+        &backend,
     )
     .expect("Failed to load model")
     .with_conf_threshold(0.7); // High threshold
@@ -224,7 +228,7 @@ fn test_estimator_with_custom_thresholds() {
     // Test with low confidence threshold (should return more detections)
     let mut estimator_low_conf = YoloPoseEstimator::new(
         ModelSource::File(model_path.to_path_buf()),
-        Device::Cpu,
+        &backend,
     )
     .expect("Failed to load model")
     .with_conf_threshold(0.1); // Low threshold

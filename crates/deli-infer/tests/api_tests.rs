@@ -1,4 +1,4 @@
-use deli_infer::{create_registry, Backend, Device, InferError, ModelSource};
+use deli_infer::{Device, InferError, ModelSource};
 
 #[test]
 fn test_device_cpu() {
@@ -76,79 +76,4 @@ fn test_model_source_memory() {
     } else {
         panic!("Expected Memory variant");
     }
-}
-
-#[test]
-fn test_backend_registry_empty() {
-    #[cfg(not(feature = "onnx"))]
-    {
-        let registry = create_registry();
-        assert_eq!(registry.list().len(), 0);
-    }
-    #[cfg(feature = "onnx")]
-    {
-        let registry = create_registry();
-        assert_eq!(registry.list().len(), 1);
-        assert!(registry.list().contains(&"onnx"));
-    }
-}
-
-// Mock backend for testing registry
-struct MockBackend {
-    name: String,
-}
-
-impl Backend for MockBackend {
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn load_model(
-        &self,
-        _model: ModelSource,
-        _device: Device,
-    ) -> Result<Box<dyn deli_infer::Session>, InferError> {
-        Err(InferError::BackendError("mock backend".to_string()))
-    }
-}
-
-#[test]
-fn test_backend_registry_register_and_get() {
-    let mut registry = create_registry();
-    registry.register(Box::new(MockBackend {
-        name: "test".to_string(),
-    }));
-
-    #[cfg(feature = "onnx")]
-    assert_eq!(registry.list().len(), 2); // onnx + test
-    #[cfg(not(feature = "onnx"))]
-    assert_eq!(registry.list().len(), 1);
-
-    assert!(registry.list().contains(&"test"));
-
-    let backend = registry.get("test");
-    assert!(backend.is_some());
-    assert_eq!(backend.unwrap().name(), "test");
-
-    let missing = registry.get("nonexistent");
-    assert!(missing.is_none());
-}
-
-#[test]
-fn test_backend_registry_multiple() {
-    let mut registry = create_registry();
-    registry.register(Box::new(MockBackend {
-        name: "backend1".to_string(),
-    }));
-    registry.register(Box::new(MockBackend {
-        name: "backend2".to_string(),
-    }));
-
-    #[cfg(feature = "onnx")]
-    assert_eq!(registry.list().len(), 3); // onnx + backend1 + backend2
-    #[cfg(not(feature = "onnx"))]
-    assert_eq!(registry.list().len(), 2);
-
-    assert!(registry.get("backend1").is_some());
-    assert!(registry.get("backend2").is_some());
 }

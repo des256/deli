@@ -5,15 +5,14 @@ use super::postprocess::postprocess;
 use super::preprocess::preprocess;
 use super::types::PoseDetection;
 
-/// YOLO pose estimation pipeline
+/// YOLO26 end-to-end pose estimation pipeline
 ///
 /// Integrates preprocessing, ONNX inference, and post-processing into a single
-/// `estimate()` call. Handles letterbox resize, model inference, NMS, and coordinate
-/// rescaling automatically.
+/// `estimate()` call. Handles letterbox resize, model inference, and coordinate
+/// rescaling automatically. NMS is performed internally by the YOLO26 model.
 pub struct YoloPoseEstimator {
     session: Box<dyn crate::Session>,
     conf_threshold: f32,
-    iou_threshold: f32,
 }
 
 impl YoloPoseEstimator {
@@ -21,24 +20,19 @@ impl YoloPoseEstimator {
     ///
     /// # Arguments
     /// * `model` - Model source (file path or in-memory bytes)
-    /// * `device` - Device to run inference on (CPU, CUDA, TensorRT)
+    /// * `backend` - Backend to use for inference (e.g. `OnnxBackend`)
     ///
     /// # Returns
-    /// Estimator with default thresholds (conf=0.25, iou=0.45)
+    /// Estimator with default threshold (conf=0.25)
     pub fn new(
         model: crate::ModelSource,
-        device: crate::Device,
+        backend: &dyn crate::Backend,
     ) -> Result<Self, InferError> {
-        use crate::backends::OnnxBackend;
-        use crate::Backend;
-
-        let backend = OnnxBackend;
-        let session = backend.load_model(model, device)?;
+        let session = backend.load_model(model)?;
 
         Ok(Self {
             session,
             conf_threshold: 0.25,
-            iou_threshold: 0.45,
         })
     }
 
@@ -48,20 +42,9 @@ impl YoloPoseEstimator {
         self
     }
 
-    /// Set IoU threshold for NMS (builder pattern)
-    pub fn with_iou_threshold(mut self, threshold: f32) -> Self {
-        self.iou_threshold = threshold;
-        self
-    }
-
     /// Get current confidence threshold
     pub fn conf_threshold(&self) -> f32 {
         self.conf_threshold
-    }
-
-    /// Get current IoU threshold
-    pub fn iou_threshold(&self) -> f32 {
-        self.iou_threshold
     }
 
     /// Run pose estimation on an image
@@ -106,7 +89,7 @@ impl YoloPoseEstimator {
             .ok_or_else(|| InferError::BackendError("model produced no outputs".to_string()))?;
 
         // Post-process
-        let detections = postprocess(output, &letterbox, self.conf_threshold, self.iou_threshold)?;
+        let detections = postprocess(output, &letterbox, self.conf_threshold)?;
 
         Ok(detections)
     }
