@@ -40,7 +40,7 @@ pub fn create_registry() -> BackendRegistry {
 
     #[cfg(feature = "onnx")]
     {
-        use crate::onnx::OnnxBackend;
+        use crate::backends::OnnxBackend;
         registry.register(Box::new(OnnxBackend));
     }
 

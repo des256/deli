@@ -1,6 +1,6 @@
 #![cfg(feature = "onnx")]
 
-use deli_infer::onnx::OnnxBackend;
+use deli_infer::backends::OnnxBackend;
 use deli_infer::Backend;
 
 #[test]
@@ -11,7 +11,7 @@ fn test_onnx_backend_name() {
 
 #[test]
 fn test_tensor_to_ndarray_conversion() {
-    use deli_infer::onnx::tensor_to_ndarray;
+    use deli_infer::backends::onnx::tensor_to_ndarray;
     use deli_math::Tensor;
 
     let tensor = Tensor::new(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();
@@ -25,7 +25,7 @@ fn test_tensor_to_ndarray_conversion() {
 
 #[test]
 fn test_ndarray_to_tensor_conversion() {
-    use deli_infer::onnx::ndarray_to_tensor;
+    use deli_infer::backends::onnx::ndarray_to_tensor;
     use ndarray::ArrayD;
 
     let array = ArrayD::<f32>::from_shape_vec(vec![2, 3], vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]).unwrap();

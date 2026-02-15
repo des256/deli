@@ -36,9 +36,10 @@ pub fn preprocess(image: &Tensor<f32>) -> Result<(Tensor<f32>, LetterboxInfo), I
     // Compute scale factor (min of width_scale, height_scale)
     let scale = (TARGET_SIZE as f32 / w as f32).min(TARGET_SIZE as f32 / h as f32);
 
-    // Compute new dimensions after scaling
-    let new_w = (w as f32 * scale) as usize;
-    let new_h = (h as f32 * scale) as usize;
+    // Compute new dimensions after scaling (clamp to TARGET_SIZE to prevent
+    // usize subtraction overflow from floating-point rounding)
+    let new_w = ((w as f32 * scale) as usize).min(TARGET_SIZE);
+    let new_h = ((h as f32 * scale) as usize).min(TARGET_SIZE);
 
     // Compute padding
     let pad_x = ((TARGET_SIZE - new_w) / 2) as f32;

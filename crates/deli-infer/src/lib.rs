@@ -1,18 +1,20 @@
 pub mod backend;
+pub mod backendregistry;
+pub mod backends;
 pub mod device;
 pub mod error;
-pub mod registry;
-
-#[cfg(feature = "onnx")]
-pub mod onnx;
+pub mod modelsource;
+pub mod session;
 
 #[cfg(feature = "onnx")]
 pub mod pose;
 
-pub use backend::{Backend, ModelSource, Session};
+pub use backend::Backend;
+pub use backendregistry::{create_registry, BackendRegistry};
 pub use device::Device;
 pub use error::InferError;
-pub use registry::{create_registry, BackendRegistry};
+pub use modelsource::ModelSource;
+pub use session::Session;
 
 #[cfg(feature = "onnx")]
 pub use pose::{

@@ -29,7 +29,7 @@ impl YoloPoseEstimator {
         model: crate::ModelSource,
         device: crate::Device,
     ) -> Result<Self, InferError> {
-        use crate::onnx::OnnxBackend;
+        use crate::backends::OnnxBackend;
         use crate::Backend;
 
         let backend = OnnxBackend;
