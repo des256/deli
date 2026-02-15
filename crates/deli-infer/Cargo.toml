@@ -1,0 +1,14 @@
+[package]
+name = "deli-infer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+deli-math = { path = "../deli-math" }
+ort = { version = "2.0.0-rc.11", optional = true }
+ndarray = { version = "0.17", optional = true }
+
+[features]
+onnx = ["dep:ort", "dep:ndarray"]
+cuda = ["onnx", "ort/cuda"]
+tensorrt = ["onnx", "ort/tensorrt"]
