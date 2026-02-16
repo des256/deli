@@ -5,13 +5,3 @@ edition = "2024"
 
 [dependencies]
 deli-base = { path = "../deli-base" }
-ort = { version = "2.0.0-rc.11", optional = true }
-ndarray = { version = "0.17", optional = true }
-
-[dev-dependencies]
-image = "0.25"
-
-[features]
-onnx = ["dep:ort", "dep:ndarray"]
-cuda = ["onnx", "ort/cuda"]
-tensorrt = ["onnx", "ort/tensorrt"]
