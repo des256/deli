@@ -1,0 +1,17 @@
+{
+  "configVersion": 2,
+  "packages": [
+    {
+      "name": "rstypes",
+      "rootUri": "../",
+      "packageUri": "lib/",
+      "languageVersion": "3.0"
+    }
+  ],
+  "generated": "2026-02-16T10:19:22.664106Z",
+  "generator": "pub",
+  "generatorVersion": "3.6.2",
+  "flutterRoot": "file:///home/desmond/flutter",
+  "flutterVersion": "3.27.4",
+  "pubCache": "file:///home/desmond/.pub-cache"
+}
