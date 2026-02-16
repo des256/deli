@@ -6,12 +6,15 @@ edition = "2024"
 [features]
 default = []
 v4l2 = ["dep:v4l"]
+rpicam = ["dep:libcamera"]
 
 [dependencies]
 deli-base = { path = "../deli-base" }
 deli-image = { path = "../deli-image" }
+log = "0.4"
 tokio = { version = "1", features = ["rt", "sync"] }
 v4l = { version = "0.14", optional = true }
+libcamera = { version = "0.6", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "sync", "macros"] }
