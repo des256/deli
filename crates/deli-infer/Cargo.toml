@@ -5,3 +5,14 @@ edition = "2024"
 
 [dependencies]
 deli-base = { path = "../deli-base" }
+candle-core = "0.9"
+candle-nn = "0.9"
+memmap2 = "0.9"
+safetensors = "0.5"
+tokio = { version = "1", features = ["rt"] }
+
+[features]
+cuda = ["candle-core/cuda", "candle-nn/cuda"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
