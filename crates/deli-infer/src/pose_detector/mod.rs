@@ -5,10 +5,15 @@
 
 mod backbone;
 mod blocks;
+mod detector;
 mod head;
 mod neck;
+mod postprocess;
+mod types;
 
 pub use blocks::{C2f, ConvBlock, Dfl, Sppf, Upsample};
+pub use detector::PoseDetector;
+pub use types::{CocoKeypoint, Keypoint, PoseDetection};
 
 use backbone::DarkNet;
 use candle_core::{Result, Tensor};

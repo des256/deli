@@ -1,6 +1,7 @@
-use crate::model::{Multiples, YoloV8Pose};
-use crate::postprocess::postprocess;
-use crate::{InferError, PoseDetection};
+use super::postprocess::postprocess;
+use super::types::PoseDetection;
+use super::{Multiples, YoloV8Pose};
+use crate::InferError;
 use candle_core::{DType, Device, Tensor as CanTensor};
 use deli_base::Tensor;
 use std::path::Path;
@@ -55,88 +56,82 @@ impl PoseDetector {
     ///
     /// The frame should be an HWC `Tensor<f32>` with RGB channels in 0-255 range.
     pub async fn detect(&self, frame: &Tensor<f32>) -> Result<Vec<PoseDetection>, InferError> {
-        let (preprocessed, original_hw, actual_model_hw) = self.preprocess(frame)?;
-
         let model = Arc::clone(&self.model);
+        let device = self.device.clone();
+        let conf_threshold = self.conf_threshold;
+        let nms_threshold = self.nms_threshold;
+        let frame = frame.clone();
 
-        let output = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             use candle_nn::Module;
-            model.forward(&preprocessed)
+            let (preprocessed, original_hw, model_hw) = preprocess(&frame, &device)?;
+            let output = model.forward(&preprocessed).map_err(InferError::from)?;
+            postprocess(&output, original_hw, model_hw, conf_threshold, nms_threshold)
+                .map_err(InferError::from)
         })
         .await
         .map_err(|e| InferError::Runtime(format!("inference task failed: {e}")))?
-        ?;
+    }
+}
 
-        postprocess(
-            &output,
-            original_hw,
-            actual_model_hw,
-            self.conf_threshold,
-            self.nms_threshold,
-        )
-        .map_err(InferError::from)
+/// Preprocess input frame: HWC 0-255 -> NCHW 0-1.
+///
+/// Returns `(preprocessed_tensor, original_hw, actual_model_hw)`.
+/// Uses nearest-neighbor interpolation for resizing.
+fn preprocess(
+    frame: &Tensor<f32>,
+    device: &Device,
+) -> Result<(CanTensor, (usize, usize), (usize, usize)), InferError> {
+    if frame.shape.len() != 3 {
+        return Err(InferError::Shape(format!(
+            "expected HWC tensor, got shape {:?}",
+            frame.shape
+        )));
     }
 
-    /// Preprocess input frame: HWC 0-255 -> NCHW 0-1.
-    ///
-    /// Returns `(preprocessed_tensor, original_hw, actual_model_hw)`.
-    /// Uses nearest-neighbor interpolation for resizing.
-    #[allow(clippy::type_complexity)]
-    fn preprocess(
-        &self,
-        frame: &Tensor<f32>,
-    ) -> Result<(CanTensor, (usize, usize), (usize, usize)), InferError> {
-        if frame.shape.len() != 3 {
-            return Err(InferError::Shape(format!(
-                "expected HWC tensor, got shape {:?}",
-                frame.shape
-            )));
-        }
-
-        let (h, w, c) = (frame.shape[0], frame.shape[1], frame.shape[2]);
-        if h == 0 || w == 0 {
-            return Err(InferError::Shape(format!(
-                "image dimensions must be non-zero, got {}x{}",
-                h, w
-            )));
-        }
-        if c != 3 {
-            return Err(InferError::Shape(format!(
-                "expected 3 channels (RGB), got {}",
-                c
-            )));
-        }
-
-        let original_hw = (h, w);
-
-        // Compute target size: maintain aspect ratio, max dim 640, divisible by 32
-        let max_dim = 640;
-        let scale = (max_dim as f32 / h.max(w) as f32).min(1.0);
-        let target_h = ((h as f32 * scale) as usize / 32 * 32).max(32);
-        let target_w = ((w as f32 * scale) as usize / 32 * 32).max(32);
-        let actual_model_hw = (target_h, target_w);
-
-        // Create candle tensor from deli-base data: [h, w, 3]
-        let tensor = CanTensor::from_vec(frame.data.clone(), (h, w, c), &self.device)?;
-
-        // Permute HWC -> CHW: [3, h, w]
-        let tensor = tensor.permute((2, 0, 1))?;
-
-        // Add batch dim: [3, h, w] -> [1, 3, h, w]
-        let tensor = tensor.unsqueeze(0)?;
-
-        // Resize to target if needed (nearest-neighbor, requires 4D NCHW input)
-        let tensor = if target_h != h || target_w != w {
-            tensor.upsample_nearest2d(target_h, target_w)?
-        } else {
-            tensor
-        };
-
-        // Normalize: 0-255 -> 0-1
-        let tensor = (tensor / 255.0f64)?;
-
-        Ok((tensor, original_hw, actual_model_hw))
+    let (h, w, c) = (frame.shape[0], frame.shape[1], frame.shape[2]);
+    if h == 0 || w == 0 {
+        return Err(InferError::Shape(format!(
+            "image dimensions must be non-zero, got {}x{}",
+            h, w
+        )));
     }
+    if c != 3 {
+        return Err(InferError::Shape(format!(
+            "expected 3 channels (RGB), got {}",
+            c
+        )));
+    }
+
+    let original_hw = (h, w);
+
+    // Compute target size: maintain aspect ratio, max dim 640, divisible by 32
+    let max_dim = 640;
+    let scale = (max_dim as f32 / h.max(w) as f32).min(1.0);
+    let target_h = ((h as f32 * scale) as usize / 32 * 32).max(32);
+    let target_w = ((w as f32 * scale) as usize / 32 * 32).max(32);
+    let actual_model_hw = (target_h, target_w);
+
+    // Create candle tensor from deli-base data: [h, w, 3]
+    let tensor = CanTensor::from_vec(frame.data.clone(), (h, w, c), device)?;
+
+    // Permute HWC -> CHW: [3, h, w]
+    let tensor = tensor.permute((2, 0, 1))?;
+
+    // Add batch dim: [3, h, w] -> [1, 3, h, w]
+    let tensor = tensor.unsqueeze(0)?;
+
+    // Resize to target if needed (nearest-neighbor, requires 4D NCHW input)
+    let tensor = if target_h != h || target_w != w {
+        tensor.upsample_nearest2d(target_h, target_w)?
+    } else {
+        tensor
+    };
+
+    // Normalize: 0-255 -> 0-1
+    let tensor = (tensor / 255.0f64)?;
+
+    Ok((tensor, original_hw, actual_model_hw))
 }
 
 /// Auto-detect model size (N/S/M/L/X) from safetensors file.
@@ -193,7 +188,7 @@ mod tests {
     use super::*;
     use candle_core::DType;
     use candle_nn::{VarBuilder, VarMap};
-    use crate::model::Multiples;
+    use crate::pose_detector::Multiples;
 
     fn test_detector() -> PoseDetector {
         let device = Device::Cpu;
@@ -210,11 +205,11 @@ mod tests {
 
     #[test]
     fn test_preprocess_shape_and_normalization() {
-        let detector = test_detector();
+        let device = Device::Cpu;
         let data = vec![128.0f32; 480 * 640 * 3];
         let frame = Tensor::new(vec![480, 640, 3], data).unwrap();
 
-        let (tensor, original_hw, model_hw) = detector.preprocess(&frame).unwrap();
+        let (tensor, original_hw, model_hw) = preprocess(&frame, &device).unwrap();
 
         assert_eq!(original_hw, (480, 640));
         // scale = 640/640 = 1.0, target = (480/32)*32=480, (640/32)*32=640
@@ -229,11 +224,11 @@ mod tests {
 
     #[test]
     fn test_preprocess_small_image_min_32() {
-        let detector = test_detector();
+        let device = Device::Cpu;
         let data = vec![0.0f32; 16 * 16 * 3];
         let frame = Tensor::new(vec![16, 16, 3], data).unwrap();
 
-        let (_tensor, _original_hw, model_hw) = detector.preprocess(&frame).unwrap();
+        let (_tensor, _original_hw, model_hw) = preprocess(&frame, &device).unwrap();
 
         assert!(model_hw.0 >= 32);
         assert!(model_hw.1 >= 32);
@@ -241,19 +236,19 @@ mod tests {
 
     #[test]
     fn test_preprocess_rejects_wrong_shape() {
-        let detector = test_detector();
+        let device = Device::Cpu;
         let data = vec![0.0f32; 100 * 100];
         let frame = Tensor::new(vec![100, 100], data).unwrap();
 
-        let result = detector.preprocess(&frame);
+        let result = preprocess(&frame, &device);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_preprocess_rejects_zero_dimensions() {
-        let detector = test_detector();
+        let device = Device::Cpu;
         let frame = Tensor::new(vec![0, 640, 3], vec![]).unwrap();
-        let result = detector.preprocess(&frame);
+        let result = preprocess(&frame, &device);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("non-zero"));
     }

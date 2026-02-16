@@ -1,4 +1,4 @@
-use crate::{Keypoint, PoseDetection};
+use super::types::{Keypoint, PoseDetection};
 use candle_core::{Result, Tensor};
 use deli_base::{Rect, Vec2};
 use std::collections::VecDeque;

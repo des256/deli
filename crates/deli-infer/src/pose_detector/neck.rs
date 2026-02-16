@@ -4,7 +4,7 @@
 // License: Apache-2.0 OR MIT
 
 use super::{C2f, ConvBlock, Upsample};
-use crate::model::Multiples;
+use crate::pose_detector::Multiples;
 use candle_core::{Result, Tensor};
 use candle_nn::{Module, VarBuilder};
 
