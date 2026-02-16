@@ -38,8 +38,8 @@ sealed class {} {{
     return r.$1;
   }}
 
-  static ({}, int) decode(ByteData data, Uint8List bytes, int offset) {{
-    final variant = data.getUint32(offset, Endian.little); offset += 4;
+  static ({}, int) decode(ByteData bd, Uint8List buf, int offset) {{
+    final variant = bd.getUint32(offset, Endian.little); offset += 4;
     switch (variant) {{
 {}
       default:
@@ -49,11 +49,11 @@ sealed class {} {{
 
   Uint8List toBin() {{
     final builder = BytesBuilder();
-    _encode(builder);
+    encode(builder);
     return builder.toBytes();
   }}
 
-  void _encode(BytesBuilder builder);
+  void encode(BytesBuilder builder);
 }}
 
 {}
@@ -227,7 +227,7 @@ fn gen_named_variant_class(
   const {}({{{}}});
 
   @override
-  void _encode(BytesBuilder builder) {{
+  void encode(BytesBuilder builder) {{
     final _d = ByteData(8);
     _d.setUint32(0, {}, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
@@ -279,7 +279,7 @@ fn gen_tuple_variant_class(
   const {}({{{}}});
 
   @override
-  void _encode(BytesBuilder builder) {{
+  void encode(BytesBuilder builder) {{
     final _d = ByteData(8);
     _d.setUint32(0, {}, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
@@ -302,7 +302,7 @@ fn gen_unit_variant_class(parent_name: &str, class_name: &str, discriminant: usi
   const {}();
 
   @override
-  void _encode(BytesBuilder builder) {{
+  void encode(BytesBuilder builder) {{
     final _d = ByteData(8);
     _d.setUint32(0, {}, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));

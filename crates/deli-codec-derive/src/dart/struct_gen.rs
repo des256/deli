@@ -125,18 +125,18 @@ class {} {{
     return r.$1;
   }}
 
-  static ({}, int) decode(ByteData data, Uint8List bytes, int offset) {{
+  static ({}, int) decode(ByteData bd, Uint8List buf, int offset) {{
 {}
     return ({}, offset);
   }}
 
   Uint8List toBin() {{
     final builder = BytesBuilder();
-    _encode(builder);
+    encode(builder);
     return builder.toBytes();
   }}
 
-  void _encode(BytesBuilder builder) {{
+  void encode(BytesBuilder builder) {{
 {}
   }}
 }}
@@ -165,7 +165,7 @@ class {} {{
     return const {}();
   }}
 
-  static ({}, int) decode(ByteData data, Uint8List bytes, int offset) {{
+  static ({}, int) decode(ByteData bd, Uint8List buf, int offset) {{
     return ({}(), offset);
   }}
 
@@ -173,7 +173,7 @@ class {} {{
     return Uint8List(0);
   }}
 
-  void _encode(BytesBuilder builder) {{
+  void encode(BytesBuilder builder) {{
     // Empty
   }}
 }}
