@@ -1,11 +1,15 @@
 use std::fmt;
 
+pub type Result<T> = std::result::Result<T, InferError>;
+
 #[derive(Debug)]
 pub enum InferError {
     Candle(String),
     Shape(String),
     Io(String),
     Runtime(String),
+    TensorError(String),
+    TokenizerError(String),
 }
 
 impl fmt::Display for InferError {
@@ -15,6 +19,8 @@ impl fmt::Display for InferError {
             InferError::Shape(msg) => write!(f, "shape error: {msg}"),
             InferError::Io(msg) => write!(f, "io error: {msg}"),
             InferError::Runtime(msg) => write!(f, "runtime error: {msg}"),
+            InferError::TensorError(msg) => write!(f, "tensor error: {msg}"),
+            InferError::TokenizerError(msg) => write!(f, "tokenizer error: {msg}"),
         }
     }
 }

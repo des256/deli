@@ -27,4 +27,13 @@ impl Inference {
     pub fn use_pose_detector(&self, model_path: impl AsRef<Path>) -> Result<crate::PoseDetector, InferError> {
         crate::PoseDetector::new(model_path, self.device.clone())
     }
+
+    pub fn use_speech_recognizer(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+        config_path: impl AsRef<Path>,
+    ) -> Result<crate::SpeechRecognizer, InferError> {
+        crate::SpeechRecognizer::new(model_path, tokenizer_path, config_path, self.device.clone())
+    }
 }
