@@ -393,14 +393,30 @@ pub fn derive_dart(input: TokenStream) -> TokenStream {
     // Generate Dart source code
     let dart_source = dart::generate_dart(&parsed);
 
-    // Check for DELI_RSTYPES_PATH environment variable
-    let path = match std::env::var("DELI_RSTYPES_PATH") {
-        Ok(p) => p,
-        Err(_) => {
-            // Silent skip - env var not set
-            return TokenStream::new();
+    // Resolve output directory: DELI_RSTYPES_PATH or <workspace>/rstypes/lib/src
+    let path = std::env::var("DELI_RSTYPES_PATH").unwrap_or_else(|_| {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
+            .expect("CARGO_MANIFEST_DIR not set");
+        let mut dir = std::path::PathBuf::from(&manifest_dir);
+        // Walk up to find workspace root (Cargo.toml with [workspace])
+        loop {
+            let cargo_toml = dir.join("Cargo.toml");
+            if cargo_toml.exists() {
+                if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
+                    if contents.contains("[workspace]") {
+                        return dir.join("rstypes/lib/src").to_string_lossy().into_owned();
+                    }
+                }
+            }
+            if !dir.pop() {
+                // Fallback to manifest dir if no workspace root found
+                return std::path::PathBuf::from(&manifest_dir)
+                    .join("rstypes/lib/src")
+                    .to_string_lossy()
+                    .into_owned();
+            }
         }
-    };
+    });
 
     // Convert type name to snake_case for filename
     let file_name = dart::to_snake_case(&parsed.name.to_string());
