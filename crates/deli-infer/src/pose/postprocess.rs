@@ -1,5 +1,5 @@
 use crate::InferError;
-use deli_base::{Rect, Tensor, Vec2};
+use deli_base::{log, Rect, Tensor, Vec2};
 
 use super::types::{Keypoint, LetterboxInfo, PoseDetection};
 
@@ -67,10 +67,7 @@ pub fn postprocess(
 ) -> Result<Vec<PoseDetection>, InferError> {
     // Validate output shape: [1, N, 57]
     if output.shape.len() != 3 || output.shape[0] != 1 || output.shape[2] != DET_VALUES {
-        println!(
-            "postprocess: shape mismatch — expected [1, N, {}], got {:?}",
-            DET_VALUES, output.shape
-        );
+        log::warn!("postprocess: shape mismatch — expected [1, N, {}], got {:?}", DET_VALUES, output.shape);
         return Err(InferError::ShapeMismatch {
             expected: format!("[1, N, {}]", DET_VALUES),
             got: format!("{:?}", output.shape),

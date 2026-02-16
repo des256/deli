@@ -1,5 +1,6 @@
 mod draw;
 
+use deli_base::log;
 use deli_camera::{Camera, CameraConfig, V4l2Camera};
 use deli_infer::backends::OnnxBackend;
 use deli_infer::{Device, ModelSource, YoloPoseEstimator};
@@ -27,26 +28,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "/home/desmond/models/yolo26n-pose.onnx".to_string())
         .into();
 
-    println!("Camera Pose Experiment");
-    println!("Model: {}", model_path.display());
-    println!("Resolution: {}x{}", WIDTH, HEIGHT);
-    println!("Controls: ESC to exit");
-    println!();
+    deli_base::init_stdout_logger();
+
+    log::info!("Camera Pose Experiment");
+    log::info!("Model: {}", model_path.display());
+    log::info!("Resolution: {}x{}", WIDTH, HEIGHT);
+    log::info!("Controls: ESC to exit");
 
     // Initialize camera
-    println!("Opening camera...");
+    log::info!("Opening camera...");
     let config = CameraConfig::default()
         .with_width(WIDTH as u32)
         .with_height(HEIGHT as u32);
     let mut camera = V4l2Camera::new(config)?;
-    println!("Camera ready");
+    log::info!("Camera ready");
 
     // Initialize pose estimator
-    println!("Loading pose model...");
+    log::info!("Loading pose model...");
     let backend = OnnxBackend::new(Device::Cuda { device_id: 0 });
     //let backend = OnnxBackend::new(Device::Cpu);
     let mut estimator = YoloPoseEstimator::new(ModelSource::File(model_path), &backend)?;
-    println!("Model loaded");
+    log::info!("Model loaded");
 
     // Create display window
     let mut window = Window::new(
@@ -59,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Limit to max 30 FPS
     window.set_target_fps(30);
 
-    println!("Starting main loop...");
+    log::info!("Starting main loop...");
 
     // Main loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -68,10 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Validate frame shape (safety check per plan)
         if frame.shape.len() != 3 || frame.shape[2] != 3 {
-            eprintln!(
-                "Warning: Expected [H, W, 3] frame shape, got {:?}",
-                frame.shape
-            );
+            log::warn!("Expected [H, W, 3] frame shape, got {:?}", frame.shape);
             continue;
         }
 
@@ -87,7 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let detections = match estimator.estimate(&frame_f32) {
             Ok(d) => d,
             Err(e) => {
-                eprintln!("Estimation error: {e}");
+                log::error!("Estimation error: {e}");
                 continue;
             }
         };
@@ -111,13 +110,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.update_with_buffer(&argb, frame_w, frame_h)?;
         let rest_ms = t_rest.elapsed().as_secs_f64() * 1000.0;
 
-        println!(
-            "inference: {infer_ms:.1}ms | draw+display: {rest_ms:.1}ms | total: {:.1}ms | detections: {}",
-            infer_ms + rest_ms,
-            detections.len(),
-        );
+        log::debug!("inference: {infer_ms:.1}ms | draw+display: {rest_ms:.1}ms | total: {:.1}ms | detections: {}", infer_ms + rest_ms, detections.len());
     }
 
-    println!("Exiting...");
+    log::info!("Exiting...");
     Ok(())
 }

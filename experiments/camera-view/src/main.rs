@@ -1,3 +1,4 @@
+use deli_base::log;
 use deli_camera::{Camera, CameraConfig, V4l2Camera};
 use minifb::{Key, Window, WindowOptions};
 
@@ -25,18 +26,19 @@ fn rgb_to_argb(buf: &[u8], width: usize, height: usize) -> Vec<u32> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Camera View");
-    println!("Resolution: {}x{}", WIDTH, HEIGHT);
-    println!("Controls: ESC to exit");
-    println!();
+    deli_base::init_stdout_logger();
+
+    log::info!("Camera View");
+    log::info!("Resolution: {}x{}", WIDTH, HEIGHT);
+    log::info!("Controls: ESC to exit");
 
     // Initialize camera
-    println!("Opening camera...");
+    log::info!("Opening camera...");
     let config = CameraConfig::default()
         .with_width(WIDTH as u32)
         .with_height(HEIGHT as u32);
     let mut camera = V4l2Camera::new(config)?;
-    println!("Camera ready");
+    log::info!("Camera ready");
 
     // Create display window
     let mut window = Window::new(
@@ -48,16 +50,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     window.set_target_fps(30);
 
-    println!("Starting main loop...");
+    log::info!("Starting main loop...");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let frame = camera.recv().await?;
 
         if frame.shape.len() != 3 || frame.shape[2] != 3 {
-            eprintln!(
-                "Warning: Expected [H, W, 3] frame shape, got {:?}",
-                frame.shape
-            );
+            log::warn!("Expected [H, W, 3] frame shape, got {:?}", frame.shape);
             continue;
         }
 
@@ -68,6 +67,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.update_with_buffer(&argb, frame_w, frame_h)?;
     }
 
-    println!("Exiting...");
+    log::info!("Exiting...");
     Ok(())
 }

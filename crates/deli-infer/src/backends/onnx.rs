@@ -1,5 +1,5 @@
 use crate::{Backend, Device, InferError, ModelSource, Session};
-use deli_base::Tensor;
+use deli_base::{log, Tensor};
 use ndarray::ArrayD;
 use ort::{inputs, session::Session as OrtSession, value::TensorRef};
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ impl Backend for OnnxBackend {
         // Map Device to ort execution providers
         builder = match device {
             Device::Cpu => {
-                println!("[onnx] Using CPU execution provider");
+                log::info!("Using CPU execution provider");
                 builder
             }
             #[cfg(feature = "cuda")]
@@ -36,10 +36,7 @@ impl Backend for OnnxBackend {
                 use ort::execution_providers::CUDAExecutionProvider;
                 let ep = CUDAExecutionProvider::default().with_device_id(*device_id);
                 let available = ep.is_available().unwrap_or(false);
-                println!(
-                    "[onnx] CUDA EP requested (device_id={}), available: {}",
-                    device_id, available
-                );
+                log::info!("CUDA EP requested (device_id={}), available: {}", device_id, available);
                 builder
                     .with_execution_providers([ep.build()])
                     .map_err(|_| InferError::UnsupportedDevice(device.clone()))?
@@ -57,10 +54,7 @@ impl Backend for OnnxBackend {
                     ep = ep.with_fp16(true);
                 }
                 let available = ep.is_available().unwrap_or(false);
-                println!(
-                    "[onnx] TensorRT EP requested (device_id={}, fp16={}), available: {}",
-                    device_id, fp16, available
-                );
+                log::info!("TensorRT EP requested (device_id={}, fp16={}), available: {}", device_id, fp16, available);
                 builder
                     .with_execution_providers([ep.build()])
                     .map_err(|_| InferError::UnsupportedDevice(device.clone()))?
