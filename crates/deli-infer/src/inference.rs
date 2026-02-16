@@ -37,11 +37,11 @@ impl Inference {
         crate::SpeechRecognizer::new(model_path, tokenizer_path, config_path, self.device.clone())
     }
 
-    pub fn use_phi4(
+    pub fn use_qwen3(
         &self,
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::Phi4, InferError> {
-        crate::Phi4::new(model_path, tokenizer_path, self.device.clone())
+    ) -> Result<crate::Qwen3, InferError> {
+        crate::Qwen3::new(model_path, tokenizer_path, self.device.clone())
     }
 }

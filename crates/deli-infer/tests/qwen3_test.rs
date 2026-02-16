@@ -1,62 +1,57 @@
-// Tests for Phi4 LLM public API
+// Tests for Qwen3 LLM public API
 
 use candle_core::Device;
-use deli_infer::{Inference, Phi4};
+use deli_infer::{Inference, Qwen3};
 use std::path::Path;
 
 #[test]
-fn test_phi4_construction_fails_for_missing_file() {
+fn test_qwen3_construction_fails_for_missing_file() {
     let device = Device::Cpu;
-    let result = Phi4::new("fake_model.gguf", "fake_tokenizer.json", device);
+    let result = Qwen3::new("fake_model.gguf", "fake_tokenizer.json", device);
     assert!(result.is_err(), "should fail with non-existent files");
 }
 
 #[test]
-fn test_phi4_send_sync() {
-    // Verify Phi4 implements Send + Sync (required for async use across .await points)
+fn test_qwen3_send_sync() {
+    // Verify Qwen3 implements Send + Sync (required for async use across .await points)
     fn assert_send_sync<T: Send + Sync>() {}
-    assert_send_sync::<Phi4>();
+    assert_send_sync::<Qwen3>();
 }
 
 #[test]
 fn test_inference_factory_signature() {
     let inference = Inference::cpu();
     // Verify method exists and returns error for non-existent file
-    let result = inference.use_phi4("fake_model.gguf", "fake_tokenizer.json");
+    let result = inference.use_qwen3("fake_model.gguf", "fake_tokenizer.json");
     assert!(result.is_err(), "should fail with non-existent files");
 }
 
-#[tokio::test]
-async fn test_forward_empty_prompt_rejected() {
-    // Validates the empty prompt check without needing a real model.
-    // We test the public async fn via a helper that bypasses model loading.
-    // Since we can't construct Phi4 without a GGUF file, test the error message
-    // expectation is documented here; the actual validation is exercised in
-    // test_forward_empty_prompt_validation (requires real model).
-    // This test verifies the InferError type is accessible for matching.
+#[test]
+fn test_infer_error_importable() {
+    // Verifies the InferError type is accessible for matching.
+    // Actual empty-prompt validation is exercised in test_forward_empty_prompt_validation
+    // (requires real model files).
     use deli_infer::InferError;
-    let _: Option<InferError> = None; // type exists and is importable
+    let _: Option<InferError> = None;
 }
 
 #[tokio::test]
-#[ignore] // Only run if real model files are available
 async fn test_forward_with_real_model() {
-    let model_path = Path::new("../../models/phi-4/phi-4-q4.gguf");
-    let tokenizer_path = Path::new("../../models/phi-4/tokenizer.json");
+    let model_path = Path::new("../../models/qwen3/qwen3-8b-q4_k_m.gguf");
+    let tokenizer_path = Path::new("../../models/qwen3/tokenizer.json");
 
     if !model_path.exists() || !tokenizer_path.exists() {
-        println!("Skipping test - model files not found at models/phi-4/");
+        println!("Skipping test - model files not found at models/qwen3/");
         return;
     }
 
     let device = Device::Cpu;
-    let phi4 = Phi4::new(model_path, tokenizer_path, device)
-        .expect("Failed to load model");
+    let qwen3 = Qwen3::new(model_path, tokenizer_path, device).expect("Failed to load model");
 
     // Generate with a simple prompt
     let prompt = "Hello";
     let sample_len = 10; // Generate 10 tokens
-    let result = phi4.forward(prompt, sample_len).await;
+    let result = qwen3.forward(prompt, sample_len).await;
 
     assert!(result.is_ok(), "forward should succeed: {:?}", result.err());
     let text = result.unwrap();
@@ -65,22 +60,20 @@ async fn test_forward_with_real_model() {
 }
 
 #[tokio::test]
-#[ignore] // Requires real model - tests validation logic without full generation
 async fn test_forward_empty_prompt_validation() {
-    let model_path = Path::new("../../models/phi-4/phi-4-q4.gguf");
-    let tokenizer_path = Path::new("../../models/phi-4/tokenizer.json");
+    let model_path = Path::new("../../models/qwen3/qwen3-8b-q4_k_m.gguf");
+    let tokenizer_path = Path::new("../../models/qwen3/tokenizer.json");
 
     if !model_path.exists() || !tokenizer_path.exists() {
-        println!("Skipping test - model files not found at models/phi-4/");
+        println!("Skipping test - model files not found at models/qwen3/");
         return;
     }
 
     let device = Device::Cpu;
-    let phi4 = Phi4::new(model_path, tokenizer_path, device)
-        .expect("Failed to load model");
+    let qwen3 = Qwen3::new(model_path, tokenizer_path, device).expect("Failed to load model");
 
     // Empty prompt should return error
-    let result = phi4.forward("", 10).await;
+    let result = qwen3.forward("", 10).await;
     assert!(result.is_err(), "empty prompt should be rejected");
 }
 
@@ -92,9 +85,9 @@ async fn test_cuda_device_propagation() {
     // That's expected behavior - it tests the API, not the availability
     match Inference::cuda(0) {
         Ok(inference) => {
-            // Verify device propagates to Phi4
+            // Verify device propagates to Qwen3
             // This will fail without model files, but confirms the API exists
-            let result = inference.use_phi4("fake_model.gguf", "fake_tokenizer.json");
+            let result = inference.use_qwen3("fake_model.gguf", "fake_tokenizer.json");
             assert!(result.is_err(), "should fail with non-existent files");
         }
         Err(_) => {
@@ -106,28 +99,31 @@ async fn test_cuda_device_propagation() {
 
 #[cfg(feature = "cuda")]
 #[tokio::test]
-#[ignore] // Requires GPU and real model files
 async fn test_forward_with_cuda() {
-    let model_path = Path::new("../../models/phi-4/phi-4-q4.gguf");
-    let tokenizer_path = Path::new("../../models/phi-4/tokenizer.json");
+    let model_path = Path::new("../../models/qwen3/qwen3-8b-q4_k_m.gguf");
+    let tokenizer_path = Path::new("../../models/qwen3/tokenizer.json");
 
     if !model_path.exists() || !tokenizer_path.exists() {
-        println!("Skipping test - model files not found at models/phi-4/");
+        println!("Skipping test - model files not found at models/qwen3/");
         return;
     }
 
     match Inference::cuda(0) {
         Ok(inference) => {
-            let phi4 = inference
-                .use_phi4(model_path, tokenizer_path)
+            let qwen3 = inference
+                .use_qwen3(model_path, tokenizer_path)
                 .expect("Failed to load model on CUDA");
 
             // Generate with a simple prompt
             let prompt = "Hello";
             let sample_len = 10;
-            let result = phi4.forward(prompt, sample_len).await;
+            let result = qwen3.forward(prompt, sample_len).await;
 
-            assert!(result.is_ok(), "forward should succeed on CUDA: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "forward should succeed on CUDA: {:?}",
+                result.err()
+            );
             let text = result.unwrap();
             assert!(!text.is_empty(), "generated text should not be empty");
             println!("Generated on CUDA: {}", text);

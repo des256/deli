@@ -1,28 +1,34 @@
 use crate::InferError;
 use candle_core::{Device, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::models::quantized_phi3::ModelWeights;
+use candle_transformers::models::quantized_qwen3::ModelWeights;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tokenizers::Tokenizer;
 
-/// Quantized Phi 4 language model for text generation.
+/// Quantized Qwen3 8B language model for text generation.
 ///
-/// Phi 4 uses the Phi 3 architecture from candle-transformers. The model is
-/// loaded from a GGUF file and uses quantized weights for reduced memory usage.
+/// Qwen3 8B uses the Qwen3 architecture from candle-transformers with quantized weights
+/// for reduced memory usage. The model is loaded from a GGUF file.
 ///
 /// The model is wrapped in `Arc<Mutex<>>` because `ModelWeights::forward` requires
 /// `&mut self` for KV cache management. This means inference operations serialize
-/// (one at a time per Phi4 instance).
+/// (one at a time per Qwen3 instance).
 #[derive(Clone)]
-pub struct Phi4 {
+pub struct Qwen3 {
     model: Arc<Mutex<ModelWeights>>,
     tokenizer: Arc<Tokenizer>,
     device: Device,
+    eos_token: u32,
+    end_token: Option<u32>,
 }
 
-impl Phi4 {
-    /// Create a new Phi4 model from GGUF file and tokenizer.
+impl Qwen3 {
+    /// Create a new Qwen3 model from GGUF file and tokenizer.
+    ///
+    /// Validates the tokenizer contains the required `<|endoftext|>` EOS token at
+    /// construction time. The optional `<|im_end|>` end-of-turn token is looked up
+    /// but not required.
     ///
     /// # Arguments
     /// * `model_path` - Path to the quantized model GGUF file
@@ -30,7 +36,7 @@ impl Phi4 {
     /// * `device` - Device to run inference on (CPU or CUDA)
     ///
     /// # Returns
-    /// A new Phi4 instance ready for text generation
+    /// A new Qwen3 instance ready for text generation
     ///
     /// # Errors
     /// Returns error if:
@@ -38,6 +44,7 @@ impl Phi4 {
     /// - Tokenizer file doesn't exist or can't be read
     /// - GGUF file is corrupted or has wrong format
     /// - Model loading fails
+    /// - Primary EOS token `<|endoftext|>` not found in tokenizer vocab
     pub fn new(
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
@@ -48,6 +55,14 @@ impl Phi4 {
             InferError::Runtime(format!("Failed to load tokenizer: {}", e))
         })?;
 
+        // Validate EOS tokens at construction time (fail-fast for wrong tokenizer)
+        let eos_token = *tokenizer
+            .get_vocab(true)
+            .get("<|endoftext|>")
+            .ok_or_else(|| InferError::TokenizerError("<|endoftext|> token not found in vocab".to_string()))?;
+
+        let end_token = tokenizer.get_vocab(true).get("<|im_end|>").copied();
+
         // Load GGUF model
         let mut file = std::fs::File::open(model_path.as_ref())
             .map_err(|e| InferError::Io(format!("Failed to open model file: {}", e)))?;
@@ -55,18 +70,24 @@ impl Phi4 {
         let content = candle_core::quantized::gguf_file::Content::read(&mut file)
             .map_err(|e| InferError::Runtime(format!("Failed to read GGUF file: {}", e)))?;
 
-        // Load model weights (use_flash_attn = false)
-        let model = ModelWeights::from_gguf(false, content, &mut file, &device)
+        // Load model weights (from_gguf takes 3 args: ct, reader, device)
+        let model = ModelWeights::from_gguf(content, &mut file, &device)
             .map_err(|e| InferError::Runtime(format!("Failed to load model weights: {}", e)))?;
 
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
             tokenizer: Arc::new(tokenizer),
             device,
+            eos_token,
+            end_token,
         })
     }
 
     /// Generate text from a prompt using autoregressive sampling.
+    ///
+    /// Generation stops at `<|endoftext|>` (primary EOS token) or `<|im_end|>`
+    /// (end-of-turn token, if present in tokenizer). The end-of-turn token is optional
+    /// and gracefully degrades if not found.
     ///
     /// # Arguments
     /// * `prompt` - Input text to generate from
@@ -92,6 +113,8 @@ impl Phi4 {
         let tokenizer = Arc::clone(&self.tokenizer);
         let device = self.device.clone();
         let prompt = prompt.to_string();
+        let eos_token = self.eos_token;
+        let end_token = self.end_token;
 
         tokio::task::spawn_blocking(move || -> Result<String, InferError> {
             // Tokenize prompt
@@ -104,15 +127,12 @@ impl Phi4 {
                 return Err(InferError::Runtime("Tokenization produced no tokens".to_string()));
             }
 
-            // Look up EOS token
-            let eos_token = *tokenizer
-                .get_vocab(true)
-                .get("<|endoftext|>")
-                .ok_or_else(|| InferError::TokenizerError("<|endoftext|> token not found in vocab".to_string()))?;
-
             // Lock the model for the entire generation
             let mut model = model.lock()
                 .map_err(|e| InferError::Runtime(format!("Failed to lock model mutex: {}", e)))?;
+
+            // Clear KV cache from any previous generation
+            model.clear_kv_cache();
 
             // Create LogitsProcessor with greedy (ArgMax) sampling
             let mut logits_processor = LogitsProcessor::from_sampling(299792458, Sampling::ArgMax);
@@ -133,12 +153,16 @@ impl Phi4 {
             let mut next_token = logits_processor.sample(&logits)
                 .map_err(|e| InferError::Runtime(format!("Sampling failed: {}", e)))?;
 
-            let mut generated_tokens = vec![next_token];
+            // Check first token for EOS before adding to output
+            let mut generated_tokens = Vec::new();
+            if next_token != eos_token && Some(next_token) != end_token {
+                generated_tokens.push(next_token);
+            }
 
             // Generate loop (first token already sampled above)
             for index in 1..sample_len {
-                // Check for EOS
-                if next_token == eos_token {
+                // Check for EOS or end-of-turn token
+                if next_token == eos_token || Some(next_token) == end_token {
                     break;
                 }
 

@@ -31,9 +31,9 @@ fn test_use_pose_detector_signature() {
 }
 
 #[test]
-fn test_use_phi4_signature() {
+fn test_use_qwen3_signature() {
     let inference = Inference::cpu();
     // Verify method exists and returns error for non-existent files
-    let result = inference.use_phi4("fake_model.gguf", "fake_tokenizer.json");
+    let result = inference.use_qwen3("fake_model.gguf", "fake_tokenizer.json");
     assert!(result.is_err()); // Should error because files don't exist
 }
