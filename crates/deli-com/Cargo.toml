@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 deli-codec = { path = "../deli-codec" }
 tokio = { version = "1", features = ["rt", "net", "sync", "io-util", "macros", "time"] }
+tokio-websockets = { version = "0.11", features = ["client", "server", "sha1_smol", "fastrand"] }
+futures-util = { version = "0.3", features = ["sink"] }
+http = "1"
 log = "0.4"
 
 [dev-dependencies]

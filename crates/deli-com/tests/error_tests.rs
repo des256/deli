@@ -66,3 +66,31 @@ fn test_error_trait() {
     let err = ComError::ConnectionClosed;
     let _: &dyn Error = &err; // Verify it implements Error trait
 }
+
+#[test]
+fn test_websocket_error_variant() {
+    // Test that ComError::WebSocket variant exists
+    let ws_err = tokio_websockets::Error::AlreadyClosed;
+    let com_err = ComError::WebSocket(ws_err);
+    match com_err {
+        ComError::WebSocket(_) => {} // Expected
+        _ => panic!("Expected ComError::WebSocket variant"),
+    }
+}
+
+#[test]
+fn test_from_websocket_error() {
+    let ws_err = tokio_websockets::Error::AlreadyClosed;
+    let com_err: ComError = ws_err.into();
+    match com_err {
+        ComError::WebSocket(_) => {} // Expected
+        _ => panic!("Expected ComError::WebSocket variant"),
+    }
+}
+
+#[test]
+fn test_display_websocket() {
+    let err = ComError::WebSocket(tokio_websockets::Error::AlreadyClosed);
+    let display = format!("{}", err);
+    assert!(display.contains("websocket error"));
+}

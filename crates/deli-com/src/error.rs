@@ -6,6 +6,7 @@ pub enum ComError {
     Decode(deli_codec::DecodeError),
     ConnectionClosed,
     MessageTooLarge(u32),
+    WebSocket(tokio_websockets::Error),
 }
 
 impl fmt::Display for ComError {
@@ -15,6 +16,7 @@ impl fmt::Display for ComError {
             ComError::Decode(err) => write!(f, "decode error: {err}"),
             ComError::ConnectionClosed => write!(f, "connection closed"),
             ComError::MessageTooLarge(len) => write!(f, "message too large: {len} bytes"),
+            ComError::WebSocket(err) => write!(f, "websocket error: {err}"),
         }
     }
 }
@@ -30,5 +32,11 @@ impl From<std::io::Error> for ComError {
 impl From<deli_codec::DecodeError> for ComError {
     fn from(err: deli_codec::DecodeError) -> Self {
         ComError::Decode(err)
+    }
+}
+
+impl From<tokio_websockets::Error> for ComError {
+    fn from(err: tokio_websockets::Error) -> Self {
+        ComError::WebSocket(err)
     }
 }
