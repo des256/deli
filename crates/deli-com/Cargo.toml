@@ -1,0 +1,12 @@
+[package]
+name = "deli-com"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+deli-codec = { path = "../deli-codec" }
+tokio = { version = "1", features = ["rt", "net", "sync", "io-util", "macros", "time"] }
+log = "0.4"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
