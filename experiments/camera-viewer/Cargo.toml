@@ -1,0 +1,20 @@
+[package]
+name = "camera-viewer"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "camera"
+path = "src/camera.rs"
+
+[[bin]]
+name = "viewer"
+path = "src/viewer.rs"
+
+[dependencies]
+deli-base = { path = "../../crates/deli-base" }
+deli-camera = { path = "../../crates/deli-camera", features = ["v4l2"] }
+deli-com = { path = "../../crates/deli-com" }
+deli-codec = { path = "../../crates/deli-codec" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+minifb = "0.27"

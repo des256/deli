@@ -64,3 +64,25 @@ impl Codec for String {
         String::from_utf8(bytes.to_vec()).map_err(|_| DecodeError::InvalidUtf8)
     }
 }
+
+// --- Vec<T: Codec> ---
+
+impl<T: Codec> Codec for Vec<T> {
+    fn encode(&self, buf: &mut Vec<u8>) {
+        (self.len() as u32).encode(buf);
+        for item in self {
+            item.encode(buf);
+        }
+    }
+
+    fn decode(buf: &[u8], pos: &mut usize) -> Result<Self, DecodeError> {
+        let len = u32::decode(buf, pos)? as usize;
+        let remaining = buf.len() - *pos;
+        let capacity = len.min(remaining);
+        let mut vec = Vec::with_capacity(capacity);
+        for _ in 0..len {
+            vec.push(T::decode(buf, pos)?);
+        }
+        Ok(vec)
+    }
+}

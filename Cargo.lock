@@ -242,6 +242,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "camera-viewer"
+version = "0.1.0"
+dependencies = [
+ "deli-base",
+ "deli-camera",
+ "deli-codec",
+ "deli-com",
+ "minifb",
+ "tokio",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -259,3 +259,48 @@ fn test_decode_bool_invalid() {
         Err(DecodeError::InvalidBool(_))
     ));
 }
+
+// --- Vec<T: Codec> ---
+
+#[test]
+fn test_vec_u8_empty() {
+    round_trip(&Vec::<u8>::new());
+}
+
+#[test]
+fn test_vec_u8_simple() {
+    round_trip(&vec![1u8, 2, 3, 4, 5]);
+}
+
+#[test]
+fn test_vec_u32_simple() {
+    round_trip(&vec![100u32, 200, 300]);
+}
+
+#[test]
+fn test_vec_encoding() {
+    let mut buf = Vec::new();
+    vec![10u8, 20, 30].encode(&mut buf);
+    // 4-byte LE length (3) + 3 bytes (each u8 is 1 byte)
+    assert_eq!(buf, vec![3, 0, 0, 0, 10, 20, 30]);
+}
+
+#[test]
+fn test_vec_decode_truncated_length() {
+    let buf = vec![2, 0]; // only 2 bytes, u32 needs 4
+    let mut pos = 0;
+    assert!(matches!(
+        Vec::<u8>::decode(&buf, &mut pos),
+        Err(DecodeError::UnexpectedEof)
+    ));
+}
+
+#[test]
+fn test_vec_decode_truncated_data() {
+    let buf = vec![5, 0, 0, 0, 1, 2]; // claims 5 elements, only 2 available
+    let mut pos = 0;
+    assert!(matches!(
+        Vec::<u8>::decode(&buf, &mut pos),
+        Err(DecodeError::UnexpectedEof)
+    ));
+}
