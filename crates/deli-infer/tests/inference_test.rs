@@ -29,3 +29,11 @@ fn test_use_pose_detector_signature() {
     let result = inference.use_pose_detector("fake_path.safetensors");
     assert!(result.is_err()); // Should error because file doesn't exist
 }
+
+#[test]
+fn test_use_phi4_signature() {
+    let inference = Inference::cpu();
+    // Verify method exists and returns error for non-existent files
+    let result = inference.use_phi4("fake_model.gguf", "fake_tokenizer.json");
+    assert!(result.is_err()); // Should error because files don't exist
+}

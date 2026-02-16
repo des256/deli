@@ -36,4 +36,12 @@ impl Inference {
     ) -> Result<crate::SpeechRecognizer, InferError> {
         crate::SpeechRecognizer::new(model_path, tokenizer_path, config_path, self.device.clone())
     }
+
+    pub fn use_phi4(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+    ) -> Result<crate::Phi4, InferError> {
+        crate::Phi4::new(model_path, tokenizer_path, self.device.clone())
+    }
 }
