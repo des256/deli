@@ -2,36 +2,38 @@ use proc_macro::TokenStream;
 use proc_macro2::{Delimiter, Ident, Span, TokenStream as TokenStream2, TokenTree};
 use quote::quote;
 
+mod dart;
+
 // --- Minimal manual parser (no syn) ---
 
-struct NamedField {
-    name: Ident,
-    ty: TokenStream2,
+pub(crate) struct NamedField {
+    pub(crate) name: Ident,
+    pub(crate) ty: TokenStream2,
 }
 
-struct TupleField {
-    ty: TokenStream2,
+pub(crate) struct TupleField {
+    pub(crate) ty: TokenStream2,
 }
 
-enum FieldsKind {
+pub(crate) enum FieldsKind {
     Named(Vec<NamedField>),
     Tuple(Vec<TupleField>),
     Unit,
 }
 
-struct Variant {
-    name: Ident,
-    fields: FieldsKind,
+pub(crate) struct Variant {
+    pub(crate) name: Ident,
+    pub(crate) fields: FieldsKind,
 }
 
-enum ItemData {
+pub(crate) enum ItemData {
     Struct(FieldsKind),
     Enum(Vec<Variant>),
 }
 
-struct ParsedItem {
-    name: Ident,
-    data: ItemData,
+pub(crate) struct ParsedItem {
+    pub(crate) name: Ident,
+    pub(crate) data: ItemData,
 }
 
 /// Collect tokens for a type, stopping at a `,` or end of iterator.
@@ -382,4 +384,44 @@ pub fn derive_codec(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+#[proc_macro_derive(Dart)]
+pub fn derive_dart(input: TokenStream) -> TokenStream {
+    let parsed = parse_input(input.into());
+
+    // Generate Dart source code
+    let dart_source = dart::generate_dart(&parsed);
+
+    // Check for DELI_RSTYPES_PATH environment variable
+    let path = match std::env::var("DELI_RSTYPES_PATH") {
+        Ok(p) => p,
+        Err(_) => {
+            // Silent skip - env var not set
+            return TokenStream::new();
+        }
+    };
+
+    // Convert type name to snake_case for filename
+    let file_name = dart::to_snake_case(&parsed.name.to_string());
+    let file_path = format!("{}/{}.dart", path, file_name);
+
+    // Create directory if it doesn't exist
+    if let Some(parent) = std::path::Path::new(&file_path).parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            panic!(
+                "Failed to create directory for Dart file at {}: {}",
+                parent.display(),
+                e
+            );
+        }
+    }
+
+    // Write Dart file
+    if let Err(e) = std::fs::write(&file_path, dart_source) {
+        panic!("Failed to write Dart file at {}: {}", file_path, e);
+    }
+
+    // Return empty token stream - we only have the side effect of writing the file
+    TokenStream::new()
 }

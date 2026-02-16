@@ -1,6 +1,7 @@
 mod primitives;
 
 pub use deli_codec_derive::Codec;
+pub use deli_codec_derive::Dart;
 
 use std::fmt;
 
