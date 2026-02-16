@@ -1,11 +1,11 @@
-use deli_com::SenderServer;
+use deli_com::Server;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test]
 async fn test_sender_bind_creates_server() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -15,7 +15,7 @@ async fn test_sender_bind_creates_server() {
 
 #[tokio::test]
 async fn test_accept_loop_adds_clients() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -36,7 +36,7 @@ async fn test_accept_loop_adds_clients() {
 
 #[tokio::test]
 async fn test_send_broadcasts_to_clients() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -72,7 +72,7 @@ async fn test_send_broadcasts_to_clients() {
 
 #[tokio::test]
 async fn test_disconnected_client_removed_during_send() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -98,7 +98,7 @@ async fn test_disconnected_client_removed_during_send() {
 
 #[tokio::test]
 async fn test_send_continues_after_client_disconnect() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 

@@ -1,7 +1,7 @@
 use camera_viewer::Frame;
 use deli_base::log;
 use deli_camera::{Camera, CameraConfig, V4l2Camera};
-use deli_com::SenderServer;
+use deli_com::Server;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:9920";
 
@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Camera opened: 640x480");
 
     // Bind sender server
-    let sender = SenderServer::<Frame>::bind(&addr).await?;
+    let sender = Server::<Frame>::bind(&addr).await?;
     log::info!("Listening on {}", addr);
 
     let mut prev_client_count = 0;

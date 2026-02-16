@@ -1,6 +1,6 @@
 use camera_viewer::Frame;
 use deli_base::log;
-use deli_com::ReceiverClient;
+use deli_com::Client;
 use minifb::{Key, Window, WindowOptions};
 
 const DEFAULT_ADDR: &str = "127.0.0.1:9920";
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Connecting to: {}", addr);
 
     // Connect to camera broadcaster
-    let mut receiver = ReceiverClient::<Frame>::connect(&addr).await?;
+    let mut receiver = Client::<Frame>::connect(&addr).await?;
     log::info!("Connected to camera broadcaster");
 
     // Receive first frame to get dimensions, or use defaults

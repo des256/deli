@@ -1,8 +1,8 @@
+pub mod client;
 pub mod error;
 pub mod framing;
-pub mod receiver;
-pub mod sender;
+pub mod server;
 
+pub use client::Client;
 pub use error::ComError;
-pub use receiver::ReceiverClient;
-pub use sender::SenderServer;
+pub use server::Server;

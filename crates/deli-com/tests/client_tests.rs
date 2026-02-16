@@ -1,16 +1,16 @@
-use deli_com::{ComError, ReceiverClient, SenderServer};
+use deli_com::{ComError, Client, Server};
 use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test]
 async fn test_receiver_connect() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
     let addr = server.local_addr();
 
     // Connect a receiver
-    let _receiver = ReceiverClient::<u32>::connect(addr)
+    let _receiver = Client::<u32>::connect(addr)
         .await
         .expect("connect failed");
 
@@ -22,13 +22,13 @@ async fn test_receiver_connect() {
 
 #[tokio::test]
 async fn test_receiver_recv_gets_broadcast() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
     let addr = server.local_addr();
 
-    let mut receiver = ReceiverClient::<u32>::connect(addr)
+    let mut receiver = Client::<u32>::connect(addr)
         .await
         .expect("connect failed");
 
@@ -47,13 +47,13 @@ async fn test_receiver_recv_gets_broadcast() {
 
 #[tokio::test]
 async fn test_receiver_multiple_messages() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
     let addr = server.local_addr();
 
-    let mut receiver = ReceiverClient::<u32>::connect(addr)
+    let mut receiver = Client::<u32>::connect(addr)
         .await
         .expect("connect failed");
 
@@ -85,7 +85,7 @@ async fn test_receiver_connection_closed() {
         drop(stream);
     });
 
-    let mut receiver = ReceiverClient::<u32>::connect(addr)
+    let mut receiver = Client::<u32>::connect(addr)
         .await
         .expect("connect failed");
 

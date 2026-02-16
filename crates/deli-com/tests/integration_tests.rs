@@ -1,15 +1,15 @@
-use deli_com::{ReceiverClient, SenderServer};
+use deli_com::{Client, Server};
 use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test]
 async fn test_single_sender_single_receiver() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
     let addr = server.local_addr();
 
-    let mut receiver = ReceiverClient::<u32>::connect(addr)
+    let mut receiver = Client::<u32>::connect(addr)
         .await
         .expect("connect failed");
 
@@ -28,16 +28,16 @@ async fn test_single_sender_single_receiver() {
 
 #[tokio::test]
 async fn test_single_sender_multiple_receivers() {
-    let server = SenderServer::<String>::bind("127.0.0.1:0")
+    let server = Server::<String>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
     let addr = server.local_addr();
 
     // Connect three receivers
-    let mut receiver1 = ReceiverClient::<String>::connect(addr).await.unwrap();
-    let mut receiver2 = ReceiverClient::<String>::connect(addr).await.unwrap();
-    let mut receiver3 = ReceiverClient::<String>::connect(addr).await.unwrap();
+    let mut receiver1 = Client::<String>::connect(addr).await.unwrap();
+    let mut receiver2 = Client::<String>::connect(addr).await.unwrap();
+    let mut receiver3 = Client::<String>::connect(addr).await.unwrap();
 
     sleep(Duration::from_millis(50)).await;
 
@@ -53,16 +53,16 @@ async fn test_single_sender_multiple_receivers() {
 
 #[tokio::test]
 async fn test_receiver_disconnect_sender_continues() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
     let addr = server.local_addr();
 
     // Connect three receivers
-    let mut receiver1 = ReceiverClient::<u32>::connect(addr).await.unwrap();
-    let receiver2 = ReceiverClient::<u32>::connect(addr).await.unwrap();
-    let mut receiver3 = ReceiverClient::<u32>::connect(addr).await.unwrap();
+    let mut receiver1 = Client::<u32>::connect(addr).await.unwrap();
+    let receiver2 = Client::<u32>::connect(addr).await.unwrap();
+    let mut receiver3 = Client::<u32>::connect(addr).await.unwrap();
 
     sleep(Duration::from_millis(50)).await;
 
@@ -89,13 +89,13 @@ async fn test_receiver_disconnect_sender_continues() {
 
 #[tokio::test]
 async fn test_multiple_messages_arrive_in_order() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
     let addr = server.local_addr();
 
-    let mut receiver = ReceiverClient::<u32>::connect(addr).await.unwrap();
+    let mut receiver = Client::<u32>::connect(addr).await.unwrap();
 
     sleep(Duration::from_millis(50)).await;
 
@@ -112,7 +112,7 @@ async fn test_multiple_messages_arrive_in_order() {
 
 #[tokio::test]
 async fn test_stress_many_receivers() {
-    let server = SenderServer::<u32>::bind("127.0.0.1:0")
+    let server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -121,7 +121,7 @@ async fn test_stress_many_receivers() {
     // Connect 20 receivers
     let mut receivers = Vec::new();
     for _ in 0..20 {
-        receivers.push(ReceiverClient::<u32>::connect(addr).await.unwrap());
+        receivers.push(Client::<u32>::connect(addr).await.unwrap());
     }
 
     sleep(Duration::from_millis(100)).await;
