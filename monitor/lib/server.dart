@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:rstypes/rstypes.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'config.dart';
@@ -23,7 +24,8 @@ class Server {
 
         _channel!.stream.listen(
           (event) {
-            // TODO: handle incoming messages
+            final data = Data.fromBin(Uint8List.fromList(event as List<int>));
+            debugPrint('Data(value: ${data.value}, flag: ${data.flag})');
           },
           onDone: () {
             debugPrint('WebSocket connection closed');
