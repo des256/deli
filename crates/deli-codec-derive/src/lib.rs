@@ -404,14 +404,14 @@ pub fn derive_dart(input: TokenStream) -> TokenStream {
             if cargo_toml.exists() {
                 if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
                     if contents.contains("[workspace]") {
-                        return dir.join("rstypes/lib/src").to_string_lossy().into_owned();
+                        return dir.join("rstypes/lib/src/tests").to_string_lossy().into_owned();
                     }
                 }
             }
             if !dir.pop() {
                 // Fallback to manifest dir if no workspace root found
                 return std::path::PathBuf::from(&manifest_dir)
-                    .join("rstypes/lib/src")
+                    .join("rstypes/lib/src/tests")
                     .to_string_lossy()
                     .into_owned();
             }
