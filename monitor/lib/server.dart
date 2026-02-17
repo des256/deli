@@ -6,11 +6,25 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'config.dart';
 
+typedef OnDataUpdate = void Function(Data data);
+
 class Server {
   WebSocketChannel? _channel;
+  Data? _data;
+  final List<OnDataUpdate> _onUpdates = [];
+
+  Data? get data => _data;
 
   Server(Config config) {
     _connect(config);
+  }
+
+  void onUpdate(OnDataUpdate callback) {
+    _onUpdates.add(callback);
+  }
+
+  void removeOnUpdate(OnDataUpdate callback) {
+    _onUpdates.remove(callback);
   }
 
   Future<void> _connect(Config config) async {
@@ -24,8 +38,10 @@ class Server {
 
         _channel!.stream.listen(
           (event) {
-            final data = Data.fromBin(Uint8List.fromList(event as List<int>));
-            debugPrint('Data(value: ${data.value}, flag: ${data.flag})');
+            _data = Data.fromBin(Uint8List.fromList(event as List<int>));
+            for (final callback in List.of(_onUpdates)) {
+              callback(_data!);
+            }
           },
           onDone: () {
             debugPrint('WebSocket connection closed');
