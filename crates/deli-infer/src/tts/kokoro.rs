@@ -1,0 +1,219 @@
+use crate::{
+    InferError,
+    tts::{
+        phonemize::phonemize,
+        vocab::{tokenize, vocab},
+    },
+};
+use deli_base::Tensor;
+use ort::session::Session;
+use ort::value::Tensor as OrtTensor;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+/// Load and validate an NPY voice style file.
+///
+/// Expects a NumPy .npy file with 510x256 f32 values (130560 total).
+pub(crate) fn load_voice_style(path: impl AsRef<std::path::Path>) -> Result<Vec<f32>, InferError> {
+    let bytes = std::fs::read(path)?;
+
+    // Validate magic bytes
+    if bytes.len() < 6 || &bytes[0..6] != b"\x93NUMPY" {
+        return Err(InferError::Runtime(
+            "Invalid NPY file: missing \\x93NUMPY magic bytes".to_string(),
+        ));
+    }
+
+    // Skip 128-byte header and parse as little-endian f32
+    if bytes.len() < 128 {
+        return Err(InferError::Runtime(
+            "Invalid NPY file: too small for header".to_string(),
+        ));
+    }
+
+    let style: Vec<f32> = bytes[128..]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+
+    // Validate expected size: 510 × 256 = 130560
+    if style.len() != 130560 {
+        return Err(InferError::Runtime(format!(
+            "Voice file wrong size: expected 130560 f32s, got {}",
+            style.len()
+        )));
+    }
+
+    Ok(style)
+}
+
+/// Kokoro TTS model for text-to-speech synthesis
+pub struct Kokoro {
+    session: Arc<Mutex<Session>>,
+    vocab: Arc<HashMap<char, i64>>,
+    style: Arc<Vec<f32>>,
+}
+
+impl Kokoro {
+    /// Create a new Kokoro TTS instance
+    ///
+    /// # Arguments
+    /// * `session` - Pre-configured ONNX session
+    /// * `voice_path` - Path to NPY voice style file
+    /// * `espeak_data_path` - Path to espeak-ng data directory (None for default)
+    pub fn new(
+        session: Session,
+        voice_path: impl AsRef<std::path::Path>,
+        espeak_data_path: Option<&str>,
+    ) -> Result<Self, InferError> {
+        // Initialize espeak-ng
+        super::phonemize::espeak_init(espeak_data_path).map_err(|e| InferError::Runtime(e))?;
+
+        let vocab = vocab();
+        let style = load_voice_style(voice_path)?;
+
+        Ok(Kokoro {
+            session: Arc::new(Mutex::new(session)),
+            vocab: Arc::new(vocab),
+            style: Arc::new(style),
+        })
+    }
+
+    /// Convert text to audio
+    ///
+    /// Runs phonemization and ONNX inference in a blocking task to avoid
+    /// blocking the async executor.
+    ///
+    /// # Returns
+    /// * `Ok(Tensor<i16>)` containing 24kHz mono PCM audio
+    /// * `Err(InferError)` if synthesis fails
+    pub async fn speak(&self, text: &str) -> Result<Tensor<i16>, InferError> {
+        let session = Arc::clone(&self.session);
+        let vocab = Arc::clone(&self.vocab);
+        let style = Arc::clone(&self.style);
+        let text = text.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            // Phonemize text
+            let phonemes = phonemize(&text).map_err(|e| InferError::Runtime(e))?;
+
+            // Tokenize phonemes, pad with 0 at start and end
+            let mut token_ids = tokenize(&phonemes, &vocab);
+            token_ids.insert(0, 0);
+            token_ids.push(0);
+
+            // Clamp style index to prevent OOB
+            let style_idx = token_ids.len().min(509);
+
+            // Extract style slice for this token count
+            let style_start = style_idx * 256;
+            let style_end = style_start + 256;
+            let style_slice = &style[style_start..style_end];
+
+            // Build input tensors
+            let tokens_shape = [1usize, token_ids.len()];
+            let tokens = OrtTensor::from_array((tokens_shape, token_ids.into_boxed_slice()))?;
+
+            let style_shape = [1usize, 256];
+            let style_vec = style_slice.to_vec();
+            let style_tensor =
+                OrtTensor::from_array((style_shape, style_vec.into_boxed_slice()))?;
+
+            let speed_shape = [1usize];
+            let speed_tensor =
+                OrtTensor::from_array((speed_shape, vec![1.0f32].into_boxed_slice()))?;
+
+            // Run inference with named inputs, extract data within lock scope
+            let samples: Vec<i16> = {
+                let mut session_guard = session
+                    .lock()
+                    .map_err(|e| InferError::Runtime(format!("Session lock poisoned: {}", e)))?;
+                let outputs = session_guard
+                    .run(ort::inputs!["tokens" => tokens, "style" => style_tensor, "speed" => speed_tensor])
+                    .map_err(|e| InferError::Onnx(e.to_string()))?;
+
+                let (_shape, output_data) = outputs[0]
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| InferError::Runtime(format!("Failed to extract output: {}", e)))?;
+
+                output_data
+                    .iter()
+                    .map(|&sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16)
+                    .collect()
+            };
+
+            let num_samples = samples.len();
+            Tensor::new(vec![num_samples], samples)
+                .map_err(|e| InferError::TensorError(e.to_string()))
+        })
+        .await
+        .map_err(|e| InferError::Runtime(format!("Task join error: {}", e)))?
+    }
+}
+
+// Ensure Kokoro is Send + Sync
+fn _assert_send_sync() {
+    fn assert<T: Send + Sync>() {}
+    assert::<Kokoro>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_voice_style_missing_magic() {
+        let path = "/tmp/test_invalid_magic.npy";
+        std::fs::write(path, b"invalid data").unwrap();
+        let result = load_voice_style(path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Invalid NPY file"),
+            "Expected 'Invalid NPY file' error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_voice_style_too_small() {
+        let path = "/tmp/test_too_small.npy";
+        // Valid magic but file too small for header
+        let mut data = b"\x93NUMPY".to_vec();
+        data.extend_from_slice(&[0u8; 50]); // not enough for 128-byte header
+        std::fs::write(path, &data).unwrap();
+        let result = load_voice_style(path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("too small for header"),
+            "Expected 'too small' error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_voice_style_wrong_size() {
+        let path = "/tmp/test_wrong_size.npy";
+        // Valid magic + 128-byte header + wrong number of f32s
+        let mut data = b"\x93NUMPY".to_vec();
+        data.extend_from_slice(&[0u8; 122]); // pad to 128 bytes total
+        // Add 4 bytes (1 f32) of data - wrong size
+        data.extend_from_slice(&1.0f32.to_le_bytes());
+        std::fs::write(path, &data).unwrap();
+        let result = load_voice_style(path);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("wrong size"),
+            "Expected 'wrong size' error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_load_voice_style_file_not_found() {
+        let result = load_voice_style("/tmp/nonexistent_voice.npy");
+        assert!(result.is_err());
+    }
+}

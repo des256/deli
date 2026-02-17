@@ -10,6 +10,7 @@ pub enum InferError {
     Runtime(String),
     TensorError(String),
     TokenizerError(String),
+    Onnx(String),
 }
 
 impl fmt::Display for InferError {
@@ -21,6 +22,7 @@ impl fmt::Display for InferError {
             InferError::Runtime(msg) => write!(f, "runtime error: {msg}"),
             InferError::TensorError(msg) => write!(f, "tensor error: {msg}"),
             InferError::TokenizerError(msg) => write!(f, "tokenizer error: {msg}"),
+            InferError::Onnx(msg) => write!(f, "onnx error: {msg}"),
         }
     }
 }
@@ -36,5 +38,11 @@ impl From<candle_core::Error> for InferError {
 impl From<std::io::Error> for InferError {
     fn from(err: std::io::Error) -> Self {
         InferError::Io(err.to_string())
+    }
+}
+
+impl From<ort::Error> for InferError {
+    fn from(err: ort::Error) -> Self {
+        InferError::Onnx(err.to_string())
     }
 }
