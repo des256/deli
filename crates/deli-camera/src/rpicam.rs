@@ -108,7 +108,7 @@ impl RPiCamera {
             .get(0)
             .ok_or_else(|| CameraError::Device("No cameras detected".to_string()))?;
 
-        let mut cam = cam.acquire()?;
+        let cam = cam.acquire()?;
 
         // Try MJPEG first
         let mjpeg_format = PixelFormat::new(u32::from_le_bytes([b'M', b'J', b'P', b'G']), 0);
@@ -119,7 +119,8 @@ impl RPiCamera {
         let no_stream_cfg = || CameraError::Device("No stream configuration available".to_string());
 
         cfgs.get_mut(0).ok_or_else(no_stream_cfg)?.set_pixel_format(mjpeg_format);
-        cfgs.get_mut(0).ok_or_else(no_stream_cfg)?.set_size(config.width(), config.height());
+        let size = libcamera::geometry::Size::new(config.width(), config.height());
+        cfgs.get_mut(0).ok_or_else(no_stream_cfg)?.set_size(size);
 
         let status = cfgs.validate();
         let actual_format = cfgs.get(0).ok_or_else(no_stream_cfg)?.get_pixel_format();
@@ -131,7 +132,8 @@ impl RPiCamera {
             // MJPEG not supported, try YUYV
             let yuyv_format = PixelFormat::new(u32::from_le_bytes([b'Y', b'U', b'Y', b'V']), 0);
             cfgs.get_mut(0).ok_or_else(no_stream_cfg)?.set_pixel_format(yuyv_format);
-            cfgs.get_mut(0).ok_or_else(no_stream_cfg)?.set_size(config.width(), config.height());
+            let size = libcamera::geometry::Size::new(config.width(), config.height());
+            cfgs.get_mut(0).ok_or_else(no_stream_cfg)?.set_size(size);
 
             let status = cfgs.validate();
             let actual_format = cfgs.get(0).ok_or_else(no_stream_cfg)?.get_pixel_format();
@@ -199,6 +201,7 @@ impl RPiCamera {
     ) {
         use libcamera::{
             camera_manager::CameraManager,
+            framebuffer::AsFrameBuffer,
             framebuffer_allocator::FrameBufferAllocator,
             framebuffer_map::MemoryMappedFrameBuffer,
             pixel_format::PixelFormat,
@@ -246,9 +249,10 @@ impl RPiCamera {
         };
 
         match cfgs.get_mut(0) {
-            Some(stream_cfg) => {
+            Some(mut stream_cfg) => {
                 stream_cfg.set_pixel_format(pixel_format);
-                stream_cfg.set_size(config.width(), config.height());
+                let size = libcamera::geometry::Size::new(config.width(), config.height());
+                stream_cfg.set_size(size);
             }
             None => {
                 let _ = tx.blocking_send(Err(CameraError::Device("No stream configuration available".to_string())));
@@ -286,11 +290,7 @@ impl RPiCamera {
         };
 
         // Memory-map buffers
-        let buffers: Vec<_> = buffers
-            .into_iter()
-            .map(|buf| MemoryMappedFrameBuffer::new(buf))
-            .collect::<Result<Vec<_>, _>>();
-
+        let buffers = buffers.into_iter().map(|buf| MemoryMappedFrameBuffer::new(buf)).collect::<Result<Vec<_>, _>>();
         let buffers = match buffers {
             Ok(b) => b,
             Err(e) => {
@@ -303,9 +303,9 @@ impl RPiCamera {
         let mut reqs = Vec::with_capacity(buffers.len());
         for buf in buffers {
             let mut req = match cam.create_request(None) {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = tx.blocking_send(Err(CameraError::Device(format!("Failed to create request: {e}"))));
+                Some(r) => r,
+                None => {
+                    let _ = tx.blocking_send(Err(CameraError::Device(format!("Failed to create request"))));
                     return;
                 }
             };
@@ -328,7 +328,7 @@ impl RPiCamera {
             return;
         }
 
-        for req in &mut reqs {
+        for req in reqs {
             if let Err((_, e)) = cam.queue_request(req) {
                 let _ = tx.blocking_send(Err(CameraError::Device(e.to_string())));
                 return;
@@ -344,7 +344,7 @@ impl RPiCamera {
             };
 
             // Get framebuffer for our stream
-            let framebuffer = match req.buffer(&stream) {
+            let framebuffer: &MemoryMappedFrameBuffer<libcamera::framebuffer_allocator::FrameBuffer> = match req.buffer(&stream) {
                 Some(fb) => fb,
                 None => {
                     let _ = tx.try_send(Err(CameraError::Stream("No framebuffer in request".to_string())));
@@ -363,7 +363,7 @@ impl RPiCamera {
                             continue;
                         }
                     };
-                    let bytes_used = match metadata.planes().first() {
+                    let bytes_used = match metadata.planes().get(0) {
                         Some(p) => p.bytes_used as usize,
                         None => {
                             let _ = tx.try_send(Err(CameraError::Stream("No plane metadata".to_string())));
@@ -410,8 +410,8 @@ impl RPiCamera {
             }
 
             // Reuse request and re-queue
-            req.reuse(libcamera::request::ReuseFlag::ReuseBuffers);
-            if let Err((_, e)) = cam.queue_request(&mut req) {
+            req.reuse(libcamera::request::ReuseFlag::REUSE_BUFFERS);
+            if let Err((_, e)) = cam.queue_request(req) {
                 let _ = tx.try_send(Err(CameraError::Device(e.to_string())));
                 break;
             }

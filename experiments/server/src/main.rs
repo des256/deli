@@ -1,5 +1,5 @@
 use deli_base::log;
-use deli_camera::{Camera, CameraConfig, Frame, V4l2Camera};
+use deli_camera::{Camera, CameraConfig, Frame, RPiCamera};
 use deli_com::WsServer;
 use server::Data;
 
@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Open default camera
     let config = CameraConfig::default().with_width(640).with_height(480);
-    let mut camera = V4l2Camera::new(config)?;
+    let mut camera = RPiCamera::new(config)?;
     log::info!("Camera opened: 640x480");
 
     // Bind WebSocket server
