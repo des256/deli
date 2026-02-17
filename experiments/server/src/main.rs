@@ -3,7 +3,7 @@ use deli_camera::{Camera, CameraConfig, Frame, V4l2Camera};
 use deli_com::WsServer;
 use server::Data;
 
-const DEFAULT_ADDR: &str = "127.0.0.1:5090";
+const DEFAULT_ADDR: &str = "0.0.0.0:5090";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
