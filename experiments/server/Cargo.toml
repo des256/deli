@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 deli-base = { path = "../../crates/deli-base" }
+deli-camera = { path = "../../crates/deli-camera", features = ["v4l2"] }
 deli-com = { path = "../../crates/deli-com" }
 deli-codec = { path = "../../crates/deli-codec" }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 
 import 'config.dart';
@@ -56,10 +58,15 @@ class _MonitorHomeState extends State<MonitorHome> {
     return Scaffold(
       backgroundColor: Colors.black,
       body: Center(
-        child: Text(
-          data != null ? 'value: ${data.value}, flag: ${data.flag}' : 'waiting...',
-          style: const TextStyle(color: Colors.red, fontSize: 48),
-        ),
+        child: data != null
+            ? Image.memory(
+                Uint8List.fromList(data.frame),
+                gaplessPlayback: true,
+              )
+            : const Text(
+                'waiting...',
+                style: TextStyle(color: Colors.red, fontSize: 48),
+              ),
       ),
     );
   }

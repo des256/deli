@@ -2616,6 +2616,7 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "deli-base",
+ "deli-camera",
  "deli-codec",
  "deli-com",
  "tokio",

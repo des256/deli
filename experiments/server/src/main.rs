@@ -1,4 +1,5 @@
 use deli_base::log;
+use deli_camera::{Camera, CameraConfig, Frame, V4l2Camera};
 use deli_com::WsServer;
 use server::Data;
 
@@ -8,8 +9,13 @@ const DEFAULT_ADDR: &str = "127.0.0.1:5090";
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     deli_base::init_stdout_logger();
 
-    log::info!("Server Experiment - Data Broadcaster");
+    log::info!("Server Experiment - Camera Data Broadcaster");
     log::info!("Binding to: {}", DEFAULT_ADDR);
+
+    // Open default camera
+    let config = CameraConfig::default().with_width(640).with_height(480);
+    let mut camera = V4l2Camera::new(config)?;
+    log::info!("Camera opened: 640x480");
 
     // Bind WebSocket server
     let server = WsServer::<Data>::bind(DEFAULT_ADDR).await?;
@@ -18,17 +24,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut prev_client_count = 0;
     let mut value: i32 = 0;
 
-    // Broadcast interval (1 second)
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-
     loop {
-        interval.tick().await;
+        // Capture frame
+        let frame = camera.recv().await?;
+        let jpeg = match frame {
+            Frame::Jpeg(data) => data,
+            _ => return Err("Expected JPEG frame from camera".into()),
+        };
 
-        // Create Data with incrementing value
-        let data = Data::new(value, true);
+        // Broadcast Data with frame
+        let data = Data::new(value, true, jpeg);
         server.send(&data).await?;
 
-        // Increment value
         value = value.wrapping_add(1);
 
         // Log client count changes
@@ -36,10 +43,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if client_count != prev_client_count {
             log::info!("Connected clients: {}", client_count);
             prev_client_count = client_count;
-        }
-
-        if client_count > 0 {
-            log::debug!("Broadcasted: value={}, flag=true", value.wrapping_sub(1));
         }
     }
 }
