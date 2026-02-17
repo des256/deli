@@ -35,7 +35,7 @@ fn build_test_recognizer() -> SpeechRecognizer {
             {"id": 50359, "content": "<|transcribe|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
             {"id": 50363, "content": "<|notimestamps|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
             {"id": 50257, "content": "<|endoftext|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
-            {"id": 50362, "content": "<|nospeech|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true}
+            {"id": 50362, "content": "<|nocaptions|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true}
         ],
         "normalizer": null,
         "pre_tokenizer": null,

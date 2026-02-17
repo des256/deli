@@ -118,15 +118,21 @@ fn log_mel_spectrogram_<T: Float>(
         }
     }
 
-    // Normalize: mel = 2 * (mel - mel.max())
+    // Normalize: clamp to within 8 of max, then scale to roughly [-1, 1]
+    // Formula: (max(m, max_val - 8) + 4) / 4
+    // Matches OpenAI Whisper / candle-transformers normalization
     let max_val = mel
         .iter()
         .copied()
         .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(T::zero());
+    let mmax = max_val - T::from(8).unwrap();
+    let four = T::from(4).unwrap();
+    let one = T::one();
 
     for m in mel.iter_mut() {
-        *m = T::from(2.0).unwrap() * (*m - max_val);
+        let v = T::max(*m, mmax);
+        *m = v / four + one;
     }
 
     mel

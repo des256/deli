@@ -31,9 +31,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spec.bits_per_sample
     );
 
-    // Read all samples as i16
+    // Read all samples as i32 (hound normalizes per bit depth) then scale to i16 range
     let all_samples: Vec<i16> = match spec.sample_format {
-        hound::SampleFormat::Int => reader.into_samples::<i16>().collect::<Result<_, _>>()?,
+        hound::SampleFormat::Int => {
+            // hound reads into i32 with values in the range for the source bit depth.
+            // Scale to fill the i16 range regardless of source bit depth.
+            let max_val = (1i32 << (spec.bits_per_sample - 1)) as f32;
+            reader
+                .into_samples::<i32>()
+                .map(|s| s.map(|v| (v as f32 / max_val * i16::MAX as f32) as i16))
+                .collect::<Result<_, _>>()?
+        }
         hound::SampleFormat::Float => reader
             .into_samples::<f32>()
             .map(|s| s.map(|v| (v * i16::MAX as f32) as i16))

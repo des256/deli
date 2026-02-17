@@ -43,7 +43,7 @@ impl TokenDecoder {
         let sot_token = token_id(&tokenizer, "<|startoftranscript|>")?;
         let transcribe_token = token_id(&tokenizer, "<|transcribe|>")?;
         let eot_token = token_id(&tokenizer, "<|endoftext|>")?;
-        let no_speech_token = token_id(&tokenizer, "<|nospeech|>")?;
+        let no_speech_token = token_id(&tokenizer, "<|nocaptions|>")?;
         let no_timestamps_token = token_id(&tokenizer, "<|notimestamps|>")?;
 
         // Build suppress_tokens tensor from config
@@ -213,10 +213,6 @@ impl TokenDecoder {
             if result.no_speech_prob > NO_SPEECH_THRESHOLD {
                 seek = end;
                 continue;
-            }
-
-            if result.truncated {
-                eprintln!("Warning: Segment at frame {} was truncated (no EOT produced)", seek);
             }
 
             segments.push(result.text);
