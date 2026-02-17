@@ -57,17 +57,20 @@ class _MonitorHomeState extends State<MonitorHome> {
     final data = widget.server.data;
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Center(
-        child: data != null
-            ? Image.memory(
-                Uint8List.fromList(data.frame),
-                gaplessPlayback: true,
-              )
-            : const Text(
+      body: data != null
+          ? Image.memory(
+              Uint8List.fromList(data.frame),
+              gaplessPlayback: true,
+              width: double.infinity,
+              height: double.infinity,
+              fit: BoxFit.contain,
+            )
+          : const Center(
+              child: Text(
                 'waiting...',
                 style: TextStyle(color: Colors.red, fontSize: 48),
               ),
-      ),
+            ),
     );
   }
 }
