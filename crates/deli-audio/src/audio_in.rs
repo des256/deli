@@ -1,17 +1,22 @@
 use crate::AudioError;
-use libpulse_simple_binding::Simple;
+use libpulse_binding::def::BufferAttr;
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
+use libpulse_simple_binding::Simple;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+
+/// Shared state between `AudioIn` and the capture loop, used to signal device changes.
+struct CaptureState {
+    /// When `Some`, the capture loop should switch to this device on its next outer-loop iteration.
+    pending_device: Option<Option<String>>,
+}
 
 /// Audio input capture using PulseAudio.
 ///
 /// Captures mono S16NE audio from the selected input device via a background tokio blocking task.
-/// The async `recv()` method returns the next audio chunk.
-///
-/// # Panics
-///
-/// `new()` panics if called outside a tokio runtime context. All tests must use `#[tokio::test]`.
+/// Capture starts lazily on the first `recv()` call, avoiding dropped chunks before the consumer
+/// is ready.
 ///
 /// # Examples
 ///
@@ -39,6 +44,7 @@ pub struct AudioIn {
     device: Option<String>,
     receiver: Option<mpsc::Receiver<Vec<i16>>>,
     task_handle: Option<tokio::task::JoinHandle<()>>,
+    shared: Arc<Mutex<CaptureState>>,
 }
 
 impl std::fmt::Debug for AudioIn {
@@ -54,17 +60,16 @@ impl std::fmt::Debug for AudioIn {
 }
 
 impl AudioIn {
-    /// Create a new AudioIn instance and start capture immediately.
+    /// Create a new AudioIn instance.
+    ///
+    /// Capture does not start until the first `recv()` call (lazy initialization).
+    /// This avoids dropping audio chunks before the consumer is ready to receive them.
     ///
     /// # Arguments
     ///
     /// * `device` - PulseAudio source name (from `AudioDevice::name`), or `None` for default device
     /// * `sample_rate` - Sample rate in Hz (e.g., 48000, 44100)
     /// * `chunk_frames` - Number of frames per audio chunk (e.g., 4800 for 100ms at 48kHz)
-    ///
-    /// # Panics
-    ///
-    /// Panics if called outside a tokio runtime context. All callers must be within a tokio runtime.
     ///
     /// # Examples
     ///
@@ -83,36 +88,43 @@ impl AudioIn {
     /// ```
     pub fn new(device: Option<&str>, sample_rate: u32, chunk_frames: u32) -> Self {
         assert!(chunk_frames > 0, "chunk_frames must be greater than 0");
-        let device_string = device.map(|s| s.to_string());
-        let (receiver, task_handle) = Self::start_capture(
-            device_string.clone(),
-            sample_rate,
-            chunk_frames
-        );
 
         Self {
             sample_rate,
             chunk_frames,
-            device: device_string,
-            receiver: Some(receiver),
-            task_handle: Some(task_handle),
+            device: device.map(|s| s.to_string()),
+            receiver: None,
+            task_handle: None,
+            shared: Arc::new(Mutex::new(CaptureState {
+                pending_device: None,
+            })),
         }
     }
 
     /// Receive the next audio chunk.
     ///
+    /// On the first call, this starts the PulseAudio capture task. Subsequent calls return
+    /// chunks as they become available.
+    ///
     /// Returns a `Vec<i16>` containing mono S16NE samples.
     ///
     /// # Errors
     ///
-    /// Returns `AudioError::Channel` if the receiver is not initialized.
     /// Returns `AudioError::Stream` if the capture task has terminated.
     pub async fn recv(&mut self) -> Result<Vec<i16>, AudioError> {
-        let receiver = self.receiver.as_mut().ok_or_else(|| {
-            AudioError::Channel("Receiver not initialized".to_string())
-        })?;
+        // Lazy start: begin capture on first recv()
+        if self.receiver.is_none() {
+            let (receiver, task_handle) = Self::start_capture(
+                self.device.clone(),
+                self.sample_rate,
+                self.chunk_frames,
+                Arc::clone(&self.shared),
+            );
+            self.receiver = Some(receiver);
+            self.task_handle = Some(task_handle);
+        }
 
-        receiver.recv().await.ok_or_else(|| {
+        self.receiver.as_mut().unwrap().recv().await.ok_or_else(|| {
             AudioError::Stream("capture task terminated".to_string())
         })
     }
@@ -134,7 +146,9 @@ impl AudioIn {
 
     /// Select a different audio input device.
     ///
-    /// Tears down the current capture stream and starts a new one on the selected device.
+    /// If capture is already running, the switch happens within one chunk duration (~100ms)
+    /// without interrupting `recv()`. If capture hasn't started yet (no `recv()` call),
+    /// the new device will be used when capture begins.
     ///
     /// # Arguments
     ///
@@ -147,30 +161,15 @@ impl AudioIn {
     ///
     /// async fn example() {
     ///     let mut audio_in = AudioIn::new(None, 48000, 4800);
-    ///     audio_in.select("alsa_input.pci-0000_00_1f.3.analog-stereo").await;
+    ///     audio_in.select("alsa_input.pci-0000_00_1f.3.analog-stereo");
     /// }
     /// ```
-    pub async fn select(&mut self, device: &str) {
-        // Drop receiver to signal task to stop
-        drop(self.receiver.take());
-
-        // Wait for task to finish
-        if let Some(handle) = self.task_handle.take() {
-            let _ = handle.await;
-        }
-
-        // Update device name
+    pub fn select(&mut self, device: &str) {
         self.device = Some(device.to_string());
 
-        // Start new capture task
-        let (receiver, task_handle) = Self::start_capture(
-            self.device.clone(),
-            self.sample_rate,
-            self.chunk_frames
-        );
-
-        self.receiver = Some(receiver);
-        self.task_handle = Some(task_handle);
+        // Signal the capture loop to switch devices on its next iteration
+        let mut state = self.shared.lock().unwrap();
+        state.pending_device = Some(Some(device.to_string()));
     }
 
     /// Start a new capture task.
@@ -181,11 +180,12 @@ impl AudioIn {
         device: Option<String>,
         sample_rate: u32,
         chunk_frames: u32,
+        shared: Arc<Mutex<CaptureState>>,
     ) -> (mpsc::Receiver<Vec<i16>>, tokio::task::JoinHandle<()>) {
-        let (tx, rx) = mpsc::channel(4);
+        let (tx, rx) = mpsc::channel(128);
 
         let handle = tokio::task::spawn_blocking(move || {
-            Self::capture_loop(device, sample_rate, chunk_frames, tx);
+            Self::capture_loop(device, sample_rate, chunk_frames, tx, shared);
         });
 
         (rx, handle)
@@ -195,13 +195,14 @@ impl AudioIn {
     ///
     /// Creates a PulseAudio Simple stream and reads audio chunks.
     /// Automatically recovers from errors by reconnecting after 100ms.
+    /// Checks for pending device changes between chunks and reconnects as needed.
     fn capture_loop(
-        device: Option<String>,
+        initial_device: Option<String>,
         sample_rate: u32,
         chunk_frames: u32,
         tx: mpsc::Sender<Vec<i16>>,
+        shared: Arc<Mutex<CaptureState>>,
     ) {
-        // Create PulseAudio spec for mono S16NE (static, created once)
         let spec = Spec {
             format: Format::S16NE,
             channels: 1,
@@ -213,12 +214,30 @@ impl AudioIn {
             return;
         }
 
-        // Calculate buffer size using chunk_frames (static, created once)
         let bytes_per_chunk = chunk_frames as usize * 2; // 2 bytes per i16 sample
         let mut buffer = vec![0u8; bytes_per_chunk];
+        let mut current_device = initial_device;
+
+        // Request PulseAudio to deliver data in chunks matching our frame size,
+        // with a larger internal buffer to absorb read latency.
+        let buffer_attr = BufferAttr {
+            maxlength: bytes_per_chunk as u32 * 16,
+            tlength: u32::MAX,
+            prebuf: u32::MAX,
+            minreq: u32::MAX,
+            fragsize: bytes_per_chunk as u32,
+        };
 
         // Outer loop: connection/reconnection
         loop {
+            // Check for pending device change
+            {
+                let mut state = shared.lock().unwrap();
+                if let Some(new_device) = state.pending_device.take() {
+                    current_device = new_device;
+                }
+            }
+
             // Check if receiver is closed before attempting connection
             if tx.is_closed() {
                 break;
@@ -229,11 +248,11 @@ impl AudioIn {
                 None,                              // Use default server
                 "deli-audio",                      // Application name
                 Direction::Record,                 // Recording direction
-                device.as_deref(),                 // Device name
+                current_device.as_deref(),         // Device name
                 "audio-capture",                   // Stream description
                 &spec,                             // Sample format
                 None,                              // Default channel map
-                None,                              // Default buffer attributes
+                Some(&buffer_attr),                // Buffer attributes
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -267,6 +286,14 @@ impl AudioIn {
                                 return;
                             }
                         }
+
+                        // Check for pending device change — break to reconnect with new device
+                        {
+                            let state = shared.lock().unwrap();
+                            if state.pending_device.is_some() {
+                                break;
+                            }
+                        }
                     }
                     Err(e) => {
                         // Read error - log and break inner loop to reconnect
@@ -285,7 +312,7 @@ impl AudioIn {
 
 impl Drop for AudioIn {
     fn drop(&mut self) {
-        // Drop the receiver to signal the task to stop
+        // Drop the receiver to signal the task to stop via tx.is_closed()
         drop(self.receiver.take());
 
         // Drop the task handle (task will exit on its own when channel closes)

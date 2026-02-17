@@ -54,7 +54,7 @@ async fn test_select_before_streaming() {
     assert_eq!(audio_in.device(), Some("device1"));
 
     // Select new device
-    audio_in.select("device2").await;
+    audio_in.select("device2");
 
     // Verify device updated
     assert_eq!(audio_in.device(), Some("device2"));
@@ -64,9 +64,8 @@ async fn test_select_before_streaming() {
 async fn test_select_clears_stream_state() {
     let mut audio_in = AudioIn::new(Some("device1"), 48000, 4800);
 
-    // Capture is already running from new()
-    // select() tears down the old task and starts a new one on device2
-    audio_in.select("device2").await;
+    // select() signals the capture loop to switch to device2
+    audio_in.select("device2");
 
     // Device should be updated, new capture task running on device2
     assert_eq!(audio_in.device(), Some("device2"));
