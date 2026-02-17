@@ -1,8 +1,8 @@
 use deli_image::{decode_image, DecodedImage, ImageError};
 use image::ImageEncoder;
 
-#[test]
-fn test_decode_jpeg_rgb() {
+#[tokio::test]
+async fn test_decode_jpeg_rgb() {
     // Create a small 2x2 RGB JPEG image using the image crate
     let mut buffer = Vec::new();
     let img = image::RgbImage::from_fn(2, 2, |x, y| {
@@ -15,7 +15,7 @@ fn test_decode_jpeg_rgb() {
         .unwrap();
 
     // Decode with our function
-    let decoded = decode_image(&buffer).unwrap();
+    let decoded = decode_image(&buffer).await.unwrap();
 
     // Should be U8 variant
     match decoded {
@@ -29,8 +29,8 @@ fn test_decode_jpeg_rgb() {
     }
 }
 
-#[test]
-fn test_decode_png_rgba() {
+#[tokio::test]
+async fn test_decode_png_rgba() {
     // Create a 2x2 RGBA PNG
     let mut buffer = Vec::new();
     let img = image::RgbaImage::from_fn(2, 2, |x, y| {
@@ -43,7 +43,7 @@ fn test_decode_png_rgba() {
         .unwrap();
 
     // Decode
-    let decoded = decode_image(&buffer).unwrap();
+    let decoded = decode_image(&buffer).await.unwrap();
 
     match decoded {
         DecodedImage::U8(ref tensor) => {
@@ -54,8 +54,8 @@ fn test_decode_png_rgba() {
     }
 }
 
-#[test]
-fn test_decode_png_16bit() {
+#[tokio::test]
+async fn test_decode_png_16bit() {
     // Create a 2x2 16-bit RGB PNG
     let mut buffer = Vec::new();
     let img = image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(2, 2, |x, y| {
@@ -75,7 +75,7 @@ fn test_decode_png_16bit() {
         .unwrap();
 
     // Decode
-    let decoded = decode_image(&buffer).unwrap();
+    let decoded = decode_image(&buffer).await.unwrap();
 
     match decoded {
         DecodedImage::U16(ref tensor) => {
@@ -86,8 +86,8 @@ fn test_decode_png_16bit() {
     }
 }
 
-#[test]
-fn test_decode_grayscale_png() {
+#[tokio::test]
+async fn test_decode_grayscale_png() {
     // Create a 2x2 grayscale PNG
     let mut buffer = Vec::new();
     let img = image::GrayImage::from_fn(2, 2, |x, y| {
@@ -99,7 +99,7 @@ fn test_decode_grayscale_png() {
         .unwrap();
 
     // Decode
-    let decoded = decode_image(&buffer).unwrap();
+    let decoded = decode_image(&buffer).await.unwrap();
 
     match decoded {
         DecodedImage::U8(ref tensor) => {
@@ -110,8 +110,8 @@ fn test_decode_grayscale_png() {
     }
 }
 
-#[test]
-fn test_decode_gray_alpha_png() {
+#[tokio::test]
+async fn test_decode_gray_alpha_png() {
     // Create a 2x2 grayscale+alpha PNG (2 channels)
     let mut buffer = Vec::new();
     let img = image::GrayAlphaImage::from_fn(2, 2, |x, y| {
@@ -122,7 +122,7 @@ fn test_decode_gray_alpha_png() {
         .write_image(img.as_raw(), 2, 2, image::ExtendedColorType::La8)
         .unwrap();
 
-    let decoded = decode_image(&buffer).unwrap();
+    let decoded = decode_image(&buffer).await.unwrap();
 
     match decoded {
         DecodedImage::U8(ref tensor) => {
@@ -133,9 +133,9 @@ fn test_decode_gray_alpha_png() {
     }
 }
 
-#[test]
-fn test_decode_invalid_data() {
-    let result = decode_image(&[0xFF, 0x00, 0x12, 0x34]);
+#[tokio::test]
+async fn test_decode_invalid_data() {
+    let result = decode_image(&[0xFF, 0x00, 0x12, 0x34]).await;
     assert!(result.is_err());
 
     match result.unwrap_err() {
@@ -144,14 +144,14 @@ fn test_decode_invalid_data() {
     }
 }
 
-#[test]
-fn test_decode_empty_data() {
-    let result = decode_image(&[]);
+#[tokio::test]
+async fn test_decode_empty_data() {
+    let result = decode_image(&[]).await;
     assert!(result.is_err());
 }
 
-#[test]
-fn test_pixel_data_matches_reference() {
+#[tokio::test]
+async fn test_pixel_data_matches_reference() {
     // Create a simple 2x2 RGB image with known pixel values
     let mut buffer = Vec::new();
     let img = image::RgbImage::from_raw(
@@ -176,7 +176,7 @@ fn test_pixel_data_matches_reference() {
     let reference_rgb = reference_img.to_rgb8();
 
     // Decode with our function
-    let decoded = decode_image(&buffer).unwrap();
+    let decoded = decode_image(&buffer).await.unwrap();
 
     match decoded {
         DecodedImage::U8(ref tensor) => {

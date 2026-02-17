@@ -7,10 +7,10 @@ use deli_image::DecodedImage;
 const DEFAULT_ADDR: &str = "0.0.0.0:9920";
 
 /// Decode a camera Frame into an RGB tensor.
-fn frame_to_rgb(frame: CameraFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+async fn frame_to_rgb(frame: CameraFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
     match frame {
         CameraFrame::Rgb(tensor) => Ok(tensor),
-        CameraFrame::Jpeg(data) => match deli_image::decode_image(&data)? {
+        CameraFrame::Jpeg(data) => match deli_image::decode_image(&data).await? {
             DecodedImage::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },
@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         // Capture and decode frame
-        let tensor = frame_to_rgb(camera.recv().await?)?;
+        let tensor = frame_to_rgb(camera.recv().await?).await?;
 
         // Extract dimensions from tensor shape [H, W, 3]
         if tensor.shape.len() != 3 || tensor.shape[2] != 3 {

@@ -1,6 +1,7 @@
 use deli_base::log;
 use deli_camera::{Camera, CameraConfig, Frame, RPiCamera};
 use deli_com::WsServer;
+use deli_image::{encode_jpeg, DecodedImage};
 use server::Data;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:5090";
@@ -29,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let frame = camera.recv().await?;
         let jpeg = match frame {
             Frame::Jpeg(data) => data,
-            _ => return Err("Expected JPEG frame from camera".into()),
+            Frame::Rgb(tensor) => encode_jpeg(DecodedImage::U8(tensor), 80).await?,
         };
 
         // Broadcast Data with frame

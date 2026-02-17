@@ -26,10 +26,10 @@ fn rgb_to_argb(buf: &[u8], width: usize, height: usize) -> Vec<u32> {
 }
 
 /// Decode a camera Frame into an RGB tensor.
-fn frame_to_rgb(frame: Frame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+async fn frame_to_rgb(frame: Frame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
     match frame {
         Frame::Rgb(tensor) => Ok(tensor),
-        Frame::Jpeg(data) => match deli_image::decode_image(&data)? {
+        Frame::Jpeg(data) => match deli_image::decode_image(&data).await? {
             DecodedImage::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },
@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting main loop...");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let frame = frame_to_rgb(camera.recv().await?)?;
+        let frame = frame_to_rgb(camera.recv().await?).await?;
 
         if frame.shape.len() != 3 || frame.shape[2] != 3 {
             log::warn!("Expected [H, W, 3] frame shape, got {:?}", frame.shape);

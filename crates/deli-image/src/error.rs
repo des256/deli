@@ -3,6 +3,7 @@ use std::fmt;
 #[derive(Debug)]
 pub enum ImageError {
     Decode(String),
+    Encode(String),
     Tensor(deli_base::TensorError),
 }
 
@@ -10,6 +11,7 @@ impl fmt::Display for ImageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ImageError::Decode(msg) => write!(f, "decode error: {msg}"),
+            ImageError::Encode(msg) => write!(f, "encode error: {msg}"),
             ImageError::Tensor(err) => write!(f, "tensor error: {err}"),
         }
     }

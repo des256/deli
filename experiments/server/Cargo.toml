@@ -11,5 +11,6 @@ path = "src/main.rs"
 deli-base = { path = "../../crates/deli-base" }
 deli-camera = { path = "../../crates/deli-camera", features = ["rpicam"] }
 deli-com = { path = "../../crates/deli-com" }
+deli-image = { path = "../../crates/deli-image" }
 deli-codec = { path = "../../crates/deli-codec" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
