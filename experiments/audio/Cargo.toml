@@ -1,0 +1,18 @@
+[package]
+name = "audio"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "play"
+path = "src/play.rs"
+
+[[bin]]
+name = "record"
+path = "src/record.rs"
+
+[dependencies]
+deli-audio = { path = "../../crates/deli-audio" }
+deli-base = { path = "../../crates/deli-base" }
+hound = "3.5"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
