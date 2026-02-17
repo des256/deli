@@ -1,11 +1,10 @@
 use crate::convert::yuyv_to_rgb;
-use crate::{Camera, CameraConfig, CameraError};
+use crate::{Camera, CameraConfig, CameraError, Frame};
 use deli_base::Tensor;
-use deli_image::DecodedImage;
 use std::thread::{self, JoinHandle};
 use tokio::sync::mpsc;
 
-type FrameResult = Result<Tensor<u8>, CameraError>;
+type FrameResult = Result<Frame, CameraError>;
 
 /// Pixel format negotiated during camera initialization.
 #[derive(Debug, Clone, Copy)]
@@ -41,7 +40,7 @@ impl std::fmt::Debug for RPiCamera {
 }
 
 impl Camera for RPiCamera {
-    async fn recv(&mut self) -> Result<Tensor<u8>, CameraError> {
+    async fn recv(&mut self) -> Result<Frame, CameraError> {
         // Ensure capture thread is running
         self.ensure_started()?;
 
@@ -187,9 +186,11 @@ impl RPiCamera {
 
     /// Background thread capture loop.
     ///
-    /// Sets up libcamera, captures frames, decodes based on format (MJPEG or YUYV),
-    /// and sends Tensor<u8> through the channel. Uses `try_send` to drop frames when
-    /// the channel is full rather than blocking.
+    /// Sets up libcamera, captures frames, and sends them through the channel:
+    /// - MJPEG streams: sends raw JPEG bytes as `Frame::Jpeg`
+    /// - YUYV streams: converts to RGB and sends as `Frame::Rgb`
+    ///
+    /// Uses `try_send` to drop frames when the channel is full rather than blocking.
     fn capture_loop(
         config: CameraConfig,
         format: CaptureFormat,
@@ -377,37 +378,27 @@ impl RPiCamera {
                 }
             };
 
-            // Decode based on format
-            let tensor_result = match format {
-                CaptureFormat::Mjpeg => {
-                    // Decode MJPEG via deli_image
-                    match deli_image::decode_image(&frame_data) {
-                        Ok(DecodedImage::U8(t)) => Ok(t),
-                        Ok(_) => Err(CameraError::Decode(deli_image::ImageError::Decode(
-                            "Unexpected pixel format (expected U8)".to_string(),
-                        ))),
-                        Err(e) => Err(CameraError::Decode(e)),
-                    }
-                }
+            // Build frame based on format
+            let frame_result = match format {
+                CaptureFormat::Mjpeg => Ok(Frame::Jpeg(frame_data)),
                 CaptureFormat::Yuyv { width, height } => {
                     // Convert YUYV to RGB
-                    let rgb_data = match yuyv_to_rgb(&frame_data, width, height) {
-                        Some(data) => data,
-                        None => {
-                            let _ = tx.try_send(Err(CameraError::Stream(format!(
-                                "YUYV frame too short: got {} bytes, expected {} for {}x{}",
-                                frame_data.len(), (width as usize) * (height as usize) * 2, width, height
-                            ))));
-                            continue;
+                    match yuyv_to_rgb(&frame_data, width, height) {
+                        Some(rgb_data) => {
+                            Tensor::new(vec![height as usize, width as usize, 3], rgb_data)
+                                .map(Frame::Rgb)
+                                .map_err(|e| CameraError::Stream(e.to_string()))
                         }
-                    };
-                    Tensor::new(vec![height as usize, width as usize, 3], rgb_data)
-                        .map_err(|e| CameraError::Stream(e.to_string()))
+                        None => Err(CameraError::Stream(format!(
+                            "YUYV frame too short: got {} bytes, expected {} for {}x{}",
+                            frame_data.len(), (width as usize) * (height as usize) * 2, width, height
+                        ))),
+                    }
                 }
             };
 
-            // Send tensor through channel (drop if full)
-            match tx.try_send(tensor_result) {
+            // Send frame through channel (drop if full)
+            match tx.try_send(frame_result) {
                 Ok(()) => {}
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     // Consumer too slow — drop frame silently

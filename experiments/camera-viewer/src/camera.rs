@@ -1,9 +1,21 @@
 use camera_viewer::Frame;
 use deli_base::log;
-use deli_camera::{Camera, CameraConfig, V4l2Camera};
+use deli_camera::{Camera, CameraConfig, Frame as CameraFrame, V4l2Camera};
 use deli_com::Server;
+use deli_image::DecodedImage;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:9920";
+
+/// Decode a camera Frame into an RGB tensor.
+fn frame_to_rgb(frame: CameraFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+    match frame {
+        CameraFrame::Rgb(tensor) => Ok(tensor),
+        CameraFrame::Jpeg(data) => match deli_image::decode_image(&data)? {
+            DecodedImage::U8(tensor) => Ok(tensor),
+            _ => Err("Unexpected pixel format from JPEG decode".into()),
+        },
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -18,9 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Binding to: {}", addr);
 
     // Open camera
-    let config = CameraConfig::default()
-        .with_width(640)
-        .with_height(480);
+    let config = CameraConfig::default().with_width(640).with_height(480);
     let mut camera = V4l2Camera::new(config)?;
     log::info!("Camera opened: 640x480");
 
@@ -31,8 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut prev_client_count = 0;
 
     loop {
-        // Capture frame from camera
-        let tensor = camera.recv().await?;
+        // Capture and decode frame
+        let tensor = frame_to_rgb(camera.recv().await?)?;
 
         // Extract dimensions from tensor shape [H, W, 3]
         if tensor.shape.len() != 3 || tensor.shape[2] != 3 {

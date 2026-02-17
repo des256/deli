@@ -1,6 +1,4 @@
-use crate::{Camera, CameraConfig, CameraError};
-use deli_base::Tensor;
-use deli_image::DecodedImage;
+use crate::{Camera, CameraConfig, CameraError, Frame};
 use std::thread::{self, JoinHandle};
 use tokio::sync::mpsc;
 use v4l::buffer::Type;
@@ -9,7 +7,7 @@ use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
 use v4l::{Device, Format, FourCC};
 
-type FrameResult = Result<Tensor<u8>, CameraError>;
+type FrameResult = Result<Frame, CameraError>;
 
 /// V4L2 camera implementation.
 pub struct V4l2Camera {
@@ -31,7 +29,7 @@ impl std::fmt::Debug for V4l2Camera {
 }
 
 impl Camera for V4l2Camera {
-    async fn recv(&mut self) -> Result<Tensor<u8>, CameraError> {
+    async fn recv(&mut self) -> Result<Frame, CameraError> {
         // Ensure capture thread is running
         self.ensure_started()?;
 
@@ -130,8 +128,7 @@ impl V4l2Camera {
 
     /// Background thread capture loop.
     ///
-    /// Reads frames from V4L2, decodes MJPEG, and sends results through the channel.
-    /// Errors are sent as `Err(CameraError)` so the consumer sees the root cause.
+    /// Reads MJPEG frames from V4L2 and sends raw JPEG bytes as `Frame::Jpeg`.
     /// Uses `try_send` to drop frames when the channel is full rather than blocking.
     fn capture_loop(device: Device, tx: mpsc::Sender<FrameResult>, buffer_count: usize) {
         // Create mmap stream
@@ -147,17 +144,8 @@ impl V4l2Camera {
             // Get next frame
             let frame_result = match CaptureStream::next(&mut stream) {
                 Ok((frame_data, _metadata)) => {
-                    // Copy frame data (buffer is borrowed and only valid until next call)
-                    let frame_vec = frame_data.to_vec();
-
-                    // Decode MJPEG to tensor
-                    match deli_image::decode_image(&frame_vec) {
-                        Ok(DecodedImage::U8(t)) => Ok(t),
-                        Ok(_) => Err(CameraError::Decode(deli_image::ImageError::Decode(
-                            "Unexpected pixel format (expected U8)".to_string(),
-                        ))),
-                        Err(e) => Err(CameraError::Decode(e)),
-                    }
+                    // Copy raw JPEG bytes (buffer is borrowed and only valid until next call)
+                    Ok(Frame::Jpeg(frame_data.to_vec()))
                 }
                 Err(e) => Err(CameraError::Stream(e.to_string())),
             };

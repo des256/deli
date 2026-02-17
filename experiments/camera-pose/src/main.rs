@@ -1,7 +1,8 @@
 mod draw;
 
 use deli_base::log;
-use deli_camera::{Camera, CameraConfig, V4l2Camera};
+use deli_camera::{Camera, CameraConfig, Frame, V4l2Camera};
+use deli_image::DecodedImage;
 use deli_infer::backends::OnnxBackend;
 use deli_infer::{Device, ModelSource, YoloPoseEstimator};
 use draw::{draw_skeleton, rgb_to_argb};
@@ -13,6 +14,17 @@ use std::time::Instant;
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
 const KEYPOINT_THRESHOLD: f32 = 0.001;
+
+/// Decode a camera Frame into an RGB tensor.
+fn frame_to_rgb(frame: Frame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+    match frame {
+        Frame::Rgb(tensor) => Ok(tensor),
+        Frame::Jpeg(data) => match deli_image::decode_image(&data)? {
+            DecodedImage::U8(tensor) => Ok(tensor),
+            _ => Err("Unexpected pixel format from JPEG decode".into()),
+        },
+    }
+}
 
 /// Convert Tensor<u8> to Tensor<f32> for pose estimator
 fn tensor_u8_to_f32(
@@ -65,8 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Capture frame
-        let frame = camera.recv().await?;
+        // Capture and decode frame
+        let frame = frame_to_rgb(camera.recv().await?)?;
 
         // Validate frame shape (safety check per plan)
         if frame.shape.len() != 3 || frame.shape[2] != 3 {

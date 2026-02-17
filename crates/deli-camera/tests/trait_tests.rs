@@ -1,4 +1,4 @@
-use deli_camera::{Camera, CameraError};
+use deli_camera::{Camera, CameraError, Frame};
 use deli_base::Tensor;
 
 // Mock implementation for testing
@@ -13,11 +13,12 @@ impl MockCamera {
 }
 
 impl Camera for MockCamera {
-    async fn recv(&mut self) -> Result<Tensor<u8>, CameraError> {
+    async fn recv(&mut self) -> Result<Frame, CameraError> {
         self.frame_count += 1;
         // Return a dummy 2x2 RGB tensor
-        Tensor::new(vec![2, 2, 3], vec![0u8; 12])
-            .map_err(|e| CameraError::Stream(e.to_string()))
+        let tensor = Tensor::new(vec![2, 2, 3], vec![0u8; 12])
+            .map_err(|e| CameraError::Stream(e.to_string()))?;
+        Ok(Frame::Rgb(tensor))
     }
 }
 
@@ -27,18 +28,24 @@ async fn test_camera_trait_mock_implementation() {
 
     // First frame
     let frame1 = cam.recv().await.unwrap();
-    assert_eq!(frame1.shape, vec![2, 2, 3]);
+    match &frame1 {
+        Frame::Rgb(tensor) => assert_eq!(tensor.shape, vec![2, 2, 3]),
+        Frame::Jpeg(_) => panic!("Expected Frame::Rgb"),
+    }
     assert_eq!(cam.frame_count, 1);
 
     // Second frame
     let frame2 = cam.recv().await.unwrap();
-    assert_eq!(frame2.shape, vec![2, 2, 3]);
+    match &frame2 {
+        Frame::Rgb(tensor) => assert_eq!(tensor.shape, vec![2, 2, 3]),
+        Frame::Jpeg(_) => panic!("Expected Frame::Rgb"),
+    }
     assert_eq!(cam.frame_count, 2);
 }
 
 #[tokio::test]
 async fn test_camera_trait_polymorphism() {
-    async fn capture_frames(camera: &mut impl Camera, count: usize) -> Result<Vec<Tensor<u8>>, CameraError> {
+    async fn capture_frames(camera: &mut impl Camera, count: usize) -> Result<Vec<Frame>, CameraError> {
         let mut frames = Vec::new();
         for _ in 0..count {
             frames.push(camera.recv().await?);
@@ -50,4 +57,25 @@ async fn test_camera_trait_polymorphism() {
     let frames = capture_frames(&mut cam, 3).await.unwrap();
     assert_eq!(frames.len(), 3);
     assert_eq!(cam.frame_count, 3);
+}
+
+#[tokio::test]
+async fn test_frame_jpeg_variant() {
+    struct JpegCamera;
+
+    impl Camera for JpegCamera {
+        async fn recv(&mut self) -> Result<Frame, CameraError> {
+            Ok(Frame::Jpeg(vec![0xFF, 0xD8, 0xFF, 0xE0]))
+        }
+    }
+
+    let mut cam = JpegCamera;
+    let frame = cam.recv().await.unwrap();
+    match frame {
+        Frame::Jpeg(data) => {
+            assert_eq!(data.len(), 4);
+            assert_eq!(data[0], 0xFF); // JPEG SOI marker
+        }
+        Frame::Rgb(_) => panic!("Expected Frame::Jpeg"),
+    }
 }

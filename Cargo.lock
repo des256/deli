@@ -316,6 +316,7 @@ version = "0.1.0"
 dependencies = [
  "deli-base",
  "deli-camera",
+ "deli-image",
  "minifb",
  "tokio",
 ]
@@ -328,6 +329,7 @@ dependencies = [
  "deli-camera",
  "deli-codec",
  "deli-com",
+ "deli-image",
  "minifb",
  "tokio",
 ]
