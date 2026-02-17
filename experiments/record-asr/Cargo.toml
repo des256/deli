@@ -1,0 +1,14 @@
+[package]
+name = "record-asr"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "record_asr"
+path = "src/main.rs"
+
+[dependencies]
+deli-infer = { path = "../../crates/deli-infer", features = ["cuda"] }
+deli-audio = { path = "../../crates/deli-audio" }
+deli-base = { path = "../../crates/deli-base" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
