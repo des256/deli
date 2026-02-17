@@ -1,7 +1,6 @@
-- create deli-audio for audio I/O
-- deli-infer: piper (or some tts)
-- deli-camera: in camera trait, replace recv with recv_frame and recv_jpeg. same for any try_recv. recv_frame receives a frame (if internally this is a jpeg, unpack it there). recv_jpeg receives a jpeg.
-- deli-camera: add .jpeg_available() to the trait, returns true if the camera can output jpegs.
 - experiment: audio in with asr
-- experiment: tts with audio out
-- experiment: audio in, asr, llm, tts, audio out
+
+* deli-infer: piper (or some other cheap tts)
+* monitor: basic flutter project with websocket that automatically reconnects, config for websocket address and port
+* experiment: tts with audio out
+* experiment: audio in, asr, llm, tts, audio out

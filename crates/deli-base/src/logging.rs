@@ -1,4 +1,4 @@
-use log::{Log, LevelFilter, Metadata, Record};
+use log::{LevelFilter, Log, Metadata, Record};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -55,7 +55,10 @@ impl Log for StdoutLogger {
         let line = record.line().unwrap_or(0);
         let message = record.args();
 
-        println!("{} [{}] [thread:{:?}] {}:{} - {}", timestamp, level, thread_id, file, line, message);
+        println!(
+            "[{:?}:{}:{} - {}:{}] {}",
+            thread_id, level, timestamp, file, line, message
+        );
     }
 
     fn flush(&self) {
@@ -135,7 +138,10 @@ pub fn format_timestamp() -> String {
     let minutes = (time_of_day % 3600) / 60;
     let seconds = time_of_day % 60;
 
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}", year, month, day, hours, minutes, seconds)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        year, month, day, hours, minutes, seconds
+    )
 }
 
 /// Format current date as YYYY-MM-DD (UTC)
@@ -275,8 +281,8 @@ mod tests {
 
     #[test]
     fn test_file_logger_day_rollover() {
-        let test_dir = std::env::temp_dir()
-            .join(format!("deli-log-test-{}-rollover", std::process::id()));
+        let test_dir =
+            std::env::temp_dir().join(format!("deli-log-test-{}-rollover", std::process::id()));
 
         let _ = fs::remove_dir_all(&test_dir);
 
@@ -318,16 +324,25 @@ mod tests {
         let today_file = test_dir.join(format!("{}.log", today));
 
         assert!(fake_file_path.exists(), "Old date file should exist");
-        assert!(today_file.exists(), "Today's date file should exist after rollover");
+        assert!(
+            today_file.exists(),
+            "Today's date file should exist after rollover"
+        );
 
         // Today's file should have the message (rollover happened before writing)
         let today_content = fs::read_to_string(&today_file).expect("Failed to read today file");
-        assert!(today_content.contains("before rollover"), "Today file should contain the message");
+        assert!(
+            today_content.contains("before rollover"),
+            "Today file should contain the message"
+        );
 
         // Verify the state was updated to today's date
         {
             let state = logger.state.lock().unwrap();
-            assert_eq!(state.current_date, today, "current_date should be updated to today");
+            assert_eq!(
+                state.current_date, today,
+                "current_date should be updated to today"
+            );
         }
 
         // Clean up
