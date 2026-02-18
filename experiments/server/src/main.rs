@@ -2,7 +2,7 @@ use base::log;
 use com::WsServer;
 use futures_util::StreamExt;
 use image::{Image, encode_jpeg};
-use server::Data;
+use server::ToMonitor;
 use video::{CameraConfig, RPiCamera, VideoData};
 
 const DEFAULT_ADDR: &str = "0.0.0.0:5090";
@@ -20,11 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Camera opened: 640x480");
 
     // Bind WebSocket server
-    let server = WsServer::<Data>::bind(DEFAULT_ADDR).await?;
+    let server = WsServer::<ToMonitor>::bind(DEFAULT_ADDR).await?;
     log::info!("Listening on {}", server.local_addr());
 
     let mut prev_client_count = 0;
-    let mut value: i32 = 0;
 
     loop {
         // Capture frame
@@ -34,11 +33,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             VideoData::Rgb(tensor) => encode_jpeg(Image::U8(tensor), 80).await?,
         };
 
-        // Broadcast Data with frame
-        let data = Data::new(value, true, jpeg);
-        server.send(&data).await?;
-
-        value = value.wrapping_add(1);
+        // Broadcast frame to monitor
+        server.send(&ToMonitor::VideoJpeg(jpeg)).await?;
 
         // Log client count changes
         let client_count = server.client_count().await;

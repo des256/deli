@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
+import 'package:rstypes/rstypes.dart';
+
 import 'config.dart';
 import 'server.dart';
 
@@ -66,20 +68,21 @@ class _MonitorHomeState extends State<MonitorHome>
             ),
           ),
           // Audio/Video tab
-          data != null
-              ? Image.memory(
-                  Uint8List.fromList(data.frame),
-                  gaplessPlayback: true,
-                  width: double.infinity,
-                  height: double.infinity,
-                  fit: BoxFit.contain,
-                )
-              : const Center(
-                  child: Text(
-                    'waiting...',
-                    style: TextStyle(color: Colors.red, fontSize: 48),
-                  ),
+          switch (data) {
+            ToMonitorVideoJpeg(:final f0) => Image.memory(
+                Uint8List.fromList(f0),
+                gaplessPlayback: true,
+                width: double.infinity,
+                height: double.infinity,
+                fit: BoxFit.contain,
+              ),
+            _ => const Center(
+                child: Text(
+                  'waiting...',
+                  style: TextStyle(color: Colors.red, fontSize: 48),
                 ),
+              ),
+          },
           // Settings tab
           const Center(
             child: Text(
