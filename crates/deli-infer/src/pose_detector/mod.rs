@@ -13,7 +13,7 @@ mod types;
 
 pub use blocks::{C2f, ConvBlock, Dfl, Sppf, Upsample};
 pub use detector::PoseDetector;
-pub use types::{CocoKeypoint, Keypoint, PoseDetection};
+pub use types::{CocoKeypoint, Keypoint, PoseDetection, PoseDetections};
 
 use backbone::DarkNet;
 use candle_core::{Result, Tensor};

@@ -1,4 +1,6 @@
+use deli_image::Image;
 use deli_infer::Inference;
+use futures_util::{SinkExt, StreamExt};
 
 fn cuda() -> Inference {
     Inference::cuda(0).expect("CUDA device required")
@@ -21,7 +23,7 @@ async fn test_pose_detector_with_real_model() {
 
     // Construct detector with real model (auto-detects nano size)
     let inference = cuda();
-    let detector = inference
+    let mut detector = inference
         .use_pose_detector(model_path)
         .expect("Failed to load real model");
 
@@ -29,8 +31,17 @@ async fn test_pose_detector_with_real_model() {
     let data = vec![128.0f32; 480 * 640 * 3];
     let frame = deli_base::Tensor::new(vec![480, 640, 3], data).unwrap();
 
-    // Run detection — with a uniform gray image, expect zero or few detections
-    let detections = detector.detect(&frame).await.expect("Inference failed");
+    // Send image via Sink and close
+    detector.send(Image::F32(frame)).await.expect("Send failed");
+    detector.close().await.expect("Close failed");
+
+    // Read detection result from Stream
+    let detections = detector
+        .next()
+        .await
+        .expect("Stream ended unexpectedly")
+        .expect("Inference failed");
+
     eprintln!(
         "Real model inference: {} detections from gray 480x640 image",
         detections.len()
@@ -47,4 +58,7 @@ async fn test_pose_detector_with_real_model() {
             assert!(kp.confidence <= 1.0);
         }
     }
+
+    // Stream should end after all items consumed
+    assert!(detector.next().await.is_none());
 }

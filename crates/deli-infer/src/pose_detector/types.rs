@@ -13,6 +13,8 @@ pub struct PoseDetection {
     pub keypoints: [Keypoint; 17],
 }
 
+pub type PoseDetections = Vec<PoseDetection>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(usize)]
 pub enum CocoKeypoint {

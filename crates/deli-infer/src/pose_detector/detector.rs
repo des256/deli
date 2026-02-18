@@ -1,23 +1,54 @@
 use super::postprocess::postprocess;
-use super::types::PoseDetection;
+use super::types::PoseDetections;
 use super::{Multiples, YoloV8Pose};
 use crate::InferError;
 use candle_core::{DType, Device, Tensor as CanTensor};
 use deli_base::Tensor;
+use deli_image::Image;
+use futures_core::Stream;
+use futures_sink::Sink;
+use std::collections::VecDeque;
+use std::fmt;
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
 /// Pose detector for running YOLOv8-Pose inference.
 ///
+/// Implements `Sink<Image>` to accept input images and
+/// `Stream<Item = Result<PoseDetections>>` to produce pose detections.
+///
+/// Each `Image` sent via the Sink maps 1:1 to a `PoseDetections` yielded
+/// from the Stream. Closing the sink signals no more input; the stream
+/// ends once all pending images are processed.
+///
 /// Preprocessing uses nearest-neighbor interpolation for resizing. For better
 /// detection accuracy with upscaled images, consider pre-resizing input frames
-/// with bilinear or bicubic interpolation before calling `detect()`.
-#[derive(Debug)]
+/// with bilinear or bicubic interpolation before sending.
 pub struct PoseDetector {
     model: Arc<YoloV8Pose>,
     device: Device,
     conf_threshold: f32,
     nms_threshold: f32,
+    pending: VecDeque<Image>,
+    closed: bool,
+    inflight: Option<Pin<Box<dyn Future<Output = Result<PoseDetections, InferError>> + Send>>>,
+    stream_waker: Option<Waker>,
+}
+
+impl fmt::Debug for PoseDetector {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PoseDetector")
+            .field("device", &self.device)
+            .field("conf_threshold", &self.conf_threshold)
+            .field("nms_threshold", &self.nms_threshold)
+            .field("pending", &self.pending.len())
+            .field("closed", &self.closed)
+            .field("inflight", &self.inflight.is_some())
+            .finish()
+    }
 }
 
 impl PoseDetector {
@@ -42,6 +73,10 @@ impl PoseDetector {
             device,
             conf_threshold: 0.25,
             nms_threshold: 0.45,
+            pending: VecDeque::new(),
+            closed: false,
+            inflight: None,
+            stream_waker: None,
         })
     }
 
@@ -52,26 +87,119 @@ impl PoseDetector {
         self
     }
 
-    /// Run pose detection on a frame (async).
-    ///
-    /// The frame should be an HWC `Tensor<f32>` with RGB channels in 0-255 range.
-    pub async fn detect(&self, frame: &Tensor<f32>) -> Result<Vec<PoseDetection>, InferError> {
+    /// Spawn detection of the given image as an inflight future.
+    fn start_detection(&mut self, image: Image) {
         let model = Arc::clone(&self.model);
         let device = self.device.clone();
         let conf_threshold = self.conf_threshold;
         let nms_threshold = self.nms_threshold;
-        let frame = frame.clone();
 
-        tokio::task::spawn_blocking(move || {
-            use candle_nn::Module;
-            let (preprocessed, original_hw, model_hw) = preprocess(&frame, &device)?;
-            let output = model.forward(&preprocessed).map_err(InferError::from)?;
-            postprocess(&output, original_hw, model_hw, conf_threshold, nms_threshold)
-                .map_err(InferError::from)
-        })
-        .await
-        .map_err(|e| InferError::Runtime(format!("inference task failed: {e}")))?
+        self.inflight = Some(Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                use candle_nn::Module;
+                let frame = image_to_f32(image);
+                let (preprocessed, original_hw, model_hw) = preprocess(&frame, &device)?;
+                let output = model.forward(&preprocessed).map_err(InferError::from)?;
+                postprocess(&output, original_hw, model_hw, conf_threshold, nms_threshold)
+                    .map_err(InferError::from)
+            })
+            .await
+            .map_err(|e| InferError::Runtime(format!("inference task failed: {e}")))?
+        }));
     }
+}
+
+/// Convert an `Image` to `Tensor<f32>` in the 0-255 range expected by `preprocess`.
+fn image_to_f32(image: Image) -> Tensor<f32> {
+    match image {
+        Image::F32(t) => t,
+        Image::U8(t) => {
+            let data = t.data.iter().map(|&v| v as f32).collect();
+            Tensor::new(t.shape.clone(), data).unwrap()
+        }
+        Image::U16(t) => {
+            let data = t.data.iter().map(|&v| v as f32 / 257.0).collect();
+            Tensor::new(t.shape.clone(), data).unwrap()
+        }
+    }
+}
+
+impl Sink<Image> for PoseDetector {
+    type Error = InferError;
+
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), InferError>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: Image) -> Result<(), InferError> {
+        let this = self.get_mut();
+        this.pending.push_back(item);
+        if let Some(waker) = this.stream_waker.take() {
+            waker.wake();
+        }
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), InferError>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), InferError>> {
+        let this = self.get_mut();
+        this.closed = true;
+        if let Some(waker) = this.stream_waker.take() {
+            waker.wake();
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl Stream for PoseDetector {
+    type Item = Result<PoseDetections, InferError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        // Poll inflight detection
+        if let Some(fut) = this.inflight.as_mut() {
+            match fut.as_mut().poll(cx) {
+                Poll::Ready(result) => {
+                    this.inflight = None;
+                    return Poll::Ready(Some(result));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
+        // Dequeue next image and start detection
+        if let Some(image) = this.pending.pop_front() {
+            this.start_detection(image);
+            if let Some(fut) = this.inflight.as_mut() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(result) => {
+                        this.inflight = None;
+                        return Poll::Ready(Some(result));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+        }
+
+        // Stream complete when closed, pending empty, and no inflight
+        if this.closed {
+            return Poll::Ready(None);
+        }
+
+        // Nothing to do yet — park
+        this.stream_waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+// Ensure PoseDetector is Send
+fn _assert_send() {
+    fn assert<T: Send>() {}
+    assert::<PoseDetector>();
 }
 
 /// Preprocess input frame: HWC 0-255 -> NCHW 0-1.
@@ -200,6 +328,10 @@ mod tests {
             device,
             conf_threshold: 0.25,
             nms_threshold: 0.45,
+            pending: VecDeque::new(),
+            closed: false,
+            inflight: None,
+            stream_waker: None,
         }
     }
 
@@ -255,12 +387,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_detect_full_pipeline() {
-        let detector = test_detector();
+        use futures_util::{SinkExt, StreamExt};
+
+        let mut detector = test_detector();
         let data = vec![128.0f32; 64 * 64 * 3];
         let frame = Tensor::new(vec![64, 64, 3], data).unwrap();
 
+        // Send image via Sink and close
+        detector.send(Image::F32(frame)).await.unwrap();
+        detector.close().await.unwrap();
+
         // With random (zero) weights, inference should complete without panic
-        let result = detector.detect(&frame).await;
-        assert!(result.is_ok());
+        let result = detector.next().await;
+        assert!(result.is_some());
+        assert!(result.unwrap().is_ok());
     }
 }
