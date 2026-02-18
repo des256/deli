@@ -1,5 +1,5 @@
 use crate::{CameraConfig, CameraError, VideoData, VideoFrame};
-use deli_base::Tensor;
+use base::Tensor;
 use futures_core::Stream;
 use rslibcamlitelib::{ExternalCallback, LibCamClient, StreamFormat, StreamParams};
 use std::pin::Pin;

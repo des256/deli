@@ -4,7 +4,7 @@ use std::fmt;
 pub enum CameraError {
     Device(String),
     Stream(String),
-    Decode(deli_image::ImageError),
+    Decode(image::ImageError),
     Channel(String),
 }
 
@@ -27,8 +27,8 @@ impl From<std::io::Error> for CameraError {
     }
 }
 
-impl From<deli_image::ImageError> for CameraError {
-    fn from(err: deli_image::ImageError) -> Self {
+impl From<image::ImageError> for CameraError {
+    fn from(err: image::ImageError) -> Self {
         CameraError::Decode(err)
     }
 }

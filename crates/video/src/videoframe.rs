@@ -1,4 +1,4 @@
-use deli_base::Tensor;
+use base::Tensor;
 
 /// A captured video frame, either decoded RGB pixels or raw JPEG bytes.
 #[derive(Debug, Clone)]
