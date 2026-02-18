@@ -1,4 +1,4 @@
-#[derive(deli_codec::Codec, deli_codec::Dart)]
+#[derive(codec::Codec, codec::Dart)]
 pub struct Data {
     value: i32,
     flag: bool,
