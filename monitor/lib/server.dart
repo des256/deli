@@ -11,9 +11,11 @@ typedef OnDataUpdate = void Function(ToMonitor data);
 class Server {
   WebSocketChannel? _channel;
   ToMonitor? _data;
+  Language? _language;  // Persists across VideoJpeg messages
   final List<OnDataUpdate> _onUpdates = [];
 
   ToMonitor? get data => _data;
+  Language? get language => _language;
 
   Server(Config config) {
     _connect(config);
@@ -27,6 +29,12 @@ class Server {
     _onUpdates.remove(callback);
   }
 
+  void setLanguage(Language language) {
+    final message = FromMonitorSettings(language: language);
+    final bytes = message.toBin();
+    _channel?.sink.add(bytes);
+  }
+
   Future<void> _connect(Config config) async {
     while (true) {
       try {
@@ -38,9 +46,16 @@ class Server {
 
         _channel!.stream.listen(
           (event) {
-            _data = ToMonitor.fromBin(Uint8List.fromList(event as List<int>));
+            final message = ToMonitor.fromBin(Uint8List.fromList(event as List<int>));
+            // Only update _data for VideoJpeg messages to avoid a single-frame
+            // "waiting..." flash on the Audio/Video tab when Settings arrives.
+            if (message is ToMonitorSettings) {
+              _language = message.language;
+            } else {
+              _data = message;
+            }
             for (final callback in List.of(_onUpdates)) {
-              callback(_data!);
+              callback(message);
             }
           },
           onDone: () {

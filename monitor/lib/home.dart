@@ -84,10 +84,52 @@ class _MonitorHomeState extends State<MonitorHome>
               ),
           },
           // Settings tab
-          const Center(
-            child: Text(
-              'Settings',
-              style: TextStyle(color: Colors.white),
+          Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  'Language',
+                  style: TextStyle(color: Colors.white, fontSize: 18),
+                ),
+                const SizedBox(height: 16),
+                DropdownButton<Language>(
+                  value: widget.server.language,
+                  hint: const Text(
+                    'Waiting for server...',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                  dropdownColor: Colors.grey[900],
+                  style: const TextStyle(color: Colors.white),
+                  items: const [
+                    DropdownMenuItem(
+                      value: LanguageEnglishUs(),
+                      child: Text('English (US)'),
+                    ),
+                    DropdownMenuItem(
+                      value: LanguageChineseChina(),
+                      child: Text('Chinese (China)'),
+                    ),
+                    DropdownMenuItem(
+                      value: LanguageKoreanKorea(),
+                      child: Text('Korean (Korea)'),
+                    ),
+                    DropdownMenuItem(
+                      value: LanguageDutchNetherlands(),
+                      child: Text('Dutch (Netherlands)'),
+                    ),
+                    DropdownMenuItem(
+                      value: LanguageFrenchFrance(),
+                      child: Text('French (France)'),
+                    ),
+                  ],
+                  onChanged: (Language? selectedLanguage) {
+                    if (selectedLanguage != null) {
+                      widget.server.setLanguage(selectedLanguage);
+                    }
+                  },
+                ),
+              ],
             ),
           ),
         ],

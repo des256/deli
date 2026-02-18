@@ -2,7 +2,7 @@ use base::log;
 use com::WsServer;
 use futures_util::StreamExt;
 use image::{Image, encode_jpeg};
-use server::ToMonitor;
+use server::{Language, ToMonitor};
 use video::{CameraConfig, RPiCamera, VideoData};
 
 const DEFAULT_ADDR: &str = "0.0.0.0:5090";
@@ -36,10 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Broadcast frame to monitor
         server.send(&ToMonitor::VideoJpeg(jpeg)).await?;
 
-        // Log client count changes
+        // Send initial settings when client count changes
         let client_count = server.client_count().await;
         if client_count != prev_client_count {
             log::info!("Connected clients: {}", client_count);
+            // Send Settings after video frame (not before) to avoid race with client listener setup
+            if client_count > 0 {
+                server.send(&ToMonitor::Settings { language: Language::EnglishUs }).await?;
+            }
             prev_client_count = client_count;
         }
     }
