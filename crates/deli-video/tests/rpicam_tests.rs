@@ -1,6 +1,6 @@
 #[cfg(feature = "rpicam")]
 mod rpicam_tests {
-    use deli_camera::{CameraConfig, CameraError, RPiCamera};
+    use deli_video::{CameraConfig, CameraError, RPiCamera};
 
     #[test]
     fn test_rpicam_invalid_device() {

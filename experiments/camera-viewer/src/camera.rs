@@ -1,16 +1,16 @@
 use camera_viewer::Frame;
 use deli_base::log;
-use deli_camera::{Camera, CameraConfig, Frame as CameraFrame, V4l2Camera};
+use deli_video::{Camera, CameraConfig, V4l2Camera, VideoFrame};
 use deli_com::Server;
 use deli_image::DecodedImage;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:9920";
 
 /// Decode a camera Frame into an RGB tensor.
-async fn frame_to_rgb(frame: CameraFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
     match frame {
-        CameraFrame::Rgb(tensor) => Ok(tensor),
-        CameraFrame::Jpeg(data) => match deli_image::decode_image(&data).await? {
+        VideoFrame::Rgb(tensor) => Ok(tensor),
+        VideoFrame::Jpeg(data) => match deli_image::decode_image(&data).await? {
             DecodedImage::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },

@@ -1,24 +1,24 @@
-use crate::{Camera, CameraConfig, CameraError, Frame};
+use crate::{Camera, CameraConfig, CameraError, VideoFrame};
 use deli_base::Tensor;
 use rslibcamlitelib::{ExternalCallback, LibCamClient, StreamFormat, StreamParams};
 use tokio::sync::mpsc;
 
-type FrameResult = Result<Frame, CameraError>;
+type VideoFrameResult = Result<VideoFrame, CameraError>;
 
 /// Callback handler that bridges rslibcamlite frames to a tokio channel.
-struct FrameCallback {
-    tx: mpsc::Sender<FrameResult>,
+struct VideoFrameCallback {
+    tx: mpsc::Sender<VideoFrameResult>,
     width: usize,
     height: usize,
 }
 
-impl ExternalCallback for FrameCallback {
+impl ExternalCallback for VideoFrameCallback {
     unsafe fn callbackLowres(&mut self, bytes: *mut u8, count: usize) {
         let slice = unsafe { std::slice::from_raw_parts(bytes, count) };
         let data = slice.to_vec();
 
         let frame = Tensor::new(vec![self.height, self.width, 3], data)
-            .map(Frame::Rgb)
+            .map(VideoFrame::Rgb)
             .map_err(|e| CameraError::Stream(e.to_string()));
 
         let _ = self.tx.try_send(frame);
@@ -45,7 +45,7 @@ impl ExternalCallback for FrameCallback {
 /// **Note:** Camera setup is deferred until the first `recv()` call.
 pub struct RPiCamera {
     config: CameraConfig,
-    receiver: Option<mpsc::Receiver<FrameResult>>,
+    receiver: Option<mpsc::Receiver<VideoFrameResult>>,
     client: Option<LibCamClient>,
 }
 
@@ -60,7 +60,7 @@ impl std::fmt::Debug for RPiCamera {
 }
 
 impl Camera for RPiCamera {
-    async fn recv(&mut self) -> Result<Frame, CameraError> {
+    async fn recv(&mut self) -> Result<VideoFrame, CameraError> {
         self.ensure_started()?;
 
         let receiver = self
@@ -136,7 +136,7 @@ impl RPiCamera {
         client.client.setupLowres(&params);
 
         // Register callback that bridges frames into the tokio channel
-        let callback = Box::new(FrameCallback {
+        let callback = Box::new(VideoFrameCallback {
             tx,
             width: self.config.width() as usize,
             height: self.config.height() as usize,

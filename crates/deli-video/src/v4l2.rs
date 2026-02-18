@@ -1,4 +1,4 @@
-use crate::{Camera, CameraConfig, CameraError, Frame};
+use crate::{Camera, CameraConfig, CameraError, VideoFrame};
 use std::thread::{self, JoinHandle};
 use tokio::sync::mpsc;
 use v4l::buffer::Type;
@@ -7,13 +7,13 @@ use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
 use v4l::{Device, Format, FourCC};
 
-type FrameResult = Result<Frame, CameraError>;
+type VideoFrameResult = Result<VideoFrame, CameraError>;
 
 /// V4L2 camera implementation.
 pub struct V4l2Camera {
     config: CameraConfig,
     device: Option<Device>,
-    receiver: Option<mpsc::Receiver<FrameResult>>,
+    receiver: Option<mpsc::Receiver<VideoFrameResult>>,
     thread_handle: Option<JoinHandle<()>>,
 }
 
@@ -29,7 +29,7 @@ impl std::fmt::Debug for V4l2Camera {
 }
 
 impl Camera for V4l2Camera {
-    async fn recv(&mut self) -> Result<Frame, CameraError> {
+    async fn recv(&mut self) -> Result<VideoFrame, CameraError> {
         // Ensure capture thread is running
         self.ensure_started()?;
 
@@ -128,9 +128,9 @@ impl V4l2Camera {
 
     /// Background thread capture loop.
     ///
-    /// Reads MJPEG frames from V4L2 and sends raw JPEG bytes as `Frame::Jpeg`.
+    /// Reads MJPEG frames from V4L2 and sends raw JPEG bytes as `VideoFrame::Jpeg`.
     /// Uses `try_send` to drop frames when the channel is full rather than blocking.
-    fn capture_loop(device: Device, tx: mpsc::Sender<FrameResult>, buffer_count: usize) {
+    fn capture_loop(device: Device, tx: mpsc::Sender<VideoFrameResult>, buffer_count: usize) {
         // Create mmap stream
         let mut stream = match MmapStream::with_buffers(&device, Type::VideoCapture, buffer_count as u32) {
             Ok(s) => s,
@@ -145,7 +145,7 @@ impl V4l2Camera {
             let frame_result = match CaptureStream::next(&mut stream) {
                 Ok((frame_data, _metadata)) => {
                     // Copy raw JPEG bytes (buffer is borrowed and only valid until next call)
-                    Ok(Frame::Jpeg(frame_data.to_vec()))
+                    Ok(VideoFrame::Jpeg(frame_data.to_vec()))
                 }
                 Err(e) => Err(CameraError::Stream(e.to_string())),
             };

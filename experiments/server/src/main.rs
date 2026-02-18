@@ -1,5 +1,5 @@
 use deli_base::log;
-use deli_camera::{Camera, CameraConfig, Frame, RPiCamera};
+use deli_video::{Camera, CameraConfig, RPiCamera, VideoFrame};
 use deli_com::WsServer;
 use deli_image::{encode_jpeg, DecodedImage};
 use server::Data;
@@ -29,8 +29,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Capture frame
         let frame = camera.recv().await?;
         let jpeg = match frame {
-            Frame::Jpeg(data) => data,
-            Frame::Rgb(tensor) => encode_jpeg(DecodedImage::U8(tensor), 80).await?,
+            VideoFrame::Jpeg(data) => data,
+            VideoFrame::Rgb(tensor) => encode_jpeg(DecodedImage::U8(tensor), 80).await?,
         };
 
         // Broadcast Data with frame

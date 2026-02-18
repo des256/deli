@@ -1,4 +1,4 @@
-//! Camera capture abstraction for the deli ecosystem.
+//! Video capture abstraction for the deli ecosystem.
 //!
 //! This crate provides a unified `Camera` trait for async frame capture,
 //! with backend implementations for various camera APIs.
@@ -16,7 +16,7 @@ pub mod rpicam;
 
 pub use config::CameraConfig;
 pub use error::CameraError;
-pub use traits::{Camera, Frame};
+pub use traits::{Camera, VideoFrame};
 
 #[cfg(feature = "v4l2")]
 pub use v4l2::V4l2Camera;

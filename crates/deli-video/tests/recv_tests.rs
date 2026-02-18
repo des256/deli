@@ -1,5 +1,5 @@
 use deli_base::Tensor;
-use deli_camera::CameraError;
+use deli_video::CameraError;
 use deli_image::DecodedImage;
 
 /// Test the MJPEG decode pipeline in isolation.

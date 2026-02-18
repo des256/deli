@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 deli-base = { path = "../../crates/deli-base" }
-deli-camera = { path = "../../crates/deli-camera", features = ["rpicam"] }
+deli-video = { path = "../../crates/deli-video", features = ["rpicam"] }
 deli-com = { path = "../../crates/deli-com" }
 deli-image = { path = "../../crates/deli-image" }
 deli-codec = { path = "../../crates/deli-codec" }

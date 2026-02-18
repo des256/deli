@@ -1,4 +1,4 @@
-use deli_camera::CameraConfig;
+use deli_video::CameraConfig;
 
 #[test]
 fn test_config_defaults() {

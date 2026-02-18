@@ -1,6 +1,6 @@
 #[cfg(feature = "v4l2")]
 mod v4l2_tests {
-    use deli_camera::{CameraConfig, CameraError, V4l2Camera};
+    use deli_video::{CameraConfig, CameraError, V4l2Camera};
 
     #[test]
     fn test_v4l2_camera_invalid_device() {

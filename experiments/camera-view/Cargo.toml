@@ -8,7 +8,7 @@ name = "camera-view"
 path = "src/main.rs"
 
 [dependencies]
-deli-camera = { path = "../../crates/deli-camera", features = ["v4l2"] }
+deli-video = { path = "../../crates/deli-video", features = ["v4l2"] }
 deli-image = { path = "../../crates/deli-image" }
 deli-base = { path = "../../crates/deli-base" }
 minifb = "0.27"

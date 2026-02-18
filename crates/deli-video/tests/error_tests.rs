@@ -1,4 +1,4 @@
-use deli_camera::CameraError;
+use deli_video::CameraError;
 use deli_image::ImageError;
 use std::io;
 

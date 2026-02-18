@@ -326,8 +326,8 @@ name = "camera-view"
 version = "0.1.0"
 dependencies = [
  "deli-base",
- "deli-camera",
  "deli-image",
+ "deli-video",
  "minifb",
  "tokio",
 ]
@@ -337,10 +337,10 @@ name = "camera-viewer"
 version = "0.1.0"
 dependencies = [
  "deli-base",
- "deli-camera",
  "deli-codec",
  "deli-com",
  "deli-image",
+ "deli-video",
  "minifb",
  "tokio",
 ]
@@ -757,19 +757,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deli-camera"
-version = "0.1.0"
-dependencies = [
- "deli-base",
- "deli-image",
- "image",
- "log",
- "rslibcamlite",
- "tokio",
- "v4l",
-]
-
-[[package]]
 name = "deli-codec"
 version = "0.1.0"
 dependencies = [
@@ -821,6 +808,19 @@ dependencies = [
  "serde_json",
  "tokenizers",
  "tokio",
+]
+
+[[package]]
+name = "deli-video"
+version = "0.1.0"
+dependencies = [
+ "deli-base",
+ "deli-image",
+ "image",
+ "log",
+ "rslibcamlite",
+ "tokio",
+ "v4l",
 ]
 
 [[package]]
@@ -2943,10 +2943,10 @@ name = "server"
 version = "0.1.0"
 dependencies = [
  "deli-base",
- "deli-camera",
  "deli-codec",
  "deli-com",
  "deli-image",
+ "deli-video",
  "tokio",
 ]
 

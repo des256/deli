@@ -1,7 +1,7 @@
 mod draw;
 
 use deli_base::log;
-use deli_camera::{Camera, CameraConfig, Frame, V4l2Camera};
+use deli_video::{Camera, CameraConfig, V4l2Camera, VideoFrame};
 use deli_image::DecodedImage;
 use deli_infer::backends::OnnxBackend;
 use deli_infer::{Device, ModelSource, YoloPoseEstimator};
@@ -15,11 +15,11 @@ const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
 const KEYPOINT_THRESHOLD: f32 = 0.001;
 
-/// Decode a camera Frame into an RGB tensor.
-async fn frame_to_rgb(frame: Frame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+/// Decode a camera VideoFrame into an RGB tensor.
+async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
     match frame {
-        Frame::Rgb(tensor) => Ok(tensor),
-        Frame::Jpeg(data) => match deli_image::decode_image(&data).await? {
+        VideoFrame::Rgb(tensor) => Ok(tensor),
+        VideoFrame::Jpeg(data) => match deli_image::decode_image(&data).await? {
             DecodedImage::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },
