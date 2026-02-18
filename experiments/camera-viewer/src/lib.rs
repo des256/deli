@@ -1,4 +1,4 @@
-#[derive(deli_codec::Codec)]
+#[derive(codec::Codec)]
 pub struct Frame {
     width: u32,
     height: u32,
@@ -7,7 +7,11 @@ pub struct Frame {
 
 impl Frame {
     pub fn new(width: u32, height: u32, data: Vec<u8>) -> Self {
-        Self { width, height, data }
+        Self {
+            width,
+            height,
+            data,
+        }
     }
 
     pub fn width(&self) -> u32 {

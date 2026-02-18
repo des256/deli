@@ -1,8 +1,8 @@
-use deli_base::log;
-use deli_video::{CameraConfig, V4l2Camera, VideoData, VideoFrame};
-use deli_image::Image;
+use base::log;
 use futures_util::StreamExt;
+use image::Image;
 use minifb::{Key, Window, WindowOptions};
+use video::{CameraConfig, V4l2Camera, VideoData, VideoFrame};
 
 const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
@@ -27,10 +27,10 @@ fn rgb_to_argb(buf: &[u8], width: usize, height: usize) -> Vec<u32> {
 }
 
 /// Decode a camera VideoFrame into an RGB tensor.
-async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+async fn frame_to_rgb(frame: VideoFrame) -> Result<base::Tensor<u8>, Box<dyn std::error::Error>> {
     match frame.data {
         VideoData::Rgb(tensor) => Ok(tensor),
-        VideoData::Jpeg(data) => match deli_image::decode_image(&data).await? {
+        VideoData::Jpeg(data) => match image::decode_image(&data).await? {
             Image::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },
@@ -39,7 +39,7 @@ async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dy
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     log::info!("Camera View");
     log::info!("Resolution: {}x{}", WIDTH, HEIGHT);

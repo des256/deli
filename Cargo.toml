@@ -1,4 +1,4 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "experiments/*"]
-exclude = ["experiments/camera-pose"]
+exclude = ["experiments/camera-pose", "experiments/server"]

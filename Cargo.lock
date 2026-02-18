@@ -2588,19 +2588,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "base",
- "codec",
- "com",
- "futures-util",
- "image 0.1.0",
- "tokio",
- "video",
-]
-
-[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

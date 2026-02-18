@@ -1,18 +1,18 @@
+use base::log;
 use camera_viewer::Frame;
-use deli_base::log;
-use deli_video::{CameraConfig, V4l2Camera, VideoData, VideoFrame};
-use futures_util::StreamExt;
-use deli_com::Server;
-use deli_image::Image;
+use com::Server;
 use futures_util::SinkExt;
+use futures_util::StreamExt;
+use image::Image;
+use video::{CameraConfig, V4l2Camera, VideoData, VideoFrame};
 
 const DEFAULT_ADDR: &str = "0.0.0.0:9920";
 
 /// Decode a camera Frame into an RGB tensor.
-async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dyn std::error::Error>> {
+async fn frame_to_rgb(frame: VideoFrame) -> Result<base::Tensor<u8>, Box<dyn std::error::Error>> {
     match frame.data {
         VideoData::Rgb(tensor) => Ok(tensor),
-        VideoData::Jpeg(data) => match deli_image::decode_image(&data).await? {
+        VideoData::Jpeg(data) => match image::decode_image(&data).await? {
             Image::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },
@@ -21,7 +21,7 @@ async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dy
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     // Parse address from args or use default
     let addr = std::env::args()
