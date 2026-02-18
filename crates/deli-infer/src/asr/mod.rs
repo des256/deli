@@ -3,12 +3,12 @@ pub(crate) mod audio;
 pub mod config;
 pub(crate) mod model;
 pub(crate) mod token_decoder;
-pub mod transcribed;
+pub mod transcription;
 pub(crate) mod whisper;
 
 // Public API
 pub use config::Config;
-pub use transcribed::Transcription;
+pub use transcription::Transcription;
 pub use whisper::Whisper;
 
 // Internal — exposed for integration tests only, not part of public API

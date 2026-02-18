@@ -1,5 +1,7 @@
-use crate::asr::{audio::pcm_to_mel, config::Config, model::Whisper as WhisperModel, token_decoder::TokenDecoder};
-use crate::asr::transcribed::Transcription;
+use crate::asr::transcription::Transcription;
+use crate::asr::{
+    audio::pcm_to_mel, config::Config, model::Whisper as WhisperModel, token_decoder::TokenDecoder,
+};
 use crate::error::{InferError, Result};
 use candle_core::{Device, Tensor as CandleTensor};
 use candle_nn::VarBuilder;
@@ -61,8 +63,12 @@ impl Whisper {
         device: Device,
     ) -> Result<Self> {
         let vb = unsafe {
-            VarBuilder::from_mmaped_safetensors(&[model_path.as_ref()], candle_core::DType::F32, &device)
-                .map_err(|e| InferError::Runtime(format!("Failed to load model: {}", e)))?
+            VarBuilder::from_mmaped_safetensors(
+                &[model_path.as_ref()],
+                candle_core::DType::F32,
+                &device,
+            )
+            .map_err(|e| InferError::Runtime(format!("Failed to load model: {}", e)))?
         };
 
         let model = WhisperModel::load(vb, config.clone())
@@ -106,10 +112,7 @@ impl Whisper {
 
         self.inflight = Some(Box::pin(async move {
             let text = tokio::task::spawn_blocking(move || -> Result<String> {
-                let f32_samples: Vec<f32> = samples
-                    .iter()
-                    .map(|&s| s as f32 / 32768.0)
-                    .collect();
+                let f32_samples: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
 
                 let mel_data = pcm_to_mel(&config, &f32_samples);
                 let num_frames = mel_data.len() / config.num_mel_bins;
@@ -118,14 +121,12 @@ impl Whisper {
                     vec![1, config.num_mel_bins, num_frames],
                     &device,
                 )
-                .map_err(|e| InferError::TensorError(format!("Failed to create mel tensor: {}", e)))?;
+                .map_err(|e| {
+                    InferError::TensorError(format!("Failed to create mel tensor: {}", e))
+                })?;
 
-                let mut decoder = TokenDecoder::new(
-                    (*model).clone(),
-                    (*tokenizer).clone(),
-                    &device,
-                    &config,
-                )?;
+                let mut decoder =
+                    TokenDecoder::new((*model).clone(), (*tokenizer).clone(), &device, &config)?;
 
                 decoder.run(&mel)
             })
