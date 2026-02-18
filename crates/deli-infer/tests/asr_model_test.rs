@@ -2,10 +2,14 @@ use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
 use deli_infer::asr::{Config, WhisperModel};
 
+fn cuda_device() -> Device {
+    Device::new_cuda(0).expect("CUDA device required")
+}
+
 #[test]
 fn test_whisper_encoder_forward() {
     let config = Config::tiny_en();
-    let device = Device::Cpu;
+    let device = cuda_device();
     let varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
@@ -22,7 +26,7 @@ fn test_whisper_encoder_forward() {
 #[test]
 fn test_whisper_decoder_forward() {
     let config = Config::tiny_en();
-    let device = Device::Cpu;
+    let device = cuda_device();
     let varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
@@ -45,7 +49,7 @@ fn test_whisper_decoder_forward() {
 #[test]
 fn test_whisper_full_forward() {
     let config = Config::tiny_en();
-    let device = Device::Cpu;
+    let device = cuda_device();
     let varmap = VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
@@ -77,7 +81,7 @@ fn test_whisper_load_real_model() {
     }
 
     let config = Config::tiny_en();
-    let device = Device::Cpu;
+    let device = cuda_device();
 
     let weights = unsafe {
         candle_nn::VarBuilder::from_mmaped_safetensors(&[model_path], DType::F32, &device)

@@ -1,8 +1,12 @@
 use deli_infer::Inference;
 
+fn cuda() -> Inference {
+    Inference::cuda(0).expect("CUDA device required")
+}
+
 #[tokio::test]
 async fn test_pose_detector_construction_fails_for_missing_file() {
-    let inference = Inference::cpu();
+    let inference = cuda();
     let result = inference.use_pose_detector("fake_model.safetensors");
     assert!(result.is_err());
 }
@@ -16,7 +20,7 @@ async fn test_pose_detector_with_real_model() {
     }
 
     // Construct detector with real model (auto-detects nano size)
-    let inference = Inference::cpu();
+    let inference = cuda();
     let detector = inference
         .use_pose_detector(model_path)
         .expect("Failed to load real model");

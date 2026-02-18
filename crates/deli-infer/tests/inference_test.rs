@@ -1,30 +1,18 @@
 use deli_infer::{InferError, Inference};
 
-#[test]
-fn test_inference_cpu() {
-    let inference = Inference::cpu();
-    assert!(inference.device().is_cpu());
+fn cuda() -> Inference {
+    Inference::cuda(0).expect("CUDA device required")
 }
 
-#[cfg(feature = "cuda")]
 #[test]
 fn test_inference_cuda() {
-    // Note: This test may fail if CUDA is not available on the system
-    // That's expected behavior - it tests the API, not the availability
-    match Inference::cuda(0) {
-        Ok(inference) => {
-            assert!(inference.device().is_cuda());
-        }
-        Err(_) => {
-            // CUDA not available, skip test
-            eprintln!("CUDA not available, skipping cuda test");
-        }
-    }
+    let inference = cuda();
+    assert!(inference.device().is_cuda());
 }
 
 #[test]
 fn test_use_pose_detector_signature() {
-    let inference = Inference::cpu();
+    let inference = cuda();
     // Verify method exists and returns error for non-existent file
     let result = inference.use_pose_detector("fake_path.safetensors");
     assert!(result.is_err()); // Should error because file doesn't exist
@@ -32,7 +20,7 @@ fn test_use_pose_detector_signature() {
 
 #[test]
 fn test_use_qwen3_signature() {
-    let inference = Inference::cpu();
+    let inference = cuda();
     // Verify method exists and returns error for non-existent files
     let result = inference.use_qwen3("fake_model.gguf", "fake_tokenizer.json");
     assert!(result.is_err()); // Should error because files don't exist
@@ -40,7 +28,7 @@ fn test_use_qwen3_signature() {
 
 #[test]
 fn test_onnx_session_nonexistent_file() {
-    let inference = Inference::cpu();
+    let inference = cuda();
     let result = inference.onnx_session("nonexistent.onnx");
     assert!(result.is_err());
     match result {
@@ -67,7 +55,7 @@ fn test_infererror_onnx_display() {
 
 #[test]
 fn test_onnx_session_multiple_calls_no_panic() {
-    let inference = Inference::cpu();
+    let inference = cuda();
     // Calling onnx_session multiple times should not panic (OnceLock ensures single init)
     let _result1 = inference.onnx_session("fake1.onnx");
     let _result2 = inference.onnx_session("fake2.onnx");

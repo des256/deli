@@ -5,6 +5,10 @@ use candle_nn::VarBuilder;
 use deli_infer::asr::{Config, TokenDecoder, WhisperModel};
 use tokenizers::Tokenizer;
 
+fn cuda_device() -> Device {
+    Device::new_cuda(0).expect("CUDA device required")
+}
+
 fn build_test_tokenizer() -> Tokenizer {
     let tokenizer_json = r#"{
         "version": "1.0",
@@ -38,7 +42,7 @@ fn build_test_tokenizer() -> Tokenizer {
 /// Build a decoder with small max_target_positions for fast tests.
 /// Random weights never produce EOT, so we limit the max tokens to keep tests quick.
 fn build_test_decoder() -> (TokenDecoder, Config) {
-    let device = Device::Cpu;
+    let device = cuda_device();
     let mut config = Config::tiny_en();
     // Use small max_target_positions so decode loop terminates quickly (max_tokens = 10/2 = 5)
     config.max_target_positions = 10;
@@ -131,7 +135,7 @@ fn test_decoder_construction() {
 #[test]
 fn test_decoder_decode_terminates() {
     let (mut decoder, _config) = build_test_decoder();
-    let device = Device::Cpu;
+    let device = cuda_device();
 
     // Create mel spectrogram input: [1, 80, 3000] (30s of audio)
     let mel = Tensor::zeros((1, 80, 3000), DType::F32, &device).expect("create mel");
@@ -154,7 +158,7 @@ fn test_decoder_decode_terminates() {
 #[test]
 fn test_decoder_run_single_chunk() {
     let (mut decoder, _config) = build_test_decoder();
-    let device = Device::Cpu;
+    let device = cuda_device();
 
     // Single 30s chunk: [1, 80, 3000]
     let mel = Tensor::zeros((1, 80, 3000), DType::F32, &device).expect("create mel");
@@ -166,7 +170,7 @@ fn test_decoder_run_single_chunk() {
 #[test]
 fn test_decoder_run_multi_chunk() {
     let (mut decoder, _config) = build_test_decoder();
-    let device = Device::Cpu;
+    let device = cuda_device();
 
     // 45s of audio: [1, 80, 4500] → should process as 2 chunks (3000 + 1500)
     let mel = Tensor::zeros((1, 80, 4500), DType::F32, &device).expect("create mel");
@@ -181,7 +185,7 @@ fn test_decoder_run_multi_chunk() {
 
 #[test]
 fn test_decoder_multi_chunk_preparation() {
-    let device = Device::Cpu;
+    let device = cuda_device();
 
     let mel =
         Tensor::zeros((1, 80, 4500), candle_core::DType::F32, &device).expect("mel tensor");

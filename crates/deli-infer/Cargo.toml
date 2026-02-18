@@ -24,6 +24,7 @@ futures-sink = "0.3"
 cuda = ["candle-core/cuda", "candle-nn/cuda", "candle-transformers/cuda", "ort/cuda"]
 
 [dev-dependencies]
+deli-infer = { path = ".", features = ["cuda"] }
 deli-audio = { path = "../deli-audio" }
 futures-util = { version = "0.3", features = ["sink"] }
 tokio = { version = "1", features = ["rt", "macros"] }

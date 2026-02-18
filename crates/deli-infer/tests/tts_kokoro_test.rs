@@ -19,7 +19,7 @@ fn test_kokoro_is_send_sync() {
 #[tokio::test]
 #[ignore] // Requires model files at models/kokoro/
 async fn test_kokoro_integration() {
-    let inference = Inference::cpu();
+    let inference = Inference::cuda(0).expect("CUDA device required");
 
     let kokoro = inference
         .use_kokoro(
@@ -50,7 +50,7 @@ async fn test_kokoro_integration() {
 #[tokio::test]
 #[ignore]
 async fn test_kokoro_multiple_utterances() {
-    let inference = Inference::cpu();
+    let inference = Inference::cuda(0).expect("CUDA device required");
 
     let kokoro = inference
         .use_kokoro(
@@ -74,7 +74,7 @@ async fn test_kokoro_multiple_utterances() {
 #[tokio::test]
 #[ignore]
 async fn test_kokoro_long_text() {
-    let inference = Inference::cpu();
+    let inference = Inference::cuda(0).expect("CUDA device required");
 
     let kokoro = inference
         .use_kokoro(

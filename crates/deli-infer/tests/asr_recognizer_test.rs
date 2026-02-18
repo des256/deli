@@ -11,12 +11,20 @@ use std::path::Path;
 
 const SAMPLE_RATE: usize = 16000;
 
+fn cuda_device() -> Device {
+    Device::new_cuda(0).expect("CUDA device required")
+}
+
+fn cuda() -> Inference {
+    Inference::cuda(0).expect("CUDA device required")
+}
+
 /// Build a Whisper recognizer from VarMap random weights (no model files needed).
 /// Uses small max_target_positions so decode loops terminate quickly with random weights.
 fn build_test_whisper() -> Whisper {
     let mut config = Config::tiny_en();
     config.max_target_positions = 10; // Fast termination with random weights
-    let device = Device::Cpu;
+    let device = cuda_device();
 
     // Build model with VarMap
     let varmap = candle_nn::VarMap::new();
@@ -60,8 +68,7 @@ fn build_test_whisper() -> Whisper {
     let tokenizer_path = temp_dir.join("test_tokenizer.json");
     std::fs::write(&tokenizer_path, tokenizer_json).expect("write tokenizer");
 
-    Whisper::new_with_config(model_path, tokenizer_path, config, device)
-        .expect("create whisper")
+    Whisper::new_with_config(model_path, tokenizer_path, config, device).expect("create whisper")
 }
 
 fn make_audio_sample(samples: Vec<i16>, sample_rate: usize) -> AudioSample {
@@ -90,8 +97,7 @@ async fn test_sample_rate_validation() {
 
 #[tokio::test]
 async fn test_sink_stream_happy_path() {
-    let mut whisper = build_test_whisper()
-        .with_window_samples(16000); // 1-second window
+    let mut whisper = build_test_whisper().with_window_samples(16000); // 1-second window
 
     // Send 1 second of silence at 16kHz
     let sample = make_audio_sample(vec![0; 16000], SAMPLE_RATE);
@@ -113,8 +119,7 @@ async fn test_sink_stream_happy_path() {
 
 #[tokio::test]
 async fn test_close_flushes_remaining_buffer() {
-    let mut whisper = build_test_whisper()
-        .with_window_samples(32000); // 2-second window
+    let mut whisper = build_test_whisper().with_window_samples(32000); // 2-second window
 
     // Send only 1 second (less than window), then close
     let sample = make_audio_sample(vec![0; 16000], SAMPLE_RATE);
@@ -124,7 +129,9 @@ async fn test_close_flushes_remaining_buffer() {
     // Closing should flush the remaining buffer
     let result = whisper.next().await;
     assert!(result.is_some(), "close should flush remaining audio");
-    result.unwrap().expect("flushed transcription should succeed");
+    result
+        .unwrap()
+        .expect("flushed transcription should succeed");
 
     // Stream should now be complete
     let end = whisper.next().await;
@@ -145,8 +152,7 @@ async fn test_stream_terminates_on_close_empty() {
 
 #[tokio::test]
 async fn test_multiple_windows() {
-    let mut whisper = build_test_whisper()
-        .with_window_samples(8000); // 0.5-second window
+    let mut whisper = build_test_whisper().with_window_samples(8000); // 0.5-second window
 
     // Send 1 second total (2 windows worth)
     let sample = make_audio_sample(vec![0; 16000], SAMPLE_RATE);
@@ -169,7 +175,7 @@ async fn test_multiple_windows() {
 
 #[tokio::test]
 async fn test_inference_factory_signature() {
-    let inference = Inference::cpu();
+    let inference = cuda();
 
     // Try to create - will fail since files don't exist, but that's expected
     let temp_dir = std::env::temp_dir();
@@ -201,7 +207,7 @@ async fn test_with_real_model() {
         return;
     }
 
-    let inference = Inference::cpu();
+    let inference = cuda();
     let mut whisper = inference
         .use_whisper(model_path, tokenizer_path, config_path)
         .expect("create whisper")
@@ -229,5 +235,5 @@ async fn test_with_real_model() {
 fn test_public_api_exports() {
     // Verify Whisper is publicly exported
     let _: Option<Whisper> = None;
-    let _inference = Inference::cpu();
+    let _inference = cuda();
 }

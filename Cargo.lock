@@ -805,6 +805,7 @@ dependencies = [
  "candle-transformers",
  "deli-audio",
  "deli-base",
+ "deli-infer",
  "futures-core",
  "futures-sink",
  "futures-util",

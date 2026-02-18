@@ -4,9 +4,17 @@ use candle_core::Device;
 use deli_infer::{Inference, Qwen3};
 use std::path::Path;
 
+fn cuda_device() -> Device {
+    Device::new_cuda(0).expect("CUDA device required")
+}
+
+fn cuda() -> Inference {
+    Inference::cuda(0).expect("CUDA device required")
+}
+
 #[test]
 fn test_qwen3_construction_fails_for_missing_file() {
-    let device = Device::Cpu;
+    let device = cuda_device();
     let result = Qwen3::new("fake_model.gguf", "fake_tokenizer.json", device);
     assert!(result.is_err(), "should fail with non-existent files");
 }
@@ -20,7 +28,7 @@ fn test_qwen3_send_sync() {
 
 #[test]
 fn test_inference_factory_signature() {
-    let inference = Inference::cpu();
+    let inference = cuda();
     // Verify method exists and returns error for non-existent file
     let result = inference.use_qwen3("fake_model.gguf", "fake_tokenizer.json");
     assert!(result.is_err(), "should fail with non-existent files");
@@ -36,30 +44,6 @@ fn test_infer_error_importable() {
 }
 
 #[tokio::test]
-async fn test_forward_with_real_model() {
-    let model_path = Path::new("../../models/qwen3/qwen3-8b-q4_k_m.gguf");
-    let tokenizer_path = Path::new("../../models/qwen3/tokenizer.json");
-
-    if !model_path.exists() || !tokenizer_path.exists() {
-        println!("Skipping test - model files not found at models/qwen3/");
-        return;
-    }
-
-    let device = Device::Cpu;
-    let qwen3 = Qwen3::new(model_path, tokenizer_path, device).expect("Failed to load model");
-
-    // Generate with a simple prompt
-    let prompt = "Hello";
-    let sample_len = 10; // Generate 10 tokens
-    let result = qwen3.forward(prompt, sample_len).await;
-
-    assert!(result.is_ok(), "forward should succeed: {:?}", result.err());
-    let text = result.unwrap();
-    assert!(!text.is_empty(), "generated text should not be empty");
-    println!("Generated: {}", text);
-}
-
-#[tokio::test]
 async fn test_forward_empty_prompt_validation() {
     let model_path = Path::new("../../models/qwen3/qwen3-8b-q4_k_m.gguf");
     let tokenizer_path = Path::new("../../models/qwen3/tokenizer.json");
@@ -69,7 +53,7 @@ async fn test_forward_empty_prompt_validation() {
         return;
     }
 
-    let device = Device::Cpu;
+    let device = cuda_device();
     let qwen3 = Qwen3::new(model_path, tokenizer_path, device).expect("Failed to load model");
 
     // Empty prompt should return error
@@ -77,27 +61,15 @@ async fn test_forward_empty_prompt_validation() {
     assert!(result.is_err(), "empty prompt should be rejected");
 }
 
-#[cfg(feature = "cuda")]
 #[tokio::test]
-#[ignore] // Requires GPU
 async fn test_cuda_device_propagation() {
-    // Note: This test may fail if CUDA is not available on the system
-    // That's expected behavior - it tests the API, not the availability
-    match Inference::cuda(0) {
-        Ok(inference) => {
-            // Verify device propagates to Qwen3
-            // This will fail without model files, but confirms the API exists
-            let result = inference.use_qwen3("fake_model.gguf", "fake_tokenizer.json");
-            assert!(result.is_err(), "should fail with non-existent files");
-        }
-        Err(_) => {
-            // CUDA not available, skip test
-            eprintln!("CUDA not available, skipping cuda test");
-        }
-    }
+    let inference = cuda();
+    // Verify device propagates to Qwen3
+    // This will fail without model files, but confirms the API exists
+    let result = inference.use_qwen3("fake_model.gguf", "fake_tokenizer.json");
+    assert!(result.is_err(), "should fail with non-existent files");
 }
 
-#[cfg(feature = "cuda")]
 #[tokio::test]
 async fn test_forward_with_cuda() {
     let model_path = Path::new("../../models/qwen3/qwen3-8b-q4_k_m.gguf");
@@ -108,28 +80,22 @@ async fn test_forward_with_cuda() {
         return;
     }
 
-    match Inference::cuda(0) {
-        Ok(inference) => {
-            let qwen3 = inference
-                .use_qwen3(model_path, tokenizer_path)
-                .expect("Failed to load model on CUDA");
+    let inference = cuda();
+    let qwen3 = inference
+        .use_qwen3(model_path, tokenizer_path)
+        .expect("Failed to load model on CUDA");
 
-            // Generate with a simple prompt
-            let prompt = "Hello";
-            let sample_len = 10;
-            let result = qwen3.forward(prompt, sample_len).await;
+    // Generate with a simple prompt
+    let prompt = "Hello";
+    let sample_len = 10;
+    let result = qwen3.forward(prompt, sample_len).await;
 
-            assert!(
-                result.is_ok(),
-                "forward should succeed on CUDA: {:?}",
-                result.err()
-            );
-            let text = result.unwrap();
-            assert!(!text.is_empty(), "generated text should not be empty");
-            println!("Generated on CUDA: {}", text);
-        }
-        Err(_) => {
-            eprintln!("CUDA not available, skipping cuda test");
-        }
-    }
+    assert!(
+        result.is_ok(),
+        "forward should succeed on CUDA: {:?}",
+        result.err()
+    );
+    let text = result.unwrap();
+    assert!(!text.is_empty(), "generated text should not be empty");
+    println!("Generated on CUDA: {}", text);
 }
