@@ -1,16 +1,22 @@
 use crate::{framing, ComError};
 use deli_codec::Codec;
+use futures_core::Stream;
+use futures_sink::Sink;
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::net::{TcpListener, ToSocketAddrs};
+use std::task::{Context, Poll};
 use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::{RwLock, mpsc};
 use tokio::task::JoinHandle;
 
 pub struct Server<T> {
     clients: Arc<RwLock<HashMap<SocketAddr, OwnedWriteHalf>>>,
     rx: mpsc::Receiver<T>,
+    write_fut: Option<Pin<Box<dyn Future<Output = Result<(), ComError>> + Send>>>,
     _accept_task: JoinHandle<()>,
     local_addr: SocketAddr,
 }
@@ -18,8 +24,9 @@ pub struct Server<T> {
 impl<T: Codec + Send + 'static> Server<T> {
     /// Bind a TCP listener and start accepting client connections.
     ///
-    /// Returns a `Server` with a background task that accepts new connections,
-    /// spawns per-client reader tasks, and adds write halves to the client map.
+    /// Returns a `Server` that implements `Stream<Item = Result<T, ComError>>`
+    /// for receiving client messages and `Sink<T, Error = ComError>` for
+    /// broadcasting messages to all connected clients.
     pub async fn bind(addr: impl ToSocketAddrs) -> Result<Self, ComError> {
         let listener = TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
@@ -70,45 +77,10 @@ impl<T: Codec + Send + 'static> Server<T> {
         Ok(Self {
             clients,
             rx,
+            write_fut: None,
             _accept_task: accept_task,
             local_addr,
         })
-    }
-
-    /// Broadcast a message to all connected clients.
-    ///
-    /// Clients that fail to receive (disconnected, error) are removed from the
-    /// client map and logged as warnings. Returns `Ok(())` regardless of individual
-    /// client failures.
-    pub async fn send(&self, value: &T) -> Result<(), ComError> {
-        let mut lock = self.clients.write().await;
-
-        let mut failed_addrs = Vec::new();
-
-        for (addr, writer) in lock.iter_mut() {
-            if let Err(e) = framing::write_message(writer, value).await {
-                log::warn!("Failed to send to {}: {}", addr, e);
-                failed_addrs.push(*addr);
-            }
-        }
-
-        // Remove failed clients
-        for addr in failed_addrs {
-            lock.remove(&addr);
-        }
-
-        Ok(())
-    }
-
-    /// Receive a message from any connected client.
-    ///
-    /// Messages from all clients are multiplexed through an internal channel.
-    /// Each client has a dedicated reader task, so no single client blocks others.
-    ///
-    /// Returns `ComError::ConnectionClosed` if all clients have disconnected
-    /// and the channel is empty.
-    pub async fn recv(&mut self) -> Result<T, ComError> {
-        self.rx.recv().await.ok_or(ComError::ConnectionClosed)
     }
 
     /// Return the number of currently connected clients.
@@ -119,6 +91,84 @@ impl<T: Codec + Send + 'static> Server<T> {
     /// Return the local address the server is bound to.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+}
+
+impl<T: Codec + Send + 'static> Stream for Server<T> {
+    type Item = Result<T, ComError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.rx.poll_recv(cx) {
+            Poll::Ready(Some(value)) => Poll::Ready(Some(Ok(value))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl<T: Codec + Send + Sync + 'static> Sink<T> for Server<T> {
+    type Error = ComError;
+
+    fn poll_ready(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let this = self.get_mut();
+        if let Some(fut) = this.write_fut.as_mut() {
+            match fut.as_mut().poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => {
+                    this.write_fut = None;
+                    result?;
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: T) -> Result<(), Self::Error> {
+        let this = self.get_mut();
+        let clients = this.clients.clone();
+        this.write_fut = Some(Box::pin(async move {
+            let mut lock = clients.write().await;
+            let mut failed = Vec::new();
+            for (addr, writer) in lock.iter_mut() {
+                if let Err(e) = framing::write_message(writer, &item).await {
+                    log::warn!("Failed to send to {}: {}", addr, e);
+                    failed.push(*addr);
+                }
+            }
+            for addr in failed {
+                lock.remove(&addr);
+            }
+            Ok(())
+        }));
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let this = self.get_mut();
+        if let Some(fut) = this.write_fut.as_mut() {
+            match fut.as_mut().poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => {
+                    this.write_fut = None;
+                    result?;
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let this = self.get_mut();
+        if let Some(fut) = this.write_fut.as_mut() {
+            match fut.as_mut().poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => {
+                    this.write_fut = None;
+                    result?;
+                }
+            }
+        }
+        Poll::Ready(Ok(()))
     }
 }
 

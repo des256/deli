@@ -1,9 +1,10 @@
 use deli_com::{Client, Server};
+use futures_util::{SinkExt, StreamExt};
 use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test]
 async fn test_single_sender_single_receiver() {
-    let server = Server::<u32>::bind("127.0.0.1:0")
+    let mut server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -16,19 +17,20 @@ async fn test_single_sender_single_receiver() {
     sleep(Duration::from_millis(50)).await;
 
     // Send a message
-    server.send(&100u32).await.expect("send failed");
+    server.send(100u32).await.expect("send failed");
 
     // Receiver should get it
-    let value = timeout(Duration::from_secs(5), receiver.recv())
+    let value = timeout(Duration::from_secs(5), receiver.next())
         .await
         .expect("recv timed out")
+        .expect("stream ended")
         .expect("recv failed");
     assert_eq!(value, 100);
 }
 
 #[tokio::test]
 async fn test_single_sender_multiple_receivers() {
-    let server = Server::<String>::bind("127.0.0.1:0")
+    let mut server = Server::<String>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -43,17 +45,17 @@ async fn test_single_sender_multiple_receivers() {
 
     // Broadcast a message
     let msg = "Hello, MCSP!".to_string();
-    server.send(&msg).await.expect("send failed");
+    server.send(msg.clone()).await.expect("send failed");
 
     // All three receivers should get the same message
-    assert_eq!(timeout(Duration::from_secs(5), receiver1.recv()).await.unwrap().unwrap(), msg);
-    assert_eq!(timeout(Duration::from_secs(5), receiver2.recv()).await.unwrap().unwrap(), msg);
-    assert_eq!(timeout(Duration::from_secs(5), receiver3.recv()).await.unwrap().unwrap(), msg);
+    assert_eq!(timeout(Duration::from_secs(5), receiver1.next()).await.unwrap().unwrap().unwrap(), msg);
+    assert_eq!(timeout(Duration::from_secs(5), receiver2.next()).await.unwrap().unwrap().unwrap(), msg);
+    assert_eq!(timeout(Duration::from_secs(5), receiver3.next()).await.unwrap().unwrap().unwrap(), msg);
 }
 
 #[tokio::test]
 async fn test_receiver_disconnect_sender_continues() {
-    let server = Server::<u32>::bind("127.0.0.1:0")
+    let mut server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -72,24 +74,24 @@ async fn test_receiver_disconnect_sender_continues() {
     drop(receiver2);
 
     // Send a message - this should detect and remove receiver2
-    server.send(&42u32).await.expect("send failed");
+    server.send(42u32).await.expect("send failed");
 
     // receiver1 and receiver3 should get the message
-    assert_eq!(timeout(Duration::from_secs(5), receiver1.recv()).await.unwrap().unwrap(), 42);
-    assert_eq!(timeout(Duration::from_secs(5), receiver3.recv()).await.unwrap().unwrap(), 42);
+    assert_eq!(timeout(Duration::from_secs(5), receiver1.next()).await.unwrap().unwrap().unwrap(), 42);
+    assert_eq!(timeout(Duration::from_secs(5), receiver3.next()).await.unwrap().unwrap().unwrap(), 42);
 
     // Client count should drop to 2
     assert_eq!(server.client_count().await, 2);
 
     // Send another message to verify server still works
-    server.send(&99u32).await.expect("send failed");
-    assert_eq!(timeout(Duration::from_secs(5), receiver1.recv()).await.unwrap().unwrap(), 99);
-    assert_eq!(timeout(Duration::from_secs(5), receiver3.recv()).await.unwrap().unwrap(), 99);
+    server.send(99u32).await.expect("send failed");
+    assert_eq!(timeout(Duration::from_secs(5), receiver1.next()).await.unwrap().unwrap().unwrap(), 99);
+    assert_eq!(timeout(Duration::from_secs(5), receiver3.next()).await.unwrap().unwrap().unwrap(), 99);
 }
 
 #[tokio::test]
 async fn test_multiple_messages_arrive_in_order() {
-    let server = Server::<u32>::bind("127.0.0.1:0")
+    let mut server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -100,19 +102,19 @@ async fn test_multiple_messages_arrive_in_order() {
     sleep(Duration::from_millis(50)).await;
 
     // Send 5 messages in order
-    for i in 0..5 {
-        server.send(&(i * 10)).await.expect("send failed");
+    for i in 0..5u32 {
+        server.send(i * 10).await.expect("send failed");
     }
 
     // Receiver should get all 5 in the same order
-    for i in 0..5 {
-        assert_eq!(timeout(Duration::from_secs(5), receiver.recv()).await.unwrap().unwrap(), i * 10);
+    for i in 0..5u32 {
+        assert_eq!(timeout(Duration::from_secs(5), receiver.next()).await.unwrap().unwrap().unwrap(), i * 10);
     }
 }
 
 #[tokio::test]
 async fn test_stress_many_receivers() {
-    let server = Server::<u32>::bind("127.0.0.1:0")
+    let mut server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -129,10 +131,10 @@ async fn test_stress_many_receivers() {
     assert_eq!(server.client_count().await, 20);
 
     // Broadcast a message
-    server.send(&999u32).await.expect("send failed");
+    server.send(999u32).await.expect("send failed");
 
     // All 20 receivers should get it
     for receiver in receivers.iter_mut() {
-        assert_eq!(timeout(Duration::from_secs(5), receiver.recv()).await.unwrap().unwrap(), 999);
+        assert_eq!(timeout(Duration::from_secs(5), receiver.next()).await.unwrap().unwrap().unwrap(), 999);
     }
 }

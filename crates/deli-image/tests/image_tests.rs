@@ -1,48 +1,50 @@
 use deli_base::Tensor;
-use deli_image::{DecodedImage, ImageError};
+use deli_image::{Image, ImageError};
 
 #[test]
-fn test_decoded_image_u8_helpers() {
+fn test_image_u8_helpers() {
     let data: Vec<u8> = (0..24).collect();
     let tensor = Tensor::new(vec![2, 3, 4], data).unwrap();
-    let decoded = DecodedImage::U8(tensor);
+    let image = Image::U8(tensor);
 
-    assert_eq!(decoded.shape(), &[2, 3, 4]);
-    assert_eq!(decoded.height(), 2);
-    assert_eq!(decoded.width(), 3);
-    assert_eq!(decoded.channels(), 4);
+    assert_eq!(image.shape(), &[2, 3, 4]);
+    assert_eq!(image.height(), 2);
+    assert_eq!(image.width(), 3);
+    assert_eq!(image.channels(), 4);
 }
 
 #[test]
-fn test_decoded_image_u16_helpers() {
+fn test_image_u16_helpers() {
     let data: Vec<u16> = (0..24).collect();
     let tensor = Tensor::new(vec![2, 3, 4], data).unwrap();
-    let decoded = DecodedImage::U16(tensor);
+    let image = Image::U16(tensor);
 
-    assert_eq!(decoded.shape(), &[2, 3, 4]);
-    assert_eq!(decoded.height(), 2);
-    assert_eq!(decoded.width(), 3);
-    assert_eq!(decoded.channels(), 4);
+    assert_eq!(image.shape(), &[2, 3, 4]);
+    assert_eq!(image.height(), 2);
+    assert_eq!(image.width(), 3);
+    assert_eq!(image.channels(), 4);
 }
 
 #[test]
-fn test_decoded_image_f32_helpers() {
+fn test_image_f32_helpers() {
     let data: Vec<f32> = (0..24).map(|x| x as f32).collect();
     let tensor = Tensor::new(vec![2, 3, 4], data).unwrap();
-    let decoded = DecodedImage::F32(tensor);
+    let image = Image::F32(tensor);
 
-    assert_eq!(decoded.shape(), &[2, 3, 4]);
-    assert_eq!(decoded.height(), 2);
-    assert_eq!(decoded.width(), 3);
-    assert_eq!(decoded.channels(), 4);
+    assert_eq!(image.shape(), &[2, 3, 4]);
+    assert_eq!(image.height(), 2);
+    assert_eq!(image.width(), 3);
+    assert_eq!(image.channels(), 4);
 }
 
 #[test]
 fn test_image_error_from_image_error() {
-    let img_err = image::ImageError::Unsupported(
-        image::error::UnsupportedError::from_format_and_kind(
-            image::error::ImageFormatHint::Unknown,
-            image::error::UnsupportedErrorKind::Format(image::error::ImageFormatHint::Unknown),
+    let img_err = crates_image::ImageError::Unsupported(
+        crates_image::error::UnsupportedError::from_format_and_kind(
+            crates_image::error::ImageFormatHint::Unknown,
+            crates_image::error::UnsupportedErrorKind::Format(
+                crates_image::error::ImageFormatHint::Unknown,
+            ),
         ),
     );
 

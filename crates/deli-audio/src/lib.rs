@@ -11,6 +11,6 @@ pub mod error;
 
 pub use audio_in::AudioIn;
 pub use audio_out::AudioOut;
-pub use audiosample::AudioSample;
-pub use device::{list_devices, AudioDevice};
+pub use audiosample::{AudioData, AudioSample};
+pub use device::{AudioDevice, list_devices};
 pub use error::AudioError;

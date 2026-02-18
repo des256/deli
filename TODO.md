@@ -1,5 +1,3 @@
-- fix kokoro TTS issue, likely something with the tokenization or phonemization (you can hear the correct voice, but what she's saying is gibberish)
-- experiment: tts + audio out
 - some form of VAD, collecting sentences and streaming to ASR
 - experiment: audio in + vad + asr + llm + tts + audio out
 - monitor: add tab pages

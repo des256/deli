@@ -1,6 +1,6 @@
 use deli_base::Tensor;
 use deli_video::CameraError;
-use deli_image::DecodedImage;
+use deli_image::Image;
 
 /// Test the MJPEG decode pipeline in isolation.
 ///
@@ -21,7 +21,7 @@ async fn test_mjpeg_decode_pipeline() {
     let decoded = deli_image::decode_image(&jpeg_buffer).await.unwrap();
 
     let tensor: Tensor<u8> = match decoded {
-        DecodedImage::U8(t) => t,
+        Image::U8(t) => t,
         _ => panic!("Expected U8 variant for JPEG"),
     };
 
@@ -43,7 +43,7 @@ async fn test_mjpeg_decode_grayscale() {
     let decoded = deli_image::decode_image(&jpeg_buffer).await.unwrap();
 
     let tensor: Tensor<u8> = match decoded {
-        DecodedImage::U8(t) => t,
+        Image::U8(t) => t,
         _ => panic!("Expected U8 variant"),
     };
 

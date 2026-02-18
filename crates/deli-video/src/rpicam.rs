@@ -1,6 +1,9 @@
-use crate::{Camera, CameraConfig, CameraError, VideoFrame};
+use crate::{CameraConfig, CameraError, VideoFrame};
 use deli_base::Tensor;
+use futures_core::Stream;
 use rslibcamlitelib::{ExternalCallback, LibCamClient, StreamFormat, StreamParams};
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 
 type VideoFrameResult = Result<VideoFrame, CameraError>;
@@ -37,12 +40,13 @@ impl ExternalCallback for VideoFrameCallback {
 
 /// RPi Camera implementation using rslibcamlite.
 ///
+/// Implements `Stream<Item = Result<VideoFrame, CameraError>>` for async frame capture.
 /// Captures RGB frames from the Raspberry Pi camera using the lowres stream.
 ///
 /// **Note:** The `config.device()` field is ignored. rslibcamlite always uses
 /// the system's default camera.
 ///
-/// **Note:** Camera setup is deferred until the first `recv()` call.
+/// **Note:** Camera setup is deferred until the first poll.
 pub struct RPiCamera {
     config: CameraConfig,
     receiver: Option<mpsc::Receiver<VideoFrameResult>>,
@@ -59,20 +63,24 @@ impl std::fmt::Debug for RPiCamera {
     }
 }
 
-impl Camera for RPiCamera {
-    async fn recv(&mut self) -> Result<VideoFrame, CameraError> {
-        self.ensure_started()?;
+impl Stream for RPiCamera {
+    type Item = Result<VideoFrame, CameraError>;
 
-        let receiver = self
-            .receiver
-            .as_mut()
-            .ok_or_else(|| CameraError::Channel("Receiver not initialized".to_string()))?;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
 
-        receiver.recv().await.ok_or_else(|| {
-            CameraError::Stream(
-                "Capture stopped; recreate RPiCamera to restart".to_string(),
-            )
-        })?
+        // Lazy start: begin capture on first poll
+        if this.receiver.is_none() {
+            if let Err(e) = this.ensure_started() {
+                return Poll::Ready(Some(Err(e)));
+            }
+        }
+
+        match this.receiver.as_mut().unwrap().poll_recv(cx) {
+            Poll::Ready(Some(result)) => Poll::Ready(Some(result)),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -92,7 +100,7 @@ impl Drop for RPiCamera {
 impl RPiCamera {
     /// Create a new RPi Camera with the given configuration.
     ///
-    /// The camera is not opened until the first `recv()` call.
+    /// The camera is not opened until the first poll.
     ///
     /// **Note:** The `config.device()` field is ignored. rslibcamlite always uses
     /// the system's default camera. If the device field is set to a non-default
@@ -113,10 +121,6 @@ impl RPiCamera {
     }
 
     /// Start capture if not already running.
-    ///
-    /// This is called automatically on the first `recv()` call. Creates a
-    /// `LibCamClient`, configures the lowres RGB stream, registers a frame
-    /// callback, and starts capture in a background thread.
     fn ensure_started(&mut self) -> Result<(), CameraError> {
         if self.receiver.is_some() {
             return Ok(());

@@ -14,6 +14,7 @@ path = "src/viewer.rs"
 [dependencies]
 deli-base = { path = "../../crates/deli-base" }
 deli-video = { path = "../../crates/deli-video", features = ["v4l2"] }
+futures-util = { version = "0.3", features = ["sink"] }
 deli-image = { path = "../../crates/deli-image" }
 deli-com = { path = "../../crates/deli-com" }
 deli-codec = { path = "../../crates/deli-codec" }

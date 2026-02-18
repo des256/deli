@@ -1,6 +1,7 @@
 use camera_viewer::Frame;
 use deli_base::log;
 use deli_com::Client;
+use futures_util::StreamExt;
 use minifb::{Key, Window, WindowOptions};
 
 const DEFAULT_ADDR: &str = "127.0.0.1:9920";
@@ -43,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Receive first frame to get dimensions, or use defaults
     log::info!("Waiting for first frame...");
-    let first_frame = receiver.recv().await?;
+    let first_frame = receiver.next().await.unwrap()?;
     let width = first_frame.width() as usize;
     let height = first_frame.height() as usize;
     log::info!("Received first frame: {}x{}", width, height);
@@ -66,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Main loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let frame = receiver.recv().await?;
+        let frame = receiver.next().await.unwrap()?;
 
         let fw = frame.width() as usize;
         let fh = frame.height() as usize;

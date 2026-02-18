@@ -1,5 +1,6 @@
 use deli_com::Server;
 use deli_codec::Codec;
+use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout, Duration};
@@ -26,9 +27,10 @@ async fn test_server_recv_from_client() {
     client.write_all(&payload).await.expect("write payload failed");
 
     // Server should receive it
-    let received = timeout(Duration::from_secs(5), server.recv())
+    let received = timeout(Duration::from_secs(5), server.next())
         .await
         .expect("recv timed out")
+        .expect("stream ended")
         .expect("recv failed");
 
     assert_eq!(received, 42u32);

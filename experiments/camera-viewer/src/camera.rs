@@ -1,8 +1,10 @@
 use camera_viewer::Frame;
 use deli_base::log;
-use deli_video::{Camera, CameraConfig, V4l2Camera, VideoFrame};
+use deli_video::{CameraConfig, V4l2Camera, VideoFrame};
+use futures_util::StreamExt;
 use deli_com::Server;
-use deli_image::DecodedImage;
+use deli_image::Image;
+use futures_util::SinkExt;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:9920";
 
@@ -11,7 +13,7 @@ async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dy
     match frame {
         VideoFrame::Rgb(tensor) => Ok(tensor),
         VideoFrame::Jpeg(data) => match deli_image::decode_image(&data).await? {
-            DecodedImage::U8(tensor) => Ok(tensor),
+            Image::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },
     }
@@ -35,14 +37,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Camera opened: 640x480");
 
     // Bind sender server
-    let sender = Server::<Frame>::bind(&addr).await?;
+    let mut sender = Server::<Frame>::bind(&addr).await?;
     log::info!("Listening on {}", addr);
 
     let mut prev_client_count = 0;
 
     loop {
         // Capture and decode frame
-        let tensor = frame_to_rgb(camera.recv().await?).await?;
+        let tensor = frame_to_rgb(camera.next().await.unwrap()?).await?;
 
         // Extract dimensions from tensor shape [H, W, 3]
         if tensor.shape.len() != 3 || tensor.shape[2] != 3 {
@@ -55,7 +57,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Create Frame and broadcast
         let frame = Frame::new(width, height, tensor.data);
-        sender.send(&frame).await?;
+        sender.send(frame).await?;
 
         // Log client count changes
         let client_count = sender.client_count().await;

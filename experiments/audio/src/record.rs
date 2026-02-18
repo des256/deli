@@ -1,12 +1,12 @@
-use deli_audio::{AudioIn, AudioSample};
+use deli_audio::{AudioData, AudioIn, AudioSample};
 use deli_base::log;
 use futures_util::StreamExt;
 use hound;
 
-const SAMPLE_RATE: u32 = 16000;
-const CHUNK_FRAMES: u32 = 1600;  // 100ms chunks
-const DURATION_SECONDS: u32 = 5;
-const TOTAL_SAMPLES: usize = (SAMPLE_RATE * DURATION_SECONDS) as usize;
+const SAMPLE_RATE: usize = 16000;
+const CHUNK_FRAMES: usize = 1600; // 100ms chunks
+const DURATION_SECONDS: usize = 5;
+const TOTAL_SAMPLES: usize = SAMPLE_RATE * DURATION_SECONDS;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -28,9 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while all_samples.len() < TOTAL_SAMPLES {
         match audio_in.next().await {
-            Some(AudioSample::Pcm(tensor)) => {
-                all_samples.extend(&tensor.data);
-            }
+            Some(AudioSample { data, .. }) => match data {
+                AudioData::Pcm(tensor) => {
+                    all_samples.extend(&tensor.data);
+                }
+            },
             None => {
                 log::warn!("Audio capture ended unexpectedly");
                 break;
@@ -46,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Write to WAV file
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate: SAMPLE_RATE,
+        sample_rate: SAMPLE_RATE as u32,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };

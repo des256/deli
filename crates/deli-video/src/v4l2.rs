@@ -1,4 +1,7 @@
-use crate::{Camera, CameraConfig, CameraError, VideoFrame};
+use crate::{CameraConfig, CameraError, VideoFrame};
+use futures_core::Stream;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::thread::{self, JoinHandle};
 use tokio::sync::mpsc;
 use v4l::buffer::Type;
@@ -10,6 +13,9 @@ use v4l::{Device, Format, FourCC};
 type VideoFrameResult = Result<VideoFrame, CameraError>;
 
 /// V4L2 camera implementation.
+///
+/// Implements `Stream<Item = Result<VideoFrame, CameraError>>` for async frame capture.
+/// Capture starts lazily on the first poll.
 pub struct V4l2Camera {
     config: CameraConfig,
     device: Option<Device>,
@@ -28,22 +34,24 @@ impl std::fmt::Debug for V4l2Camera {
     }
 }
 
-impl Camera for V4l2Camera {
-    async fn recv(&mut self) -> Result<VideoFrame, CameraError> {
-        // Ensure capture thread is running
-        self.ensure_started()?;
+impl Stream for V4l2Camera {
+    type Item = Result<VideoFrame, CameraError>;
 
-        // Receive next frame from channel
-        let receiver = self
-            .receiver
-            .as_mut()
-            .ok_or_else(|| CameraError::Channel("Receiver not initialized".to_string()))?;
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
 
-        receiver.recv().await.ok_or_else(|| {
-            CameraError::Stream(
-                "Capture thread terminated; recreate V4l2Camera to restart".to_string(),
-            )
-        })?
+        // Lazy start: begin capture on first poll
+        if this.receiver.is_none() {
+            if let Err(e) = this.ensure_started() {
+                return Poll::Ready(Some(Err(e)));
+            }
+        }
+
+        match this.receiver.as_mut().unwrap().poll_recv(cx) {
+            Poll::Ready(Some(result)) => Poll::Ready(Some(result)),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -99,8 +107,6 @@ impl V4l2Camera {
     }
 
     /// Start the capture thread if not already running.
-    ///
-    /// This is called automatically on the first `recv()` call.
     fn ensure_started(&mut self) -> Result<(), CameraError> {
         if self.receiver.is_some() {
             return Ok(());

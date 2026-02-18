@@ -1,6 +1,7 @@
 use deli_base::log;
-use deli_video::{Camera, CameraConfig, V4l2Camera, VideoFrame};
-use deli_image::DecodedImage;
+use deli_video::{CameraConfig, V4l2Camera, VideoFrame};
+use deli_image::Image;
+use futures_util::StreamExt;
 use minifb::{Key, Window, WindowOptions};
 
 const WIDTH: usize = 640;
@@ -30,7 +31,7 @@ async fn frame_to_rgb(frame: VideoFrame) -> Result<deli_base::Tensor<u8>, Box<dy
     match frame {
         VideoFrame::Rgb(tensor) => Ok(tensor),
         VideoFrame::Jpeg(data) => match deli_image::decode_image(&data).await? {
-            DecodedImage::U8(tensor) => Ok(tensor),
+            Image::U8(tensor) => Ok(tensor),
             _ => Err("Unexpected pixel format from JPEG decode".into()),
         },
     }
@@ -65,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting main loop...");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        let frame = frame_to_rgb(camera.recv().await?).await?;
+        let frame = frame_to_rgb(camera.next().await.unwrap()?).await?;
 
         if frame.shape.len() != 3 || frame.shape[2] != 3 {
             log::warn!("Expected [H, W, 3] frame shape, got {:?}", frame.shape);

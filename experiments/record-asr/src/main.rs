@@ -1,5 +1,5 @@
-use deli_audio::{AudioIn, AudioSample};
-use deli_base::{log, Tensor};
+use deli_audio::{AudioData, AudioIn, AudioSample};
+use deli_base::{Tensor, log};
 use deli_infer::Inference;
 use futures_util::StreamExt;
 use std::path::PathBuf;
@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinHandle;
 
-const SAMPLE_RATE: u32 = 16000;
-const CHUNK_FRAMES: u32 = 1600;  // 100ms chunks
-const WINDOW_SAMPLES: usize = 48000;  // 3 seconds at 16kHz
-const MIN_PARTIAL_SAMPLES: usize = 8000;  // 0.5 seconds
+const SAMPLE_RATE: usize = 16000;
+const CHUNK_FRAMES: usize = 1600; // 100ms chunks
+const WINDOW_SAMPLES: usize = 48000; // 3 seconds at 16kHz
+const MIN_PARTIAL_SAMPLES: usize = 8000; // 0.5 seconds
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -62,7 +62,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
         Err(_) => {
-            eprintln!("Audio capture timeout. Check that PulseAudio is running and a microphone is connected.");
+            eprintln!(
+                "Audio capture timeout. Check that PulseAudio is running and a microphone is connected."
+            );
             std::process::exit(1);
         }
     }
@@ -70,7 +72,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Wrap recognizer in Arc for sharing with spawned tasks
     let recognizer = Arc::new(recognizer);
     let mut buffer: Vec<i16> = Vec::new();
-    let mut transcription_task: Option<JoinHandle<Result<String, Box<dyn std::error::Error + Send>>>> = None;
+    let mut transcription_task: Option<
+        JoinHandle<Result<String, Box<dyn std::error::Error + Send>>>,
+    > = None;
 
     // Main loop with Ctrl+C handling
     loop {
@@ -78,9 +82,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Receive audio chunks
             chunk = audio_in.next() => {
                 match chunk {
-                    Some(AudioSample::Pcm(tensor)) => {
-                        buffer.extend(&tensor.data);
-                    }
+                    Some(AudioSample { data, .. }) => match data {
+                        AudioData::Pcm(tensor) => {
+                            buffer.extend(&tensor.data);
+                        }
+                        _ => {
+                            log::warn!("Unsupported audio data format");
+                            break;
+                        }
+                    },
                     None => {
                         log::info!("Audio capture ended");
                         break;
@@ -119,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let start = Instant::now();
                         let tensor = Tensor::new(vec![samples.len()], samples)
                             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)?;
-                        let result = recognizer_clone.transcribe(&tensor, SAMPLE_RATE).await;
+                        let result = recognizer_clone.transcribe(&tensor, SAMPLE_RATE as u32).await;
                         let elapsed = start.elapsed();
                         log::debug!("Transcription took {:?}", elapsed);
                         result.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send>)
@@ -153,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if buffer.len() >= MIN_PARTIAL_SAMPLES {
                     log::info!("Transcribing partial buffer before shutdown...");
                     let tensor = Tensor::new(vec![buffer.len()], buffer)?;
-                    match recognizer.transcribe(&tensor, SAMPLE_RATE).await {
+                    match recognizer.transcribe(&tensor, SAMPLE_RATE as u32).await {
                         Ok(text) => {
                             let text = text.trim();
                             if !text.is_empty() {

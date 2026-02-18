@@ -1,4 +1,5 @@
-use crate::{AudioError, AudioSample};
+use crate::AudioError;
+use crate::audiosample::{AudioData, AudioSample};
 use futures_sink::Sink;
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
@@ -20,7 +21,7 @@ use tokio::sync::mpsc;
 /// # Examples
 ///
 /// ```no_run
-/// use deli_audio::{AudioOut, AudioSample};
+/// use deli_audio::{AudioOut, AudioData, AudioSample};
 /// use deli_base::Tensor;
 /// use futures_util::SinkExt;
 ///
@@ -29,11 +30,14 @@ use tokio::sync::mpsc;
 ///
 ///     let samples = vec![0i16; 4800]; // 100ms of silence at 48kHz
 ///     let tensor = Tensor::new(vec![4800], samples).unwrap();
-///     audio_out.send(AudioSample::Pcm(tensor)).await.unwrap();
+///     audio_out.send(AudioSample {
+///         data: AudioData::Pcm(tensor),
+///         sample_rate: 48000,
+///     }).await.unwrap();
 /// }
 /// ```
 pub struct AudioOut {
-    sample_rate: u32,
+    sample_rate: usize,
     device: Option<String>,
     sender: Option<mpsc::Sender<Vec<i16>>>,
     task_handle: Option<tokio::task::JoinHandle<()>>,
@@ -63,7 +67,7 @@ impl AudioOut {
     ///
     /// Panics if called outside a tokio runtime context. All callers must be within a tokio runtime.
     /// Panics if `sample_rate` is 0.
-    pub fn new(device: Option<&str>, sample_rate: u32) -> Self {
+    pub fn new(device: Option<&str>, sample_rate: usize) -> Self {
         assert!(sample_rate > 0, "sample_rate must be greater than 0");
         let device_string = device.map(|s| s.to_string());
         let (sender, task_handle) = Self::start_playback(device_string.clone(), sample_rate);
@@ -78,7 +82,7 @@ impl AudioOut {
     }
 
     /// Get the sample rate.
-    pub fn sample_rate(&self) -> u32 {
+    pub fn sample_rate(&self) -> usize {
         self.sample_rate
     }
 
@@ -159,7 +163,7 @@ impl AudioOut {
     /// Start a new playback task.
     fn start_playback(
         device: Option<String>,
-        sample_rate: u32,
+        sample_rate: usize,
     ) -> (mpsc::Sender<Vec<i16>>, tokio::task::JoinHandle<()>) {
         let (tx, rx) = mpsc::channel(4);
 
@@ -171,15 +175,11 @@ impl AudioOut {
     }
 
     /// Background task playback loop.
-    fn playback_loop(
-        device: Option<String>,
-        sample_rate: u32,
-        mut rx: mpsc::Receiver<Vec<i16>>,
-    ) {
+    fn playback_loop(device: Option<String>, sample_rate: usize, mut rx: mpsc::Receiver<Vec<i16>>) {
         let spec = Spec {
             format: Format::S16NE,
             channels: 1,
-            rate: sample_rate,
+            rate: sample_rate as u32,
         };
 
         if !spec.is_valid() {
@@ -232,8 +232,7 @@ impl AudioOut {
             loop {
                 match rx.blocking_recv() {
                     Some(samples) => {
-                        let bytes: Vec<u8> =
-                            samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+                        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
 
                         if let Err(e) = simple.write(&bytes) {
                             log::warn!("PulseAudio write error: {}", e);
@@ -261,16 +260,17 @@ impl Sink<AudioSample> for AudioOut {
 
     fn start_send(self: Pin<&mut Self>, item: AudioSample) -> Result<(), Self::Error> {
         let this = self.get_mut();
-        let sender = this.sender.clone().ok_or_else(|| {
-            AudioError::Channel("Sender not initialized".to_string())
-        })?;
+        let sender = this
+            .sender
+            .clone()
+            .ok_or_else(|| AudioError::Channel("Sender not initialized".to_string()))?;
 
-        let AudioSample::Pcm(tensor) = item;
+        let AudioData::Pcm(tensor) = item.data;
         let data = tensor.data;
 
-        this.inflight = Some(Box::pin(async move {
-            sender.send(data).await.map_err(|_| ())
-        }));
+        this.inflight = Some(Box::pin(
+            async move { sender.send(data).await.map_err(|_| ()) },
+        ));
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 use deli_com::{Client, Server};
+use futures_util::{SinkExt, StreamExt};
 use tokio::time::{sleep, timeout, Duration};
 
 #[tokio::test]
@@ -18,12 +19,13 @@ async fn test_client_send_to_server() {
     sleep(Duration::from_millis(50)).await; // Allow accept loop to process
 
     // Client sends a message
-    client.send(&42u32).await.expect("send failed");
+    client.send(42u32).await.expect("send failed");
 
     // Server should receive it
-    let received = timeout(Duration::from_secs(5), server.recv())
+    let received = timeout(Duration::from_secs(5), server.next())
         .await
         .expect("recv timed out")
+        .expect("stream ended")
         .expect("recv failed");
 
     assert_eq!(received, 42u32);

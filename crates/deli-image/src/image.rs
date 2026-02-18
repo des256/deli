@@ -1,18 +1,18 @@
 use deli_base::Tensor;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum DecodedImage {
+pub enum Image {
     U8(Tensor<u8>),
     U16(Tensor<u16>),
     F32(Tensor<f32>),
 }
 
-impl DecodedImage {
+impl Image {
     pub fn shape(&self) -> &[usize] {
         match self {
-            DecodedImage::U8(t) => &t.shape,
-            DecodedImage::U16(t) => &t.shape,
-            DecodedImage::F32(t) => &t.shape,
+            Image::U8(t) => &t.shape,
+            Image::U16(t) => &t.shape,
+            Image::F32(t) => &t.shape,
         }
     }
 

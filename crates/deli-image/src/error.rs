@@ -19,8 +19,8 @@ impl fmt::Display for ImageError {
 
 impl std::error::Error for ImageError {}
 
-impl From<image::ImageError> for ImageError {
-    fn from(err: image::ImageError) -> Self {
+impl From<crates_image::ImageError> for ImageError {
+    fn from(err: crates_image::ImageError) -> Self {
         ImageError::Decode(err.to_string())
     }
 }

@@ -5,7 +5,14 @@ edition = "2024"
 
 [dependencies]
 deli-base = { path = "../deli-base" }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "bmp", "tiff", "webp"] }
+crates_image = { package = "image", version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "gif",
+    "bmp",
+    "tiff",
+    "webp",
+] }
 tokio = { version = "1", features = ["rt"] }
 
 [dev-dependencies]

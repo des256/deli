@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 deli-video = { path = "../../crates/deli-video", features = ["v4l2"] }
+futures-util = "0.3"
 deli-image = { path = "../../crates/deli-image" }
 deli-base = { path = "../../crates/deli-base" }
 minifb = "0.27"

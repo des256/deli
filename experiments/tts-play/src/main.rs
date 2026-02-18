@@ -1,4 +1,4 @@
-use deli_audio::{AudioOut, AudioSample};
+use deli_audio::{AudioData, AudioOut, AudioSample};
 use deli_base::log;
 use deli_infer::Inference;
 use futures_util::SinkExt;
@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 const SENTENCE: &str = "To be, or not to be, equals, minus one.";
-const SAMPLE_RATE: u32 = 24000;
+const SAMPLE_RATE: usize = 24000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,7 +40,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut audio_out = AudioOut::new(None, SAMPLE_RATE);
     let num_samples = tensor.data.len();
     log::info!("Sending {} samples to AudioOut", num_samples);
-    audio_out.send(AudioSample::Pcm(tensor)).await?;
+    audio_out
+        .send(AudioSample {
+            data: AudioData::Pcm(tensor),
+            sample_rate: SAMPLE_RATE,
+        })
+        .await?;
 
     // Wait for playback to complete (AudioOut doesn't flush on drop)
     let duration_secs = num_samples as f64 / SAMPLE_RATE as f64;

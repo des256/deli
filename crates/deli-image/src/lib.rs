@@ -6,68 +6,112 @@
 //! All decoded images use HWC layout: `[height, width, channels]`.
 
 pub mod error;
-pub mod types;
+pub mod image;
 
 pub use error::ImageError;
-pub use types::DecodedImage;
+pub use image::Image;
 
+use crates_image::{DynamicImage, ImageEncoder};
 use deli_base::Tensor;
-use image::{DynamicImage, ImageEncoder};
 
-fn to_tensor<T>(width: u32, height: u32, channels: usize, data: Vec<T>) -> Result<Tensor<T>, ImageError> {
+fn to_tensor<T>(
+    width: u32,
+    height: u32,
+    channels: usize,
+    data: Vec<T>,
+) -> Result<Tensor<T>, ImageError> {
     let shape = vec![height as usize, width as usize, channels];
     Ok(Tensor::new(shape, data)?)
 }
 
-fn decode_image_inner(data: &[u8]) -> Result<DecodedImage, ImageError> {
-    let img = image::load_from_memory(data)?;
+fn decode_image_inner(data: &[u8]) -> Result<Image, ImageError> {
+    let img = crates_image::load_from_memory(data)?;
 
     match img {
-        DynamicImage::ImageLuma8(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U8(to_tensor(w, h, 1, buf.into_raw())?)) }
-        DynamicImage::ImageLumaA8(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U8(to_tensor(w, h, 2, buf.into_raw())?)) }
-        DynamicImage::ImageRgb8(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U8(to_tensor(w, h, 3, buf.into_raw())?)) }
-        DynamicImage::ImageRgba8(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U8(to_tensor(w, h, 4, buf.into_raw())?)) }
-        DynamicImage::ImageLuma16(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U16(to_tensor(w, h, 1, buf.into_raw())?)) }
-        DynamicImage::ImageLumaA16(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U16(to_tensor(w, h, 2, buf.into_raw())?)) }
-        DynamicImage::ImageRgb16(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U16(to_tensor(w, h, 3, buf.into_raw())?)) }
-        DynamicImage::ImageRgba16(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::U16(to_tensor(w, h, 4, buf.into_raw())?)) }
-        DynamicImage::ImageRgb32F(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::F32(to_tensor(w, h, 3, buf.into_raw())?)) }
-        DynamicImage::ImageRgba32F(buf) => { let (w, h) = buf.dimensions(); Ok(DecodedImage::F32(to_tensor(w, h, 4, buf.into_raw())?)) }
+        DynamicImage::ImageLuma8(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U8(to_tensor(w, h, 1, buf.into_raw())?))
+        }
+        DynamicImage::ImageLumaA8(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U8(to_tensor(w, h, 2, buf.into_raw())?))
+        }
+        DynamicImage::ImageRgb8(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U8(to_tensor(w, h, 3, buf.into_raw())?))
+        }
+        DynamicImage::ImageRgba8(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U8(to_tensor(w, h, 4, buf.into_raw())?))
+        }
+        DynamicImage::ImageLuma16(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U16(to_tensor(w, h, 1, buf.into_raw())?))
+        }
+        DynamicImage::ImageLumaA16(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U16(to_tensor(w, h, 2, buf.into_raw())?))
+        }
+        DynamicImage::ImageRgb16(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U16(to_tensor(w, h, 3, buf.into_raw())?))
+        }
+        DynamicImage::ImageRgba16(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::U16(to_tensor(w, h, 4, buf.into_raw())?))
+        }
+        DynamicImage::ImageRgb32F(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::F32(to_tensor(w, h, 3, buf.into_raw())?))
+        }
+        DynamicImage::ImageRgba32F(buf) => {
+            let (w, h) = buf.dimensions();
+            Ok(Image::F32(to_tensor(w, h, 4, buf.into_raw())?))
+        }
         _ => {
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
-            Ok(DecodedImage::U8(to_tensor(w, h, 4, rgba.into_raw())?))
+            Ok(Image::U8(to_tensor(w, h, 4, rgba.into_raw())?))
         }
     }
 }
 
-fn encode_jpeg_inner(image: &DecodedImage, quality: u8) -> Result<Vec<u8>, ImageError> {
+fn encode_jpeg_inner(image: &Image, quality: u8) -> Result<Vec<u8>, ImageError> {
     let (width, height) = (image.width() as u32, image.height() as u32);
     let channels = image.channels();
 
     let u8_data: Vec<u8> = match image {
-        DecodedImage::U8(t) => t.data.clone(),
-        DecodedImage::U16(t) => t.data.iter().map(|&v| (v >> 8) as u8).collect(),
-        DecodedImage::F32(t) => t.data.iter().map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8).collect(),
+        Image::U8(t) => t.data.clone(),
+        Image::U16(t) => t.data.iter().map(|&v| (v >> 8) as u8).collect(),
+        Image::F32(t) => t
+            .data
+            .iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0) as u8)
+            .collect(),
     };
 
     let (jpeg_data, color_type) = match channels {
-        1 => (u8_data, image::ExtendedColorType::L8),
+        1 => (u8_data, crates_image::ExtendedColorType::L8),
         2 => {
             let stripped: Vec<u8> = u8_data.chunks(2).map(|c| c[0]).collect();
-            (stripped, image::ExtendedColorType::L8)
+            (stripped, crates_image::ExtendedColorType::L8)
         }
-        3 => (u8_data, image::ExtendedColorType::Rgb8),
+        3 => (u8_data, crates_image::ExtendedColorType::Rgb8),
         4 => {
             let stripped: Vec<u8> = u8_data.chunks(4).flat_map(|c| &c[..3]).copied().collect();
-            (stripped, image::ExtendedColorType::Rgb8)
+            (stripped, crates_image::ExtendedColorType::Rgb8)
         }
-        _ => return Err(ImageError::Encode(format!("unsupported channel count: {channels}"))),
+        _ => {
+            return Err(ImageError::Encode(format!(
+                "unsupported channel count: {channels}"
+            )));
+        }
     };
 
     let mut buffer = Vec::new();
-    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, quality);
-    encoder.write_image(&jpeg_data, width, height, color_type)
+    let encoder = crates_image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buffer, quality);
+    encoder
+        .write_image(&jpeg_data, width, height, color_type)
         .map_err(|e| ImageError::Encode(e.to_string()))?;
 
     Ok(buffer)
@@ -76,7 +120,7 @@ fn encode_jpeg_inner(image: &DecodedImage, quality: u8) -> Result<Vec<u8>, Image
 /// Decodes an image from raw bytes into a typed tensor.
 ///
 /// The image format is auto-detected by the `image` crate. Returns a
-/// `DecodedImage` enum that preserves the original pixel precision (u8, u16, or f32).
+/// `Image` enum that preserves the original pixel precision (u8, u16, or f32).
 ///
 /// All tensors use HWC layout: `[height, width, channels]`.
 ///
@@ -86,14 +130,14 @@ fn encode_jpeg_inner(image: &DecodedImage, quality: u8) -> Result<Vec<u8>, Image
 ///
 /// Returns `ImageError::Decode` if the data is invalid or the format is unsupported.
 /// Returns `ImageError::Tensor` if tensor construction fails.
-pub async fn decode_image(data: &[u8]) -> Result<DecodedImage, ImageError> {
+pub async fn decode_image(data: &[u8]) -> Result<Image, ImageError> {
     let owned = data.to_vec();
     tokio::task::spawn_blocking(move || decode_image_inner(&owned))
         .await
         .map_err(|e| ImageError::Decode(e.to_string()))?
 }
 
-/// Encodes a `DecodedImage` as JPEG bytes.
+/// Encodes a `Image` as JPEG bytes.
 ///
 /// The `quality` parameter controls JPEG compression (1–100, higher = better quality).
 ///
@@ -106,7 +150,7 @@ pub async fn decode_image(data: &[u8]) -> Result<DecodedImage, ImageError> {
 /// # Errors
 ///
 /// Returns `ImageError::Encode` if the channel count is unsupported or encoding fails.
-pub async fn encode_jpeg(image: DecodedImage, quality: u8) -> Result<Vec<u8>, ImageError> {
+pub async fn encode_jpeg(image: Image, quality: u8) -> Result<Vec<u8>, ImageError> {
     tokio::task::spawn_blocking(move || encode_jpeg_inner(&image, quality))
         .await
         .map_err(|e| ImageError::Encode(e.to_string()))?

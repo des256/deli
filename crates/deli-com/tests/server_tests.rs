@@ -1,4 +1,5 @@
 use deli_com::Server;
+use futures_util::SinkExt;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::time::{sleep, timeout, Duration};
@@ -36,7 +37,7 @@ async fn test_accept_loop_adds_clients() {
 
 #[tokio::test]
 async fn test_send_broadcasts_to_clients() {
-    let server = Server::<u32>::bind("127.0.0.1:0")
+    let mut server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -48,7 +49,7 @@ async fn test_send_broadcasts_to_clients() {
     sleep(Duration::from_millis(50)).await;
 
     // Broadcast a message
-    server.send(&42u32).await.expect("send failed");
+    server.send(42u32).await.expect("send failed");
 
     // Both clients should receive it
     let mut buf1 = vec![0u8; 8]; // 4-byte length + 4-byte u32
@@ -72,7 +73,7 @@ async fn test_send_broadcasts_to_clients() {
 
 #[tokio::test]
 async fn test_disconnected_client_removed_during_send() {
-    let server = Server::<u32>::bind("127.0.0.1:0")
+    let mut server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -90,7 +91,7 @@ async fn test_disconnected_client_removed_during_send() {
     sleep(Duration::from_millis(50)).await;
 
     // Send a message - this should trigger removal of client2
-    server.send(&99u32).await.expect("send failed");
+    server.send(99u32).await.expect("send failed");
 
     // Client count should drop to 1
     assert_eq!(server.client_count().await, 1);
@@ -98,7 +99,7 @@ async fn test_disconnected_client_removed_during_send() {
 
 #[tokio::test]
 async fn test_send_continues_after_client_disconnect() {
-    let server = Server::<u32>::bind("127.0.0.1:0")
+    let mut server = Server::<u32>::bind("127.0.0.1:0")
         .await
         .expect("bind failed");
 
@@ -114,7 +115,7 @@ async fn test_send_continues_after_client_disconnect() {
     drop(client2);
 
     // Send should succeed and deliver to remaining clients
-    server.send(&123u32).await.expect("send failed");
+    server.send(123u32).await.expect("send failed");
 
     // client1 and client3 should receive the message
     let mut buf1 = vec![0u8; 8];

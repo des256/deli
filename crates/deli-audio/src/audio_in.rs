@@ -1,4 +1,4 @@
-use crate::AudioSample;
+use crate::audiosample::{AudioData, AudioSample};
 use deli_base::Tensor;
 use futures_core::Stream;
 use libpulse_binding::def::BufferAttr;
@@ -37,8 +37,8 @@ struct CaptureState {
 /// }
 /// ```
 pub struct AudioIn {
-    sample_rate: u32,
-    chunk_frames: u32,
+    sample_rate: usize,
+    chunk_frames: usize,
     device: Option<String>,
     receiver: Option<mpsc::Receiver<Vec<i16>>>,
     task_handle: Option<tokio::task::JoinHandle<()>>,
@@ -68,7 +68,7 @@ impl AudioIn {
     /// * `device` - PulseAudio source name (from `AudioDevice::name`), or `None` for default device
     /// * `sample_rate` - Sample rate in Hz (e.g., 48000, 44100)
     /// * `chunk_frames` - Number of frames per audio chunk (e.g., 4800 for 100ms at 48kHz)
-    pub fn new(device: Option<&str>, sample_rate: u32, chunk_frames: u32) -> Self {
+    pub fn new(device: Option<&str>, sample_rate: usize, chunk_frames: usize) -> Self {
         assert!(chunk_frames > 0, "chunk_frames must be greater than 0");
 
         Self {
@@ -84,12 +84,12 @@ impl AudioIn {
     }
 
     /// Get the sample rate.
-    pub fn sample_rate(&self) -> u32 {
+    pub fn sample_rate(&self) -> usize {
         self.sample_rate
     }
 
     /// Get the chunk size in frames.
-    pub fn chunk_frames(&self) -> u32 {
+    pub fn chunk_frames(&self) -> usize {
         self.chunk_frames
     }
 
@@ -121,8 +121,8 @@ impl AudioIn {
     /// Returns the receiver and task handle.
     fn start_capture(
         device: Option<String>,
-        sample_rate: u32,
-        chunk_frames: u32,
+        sample_rate: usize,
+        chunk_frames: usize,
         shared: Arc<Mutex<CaptureState>>,
     ) -> (mpsc::Receiver<Vec<i16>>, tokio::task::JoinHandle<()>) {
         let (tx, rx) = mpsc::channel(128);
@@ -141,15 +141,15 @@ impl AudioIn {
     /// Checks for pending device changes between chunks and reconnects as needed.
     fn capture_loop(
         initial_device: Option<String>,
-        sample_rate: u32,
-        chunk_frames: u32,
+        sample_rate: usize,
+        chunk_frames: usize,
         tx: mpsc::Sender<Vec<i16>>,
         shared: Arc<Mutex<CaptureState>>,
     ) {
         let spec = Spec {
             format: Format::S16NE,
             channels: 1,
-            rate: sample_rate,
+            rate: sample_rate as u32,
         };
 
         if !spec.is_valid() {
@@ -188,14 +188,14 @@ impl AudioIn {
 
             // Create PulseAudio Simple stream
             let simple = match Simple::new(
-                None,                              // Use default server
-                "deli-audio",                      // Application name
-                Direction::Record,                 // Recording direction
-                current_device.as_deref(),         // Device name
-                "audio-capture",                   // Stream description
-                &spec,                             // Sample format
-                None,                              // Default channel map
-                Some(&buffer_attr),                // Buffer attributes
+                None,                      // Use default server
+                "deli-audio",              // Application name
+                Direction::Record,         // Recording direction
+                current_device.as_deref(), // Device name
+                "audio-capture",           // Stream description
+                &spec,                     // Sample format
+                None,                      // Default channel map
+                Some(&buffer_attr),        // Buffer attributes
             ) {
                 Ok(s) => s,
                 Err(e) => {
@@ -276,7 +276,10 @@ impl Stream for AudioIn {
                 let len = samples.len();
                 // Shape always matches data length, so unwrap is safe
                 let tensor = Tensor::new(vec![len], samples).unwrap();
-                Poll::Ready(Some(AudioSample::Pcm(tensor)))
+                Poll::Ready(Some(AudioSample {
+                    data: AudioData::Pcm(tensor),
+                    sample_rate: this.sample_rate as usize,
+                }))
             }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,

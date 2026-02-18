@@ -328,6 +328,7 @@ dependencies = [
  "deli-base",
  "deli-image",
  "deli-video",
+ "futures-util",
  "minifb",
  "tokio",
 ]
@@ -341,6 +342,7 @@ dependencies = [
  "deli-com",
  "deli-image",
  "deli-video",
+ "futures-util",
  "minifb",
  "tokio",
 ]
@@ -776,6 +778,8 @@ name = "deli-com"
 version = "0.1.0"
 dependencies = [
  "deli-codec",
+ "futures-core",
+ "futures-sink",
  "futures-util",
  "http",
  "log",
@@ -816,6 +820,7 @@ version = "0.1.0"
 dependencies = [
  "deli-base",
  "deli-image",
+ "futures-core",
  "image",
  "log",
  "rslibcamlite",
@@ -2947,6 +2952,7 @@ dependencies = [
  "deli-com",
  "deli-image",
  "deli-video",
+ "futures-util",
  "tokio",
 ]
 

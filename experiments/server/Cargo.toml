@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 deli-base = { path = "../../crates/deli-base" }
 deli-video = { path = "../../crates/deli-video", features = ["rpicam"] }
+futures-util = { version = "0.3", features = ["sink"] }
 deli-com = { path = "../../crates/deli-com" }
 deli-image = { path = "../../crates/deli-image" }
 deli-codec = { path = "../../crates/deli-codec" }
