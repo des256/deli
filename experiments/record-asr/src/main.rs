@@ -1,6 +1,7 @@
-use deli_audio::AudioIn;
+use deli_audio::{AudioIn, AudioSample};
 use deli_base::{log, Tensor};
 use deli_infer::Inference;
+use futures_util::StreamExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -50,13 +51,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut audio_in = AudioIn::new(None, SAMPLE_RATE, CHUNK_FRAMES);
 
     // Verify audio capture with timeout
-    match tokio::time::timeout(std::time::Duration::from_secs(5), audio_in.recv()).await {
-        Ok(Ok(_)) => {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), audio_in.next()).await {
+        Ok(Some(_)) => {
             // First chunk received successfully, discard it
             log::info!("Audio capture started");
         }
-        Ok(Err(e)) => {
-            eprintln!("Audio capture failed: {}", e);
+        Ok(None) => {
+            eprintln!("Audio capture ended unexpectedly.");
             eprintln!("Check that PulseAudio is running and a microphone is connected.");
             std::process::exit(1);
         }
@@ -75,9 +76,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             // Receive audio chunks
-            chunk_result = audio_in.recv() => {
-                let chunk = chunk_result?;
-                buffer.extend(chunk);
+            chunk = audio_in.next() => {
+                match chunk {
+                    Some(AudioSample::Pcm(tensor)) => {
+                        buffer.extend(&tensor.data);
+                    }
+                    None => {
+                        log::info!("Audio capture ended");
+                        break;
+                    }
+                }
 
                 // Check if previous transcription completed (non-blocking)
                 if let Some(ref task) = transcription_task {

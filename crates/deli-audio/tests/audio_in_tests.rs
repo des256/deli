@@ -1,4 +1,5 @@
 use deli_audio::AudioIn;
+use futures_core::Stream;
 
 #[tokio::test]
 async fn test_audio_in_construction() {
@@ -17,12 +18,9 @@ async fn test_audio_in_construction() {
 }
 
 #[tokio::test]
-async fn test_audio_in_recv_signature() {
-    // Verify recv() is async and returns Result<Vec<i16>, AudioError>
-    fn assert_recv_type(_: impl std::future::Future<Output = Result<Vec<i16>, deli_audio::AudioError>>) {}
-
-    let mut audio_in = AudioIn::new(None, 48000, 4800);
-    assert_recv_type(audio_in.recv());
+async fn test_audio_in_implements_stream() {
+    fn assert_stream<T: Stream<Item = deli_audio::AudioSample>>() {}
+    assert_stream::<AudioIn>();
 }
 
 #[tokio::test]

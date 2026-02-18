@@ -105,6 +105,7 @@ version = "0.1.0"
 dependencies = [
  "deli-audio",
  "deli-base",
+ "futures-util",
  "hound",
  "tokio",
 ]
@@ -738,6 +739,9 @@ dependencies = [
 name = "deli-audio"
 version = "0.1.0"
 dependencies = [
+ "deli-base",
+ "futures-core",
+ "futures-util",
  "libpulse-binding",
  "libpulse-simple-binding",
  "log",
@@ -2649,6 +2653,7 @@ dependencies = [
  "deli-audio",
  "deli-base",
  "deli-infer",
+ "futures-util",
  "tokio",
 ]
 

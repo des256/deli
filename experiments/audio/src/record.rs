@@ -1,5 +1,6 @@
-use deli_audio::AudioIn;
+use deli_audio::{AudioIn, AudioSample};
 use deli_base::log;
+use futures_util::StreamExt;
 use hound;
 
 const SAMPLE_RATE: u32 = 16000;
@@ -26,8 +27,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut all_samples: Vec<i16> = Vec::with_capacity(TOTAL_SAMPLES);
 
     while all_samples.len() < TOTAL_SAMPLES {
-        let chunk = audio_in.recv().await?;
-        all_samples.extend(chunk);
+        match audio_in.next().await {
+            Some(AudioSample::Pcm(tensor)) => {
+                all_samples.extend(&tensor.data);
+            }
+            None => {
+                log::warn!("Audio capture ended unexpectedly");
+                break;
+            }
+        }
     }
 
     // Truncate to exactly 80000 samples

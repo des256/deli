@@ -1,9 +1,13 @@
-use crate::AudioError;
+use crate::AudioSample;
+use deli_base::Tensor;
+use futures_core::Stream;
 use libpulse_binding::def::BufferAttr;
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
 use libpulse_simple_binding::Simple;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use tokio::sync::mpsc;
 
 /// Shared state between `AudioIn` and the capture loop, used to signal device changes.
@@ -15,26 +19,20 @@ struct CaptureState {
 /// Audio input capture using PulseAudio.
 ///
 /// Captures mono S16NE audio from the selected input device via a background tokio blocking task.
-/// Capture starts lazily on the first `recv()` call, avoiding dropped chunks before the consumer
-/// is ready.
+/// Implements `Stream<Item = AudioSample>` for async iteration. Capture starts lazily on the
+/// first poll, avoiding dropped chunks before the consumer is ready.
 ///
 /// # Examples
 ///
 /// ```no_run
 /// use deli_audio::AudioIn;
+/// use futures_util::StreamExt;
 ///
 /// async fn example() {
-///     // Create AudioIn with default device, 48kHz sample rate, 4800 frames per chunk (100ms)
 ///     let mut audio_in = AudioIn::new(None, 48000, 4800);
 ///
-///     loop {
-///         match audio_in.recv().await {
-///             Ok(samples) => println!("Received {} samples", samples.len()),
-///             Err(e) => {
-///                 eprintln!("Error: {}", e);
-///                 break;
-///             }
-///         }
+///     while let Some(sample) = audio_in.next().await {
+///         println!("Received audio sample");
 ///     }
 /// }
 /// ```
@@ -62,7 +60,7 @@ impl std::fmt::Debug for AudioIn {
 impl AudioIn {
     /// Create a new AudioIn instance.
     ///
-    /// Capture does not start until the first `recv()` call (lazy initialization).
+    /// Capture does not start until the stream is first polled (lazy initialization).
     /// This avoids dropping audio chunks before the consumer is ready to receive them.
     ///
     /// # Arguments
@@ -70,22 +68,6 @@ impl AudioIn {
     /// * `device` - PulseAudio source name (from `AudioDevice::name`), or `None` for default device
     /// * `sample_rate` - Sample rate in Hz (e.g., 48000, 44100)
     /// * `chunk_frames` - Number of frames per audio chunk (e.g., 4800 for 100ms at 48kHz)
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use deli_audio::AudioIn;
-    ///
-    /// // Use default input device at 48kHz with 100ms chunks
-    /// let audio_in = AudioIn::new(None, 48000, 4800);
-    ///
-    /// // Use specific device at 44.1kHz with 100ms chunks
-    /// let audio_in_device = AudioIn::new(
-    ///     Some("alsa_input.pci-0000_00_1f.3.analog-stereo"),
-    ///     44100,
-    ///     4410
-    /// );
-    /// ```
     pub fn new(device: Option<&str>, sample_rate: u32, chunk_frames: u32) -> Self {
         assert!(chunk_frames > 0, "chunk_frames must be greater than 0");
 
@@ -99,34 +81,6 @@ impl AudioIn {
                 pending_device: None,
             })),
         }
-    }
-
-    /// Receive the next audio chunk.
-    ///
-    /// On the first call, this starts the PulseAudio capture task. Subsequent calls return
-    /// chunks as they become available.
-    ///
-    /// Returns a `Vec<i16>` containing mono S16NE samples.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AudioError::Stream` if the capture task has terminated.
-    pub async fn recv(&mut self) -> Result<Vec<i16>, AudioError> {
-        // Lazy start: begin capture on first recv()
-        if self.receiver.is_none() {
-            let (receiver, task_handle) = Self::start_capture(
-                self.device.clone(),
-                self.sample_rate,
-                self.chunk_frames,
-                Arc::clone(&self.shared),
-            );
-            self.receiver = Some(receiver);
-            self.task_handle = Some(task_handle);
-        }
-
-        self.receiver.as_mut().unwrap().recv().await.ok_or_else(|| {
-            AudioError::Stream("capture task terminated".to_string())
-        })
     }
 
     /// Get the sample rate.
@@ -147,23 +101,12 @@ impl AudioIn {
     /// Select a different audio input device.
     ///
     /// If capture is already running, the switch happens within one chunk duration (~100ms)
-    /// without interrupting `recv()`. If capture hasn't started yet (no `recv()` call),
+    /// without interrupting the stream. If capture hasn't started yet (stream not polled),
     /// the new device will be used when capture begins.
     ///
     /// # Arguments
     ///
     /// * `device` - PulseAudio source name (from `AudioDevice::name`)
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// use deli_audio::AudioIn;
-    ///
-    /// async fn example() {
-    ///     let mut audio_in = AudioIn::new(None, 48000, 4800);
-    ///     audio_in.select("alsa_input.pci-0000_00_1f.3.analog-stereo");
-    /// }
-    /// ```
     pub fn select(&mut self, device: &str) {
         self.device = Some(device.to_string());
 
@@ -306,6 +249,37 @@ impl AudioIn {
             // Simple is dropped here (stream closed)
             // Sleep before reconnecting
             std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+impl Stream for AudioIn {
+    type Item = AudioSample;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        // Lazy start: begin capture on first poll
+        if this.receiver.is_none() {
+            let (receiver, task_handle) = Self::start_capture(
+                this.device.clone(),
+                this.sample_rate,
+                this.chunk_frames,
+                Arc::clone(&this.shared),
+            );
+            this.receiver = Some(receiver);
+            this.task_handle = Some(task_handle);
+        }
+
+        match this.receiver.as_mut().unwrap().poll_recv(cx) {
+            Poll::Ready(Some(samples)) => {
+                let len = samples.len();
+                // Shape always matches data length, so unwrap is safe
+                let tensor = Tensor::new(vec![len], samples).unwrap();
+                Poll::Ready(Some(AudioSample::Pcm(tensor)))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
