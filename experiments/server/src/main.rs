@@ -1,15 +1,15 @@
-use deli_base::log;
-use deli_video::{CameraConfig, RPiCamera, VideoData};
+use base::log;
+use com::WsServer;
 use futures_util::StreamExt;
-use deli_com::WsServer;
-use deli_image::{encode_jpeg, Image};
+use image::{Image, encode_jpeg};
 use server::Data;
+use video::{CameraConfig, RPiCamera, VideoData};
 
 const DEFAULT_ADDR: &str = "0.0.0.0:5090";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     log::info!("Server Experiment - Camera Data Broadcaster");
     log::info!("Binding to: {}", DEFAULT_ADDR);
