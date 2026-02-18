@@ -1,8 +1,7 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 
 import 'config.dart';
+import 'home.dart';
 import 'server.dart';
 
 void main() async {
@@ -27,50 +26,3 @@ class MonitorApp extends StatelessWidget {
   }
 }
 
-class MonitorHome extends StatefulWidget {
-  final Config config;
-  final Server server;
-
-  const MonitorHome({super.key, required this.config, required this.server});
-
-  @override
-  State<MonitorHome> createState() => _MonitorHomeState();
-}
-
-class _MonitorHomeState extends State<MonitorHome> {
-  @override
-  void initState() {
-    super.initState();
-    widget.server.onUpdate(_onUpdate);
-  }
-
-  @override
-  void dispose() {
-    widget.server.removeOnUpdate(_onUpdate);
-    super.dispose();
-  }
-
-  void _onUpdate(_) => setState(() {});
-
-  @override
-  Widget build(BuildContext context) {
-    final data = widget.server.data;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: data != null
-          ? Image.memory(
-              Uint8List.fromList(data.frame),
-              gaplessPlayback: true,
-              width: double.infinity,
-              height: double.infinity,
-              fit: BoxFit.contain,
-            )
-          : const Center(
-              child: Text(
-                'waiting...',
-                style: TextStyle(color: Colors.red, fontSize: 48),
-              ),
-            ),
-    );
-  }
-}
