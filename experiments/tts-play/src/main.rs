@@ -1,7 +1,7 @@
-use deli_audio::{AudioData, AudioOut, AudioSample};
+use deli_audio::{AudioData, AudioOut};
 use deli_base::log;
 use deli_infer::Inference;
-use futures_util::SinkExt;
+use futures_util::{SinkExt, StreamExt};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -28,24 +28,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize inference and load Kokoro model
     log::info!("Initializing Kokoro TTS...");
     let inference = Inference::cpu();
-    let kokoro = inference.use_kokoro(&model_path, &voice_path, Some(espeak_data_path))?;
+    let mut kokoro = inference.use_kokoro(&model_path, &voice_path, Some(espeak_data_path))?;
     log::info!("Kokoro model loaded");
 
     // Synthesize speech
     log::info!("Synthesizing: \"{}\"", SENTENCE);
-    let tensor = kokoro.speak(SENTENCE).await?;
+    kokoro.send(SENTENCE.to_string()).await?;
+    kokoro.close().await?;
+
+    let sample = kokoro
+        .next()
+        .await
+        .expect("stream should yield audio")?;
+    let AudioData::Pcm(ref tensor) = sample.data;
     log::info!("Generated {} samples", tensor.data.len());
 
     // Create AudioOut and play samples
     let mut audio_out = AudioOut::new(None, SAMPLE_RATE);
     let num_samples = tensor.data.len();
     log::info!("Sending {} samples to AudioOut", num_samples);
-    audio_out
-        .send(AudioSample {
-            data: AudioData::Pcm(tensor),
-            sample_rate: SAMPLE_RATE,
-        })
-        .await?;
+    audio_out.send(sample).await?;
 
     // Wait for playback to complete (AudioOut doesn't flush on drop)
     let duration_secs = num_samples as f64 / SAMPLE_RATE as f64;

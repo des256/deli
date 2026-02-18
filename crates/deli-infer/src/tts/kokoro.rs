@@ -1,20 +1,27 @@
 use crate::{
     InferError,
+    error::Result,
     tts::{
         phonemize::phonemize,
         vocab::{tokenize, vocab},
     },
 };
+use deli_audio::{AudioData, AudioSample};
 use deli_base::Tensor;
+use futures_core::Stream;
+use futures_sink::Sink;
 use ort::session::Session;
 use ort::value::Tensor as OrtTensor;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
 /// Load and validate an NPY voice style file.
 ///
 /// Expects a NumPy .npy file with 510x256 f32 values (130560 total).
-pub(crate) fn load_voice_style(path: impl AsRef<std::path::Path>) -> Result<Vec<f32>, InferError> {
+pub(crate) fn load_voice_style(path: impl AsRef<std::path::Path>) -> Result<Vec<f32>> {
     let bytes = std::fs::read(path)?;
 
     // Validate magic bytes
@@ -47,11 +54,24 @@ pub(crate) fn load_voice_style(path: impl AsRef<std::path::Path>) -> Result<Vec<
     Ok(style)
 }
 
-/// Kokoro TTS model for text-to-speech synthesis
+const SAMPLE_RATE: usize = 24000;
+
+/// Kokoro TTS model for text-to-speech synthesis.
+///
+/// Implements `Sink<String>` to accept text input and
+/// `Stream<Item = Result<AudioSample>>` to produce synthesized audio.
+///
+/// Each `String` sent via the Sink maps 1:1 to an `AudioSample` yielded
+/// from the Stream. Closing the sink signals no more input; the stream
+/// ends once all pending texts are synthesized.
 pub struct Kokoro {
     session: Arc<Mutex<Session>>,
     vocab: Arc<HashMap<char, i64>>,
     style: Arc<Vec<f32>>,
+    pending: VecDeque<String>,
+    closed: bool,
+    inflight: Option<Pin<Box<dyn Future<Output = Result<AudioSample>> + Send>>>,
+    stream_waker: Option<std::task::Waker>,
 }
 
 impl Kokoro {
@@ -65,7 +85,7 @@ impl Kokoro {
         session: Session,
         voice_path: impl AsRef<std::path::Path>,
         espeak_data_path: Option<&str>,
-    ) -> Result<Self, InferError> {
+    ) -> Result<Self> {
         // Initialize espeak-ng
         super::phonemize::espeak_init(espeak_data_path).map_err(|e| InferError::Runtime(e))?;
 
@@ -76,84 +96,162 @@ impl Kokoro {
             session: Arc::new(Mutex::new(session)),
             vocab: Arc::new(vocab),
             style: Arc::new(style),
+            pending: VecDeque::new(),
+            closed: false,
+            inflight: None,
+            stream_waker: None,
         })
     }
 
-    /// Convert text to audio
-    ///
-    /// Runs phonemization and ONNX inference in a blocking task to avoid
-    /// blocking the async executor.
-    ///
-    /// # Returns
-    /// * `Ok(Tensor<i16>)` containing 24kHz mono PCM audio
-    /// * `Err(InferError)` if synthesis fails
-    pub async fn speak(&self, text: &str) -> Result<Tensor<i16>, InferError> {
+    /// Spawn synthesis of the given text as an inflight future.
+    fn start_synthesis(&mut self, text: String) {
         let session = Arc::clone(&self.session);
         let vocab = Arc::clone(&self.vocab);
         let style = Arc::clone(&self.style);
-        let text = text.to_string();
 
-        tokio::task::spawn_blocking(move || {
-            // Phonemize text
-            let phonemes = phonemize(&text).map_err(|e| InferError::Runtime(e))?;
+        self.inflight = Some(Box::pin(async move {
+            let tensor = tokio::task::spawn_blocking(move || -> Result<Tensor<i16>> {
+                // Phonemize text
+                let phonemes = phonemize(&text).map_err(|e| InferError::Runtime(e))?;
 
-            // Tokenize phonemes, pad with 0 at start and end
-            let mut token_ids = tokenize(&phonemes, &vocab);
-            token_ids.insert(0, 0);
-            token_ids.push(0);
+                // Tokenize phonemes, pad with 0 at start and end
+                let mut token_ids = tokenize(&phonemes, &vocab);
+                token_ids.insert(0, 0);
+                token_ids.push(0);
 
-            // Clamp style index to prevent OOB
-            let style_idx = token_ids.len().min(509);
+                // Clamp style index to prevent OOB
+                let style_idx = token_ids.len().min(509);
 
-            // Extract style slice for this token count
-            let style_start = style_idx * 256;
-            let style_end = style_start + 256;
-            let style_slice = &style[style_start..style_end];
+                // Extract style slice for this token count
+                let style_start = style_idx * 256;
+                let style_end = style_start + 256;
+                let style_slice = &style[style_start..style_end];
 
-            // Build input tensors
-            let tokens_shape = [1usize, token_ids.len()];
-            let tokens = OrtTensor::from_array((tokens_shape, token_ids.into_boxed_slice()))?;
+                // Build input tensors
+                let tokens_shape = [1usize, token_ids.len()];
+                let tokens =
+                    OrtTensor::from_array((tokens_shape, token_ids.into_boxed_slice()))?;
 
-            let style_shape = [1usize, 256];
-            let style_vec = style_slice.to_vec();
-            let style_tensor =
-                OrtTensor::from_array((style_shape, style_vec.into_boxed_slice()))?;
+                let style_shape = [1usize, 256];
+                let style_vec = style_slice.to_vec();
+                let style_tensor =
+                    OrtTensor::from_array((style_shape, style_vec.into_boxed_slice()))?;
 
-            let speed_shape = [1usize];
-            let speed_tensor =
-                OrtTensor::from_array((speed_shape, vec![1.0f32].into_boxed_slice()))?;
+                let speed_shape = [1usize];
+                let speed_tensor =
+                    OrtTensor::from_array((speed_shape, vec![1.0f32].into_boxed_slice()))?;
 
-            // Run inference with named inputs, extract data within lock scope
-            let samples: Vec<i16> = {
-                let mut session_guard = session
-                    .lock()
-                    .map_err(|e| InferError::Runtime(format!("Session lock poisoned: {}", e)))?;
-                let outputs = session_guard
-                    .run(ort::inputs!["tokens" => tokens, "style" => style_tensor, "speed" => speed_tensor])
-                    .map_err(|e| InferError::Onnx(e.to_string()))?;
+                // Run inference with named inputs, extract data within lock scope
+                let samples: Vec<i16> = {
+                    let mut session_guard = session.lock().map_err(|e| {
+                        InferError::Runtime(format!("Session lock poisoned: {}", e))
+                    })?;
+                    let outputs = session_guard
+                        .run(ort::inputs!["tokens" => tokens, "style" => style_tensor, "speed" => speed_tensor])
+                        .map_err(|e| InferError::Onnx(e.to_string()))?;
 
-                let (_shape, output_data) = outputs[0]
-                    .try_extract_tensor::<f32>()
-                    .map_err(|e| InferError::Runtime(format!("Failed to extract output: {}", e)))?;
+                    let (_shape, output_data) = outputs[0]
+                        .try_extract_tensor::<f32>()
+                        .map_err(|e| {
+                            InferError::Runtime(format!("Failed to extract output: {}", e))
+                        })?;
 
-                output_data
-                    .iter()
-                    .map(|&sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16)
-                    .collect()
-            };
+                    output_data
+                        .iter()
+                        .map(|&sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16)
+                        .collect()
+                };
 
-            let num_samples = samples.len();
-            Tensor::new(vec![num_samples], samples)
-                .map_err(|e| InferError::TensorError(e.to_string()))
-        })
-        .await
-        .map_err(|e| InferError::Runtime(format!("Task join error: {}", e)))?
+                let num_samples = samples.len();
+                Tensor::new(vec![num_samples], samples)
+                    .map_err(|e| InferError::TensorError(e.to_string()))
+            })
+            .await
+            .map_err(|e| InferError::Runtime(format!("Task join error: {}", e)))??;
+
+            Ok(AudioSample {
+                data: AudioData::Pcm(tensor),
+                sample_rate: SAMPLE_RATE,
+            })
+        }));
     }
 }
 
-// Ensure Kokoro is Send + Sync
-fn _assert_send_sync() {
-    fn assert<T: Send + Sync>() {}
+impl Sink<String> for Kokoro {
+    type Error = InferError;
+
+    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: Pin<&mut Self>, item: String) -> Result<()> {
+        let this = self.get_mut();
+        this.pending.push_back(item);
+        if let Some(waker) = this.stream_waker.take() {
+            waker.wake();
+        }
+        Ok(())
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
+        let this = self.get_mut();
+        this.closed = true;
+        if let Some(waker) = this.stream_waker.take() {
+            waker.wake();
+        }
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl Stream for Kokoro {
+    type Item = Result<AudioSample>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        // Poll inflight synthesis
+        if let Some(fut) = this.inflight.as_mut() {
+            match fut.as_mut().poll(cx) {
+                Poll::Ready(result) => {
+                    this.inflight = None;
+                    return Poll::Ready(Some(result));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+
+        // Dequeue next text and start synthesis
+        if let Some(text) = this.pending.pop_front() {
+            this.start_synthesis(text);
+            if let Some(fut) = this.inflight.as_mut() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Ready(result) => {
+                        this.inflight = None;
+                        return Poll::Ready(Some(result));
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+        }
+
+        // Stream complete when closed, pending empty, and no inflight
+        if this.closed {
+            return Poll::Ready(None);
+        }
+
+        // Nothing to do yet — park
+        this.stream_waker = Some(cx.waker().clone());
+        Poll::Pending
+    }
+}
+
+// Ensure Kokoro is Send (not Sync — inflight future is Send but not Sync)
+fn _assert_send() {
+    fn assert<T: Send>() {}
     assert::<Kokoro>();
 }
 

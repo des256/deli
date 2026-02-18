@@ -1,5 +1,7 @@
+use deli_audio::AudioData;
 use deli_base::log;
 use deli_infer::Inference;
+use futures_util::{SinkExt, StreamExt};
 use std::path::PathBuf;
 
 const SENTENCE: &str = "To be, or not to be, equals, minus one.";
@@ -33,12 +35,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize inference and load Kokoro model
     log::info!("Initializing Kokoro TTS...");
     let inference = Inference::cpu();
-    let kokoro = inference.use_kokoro(&model_path, &voice_path, Some(espeak_data_path))?;
+    let mut kokoro = inference.use_kokoro(&model_path, &voice_path, Some(espeak_data_path))?;
     log::info!("Kokoro model loaded");
 
     // Synthesize speech
     log::info!("Synthesizing: \"{}\"", SENTENCE);
-    let tensor = kokoro.speak(SENTENCE).await?;
+    kokoro.send(SENTENCE.to_string()).await?;
+    kokoro.close().await?;
+
+    let sample = kokoro
+        .next()
+        .await
+        .expect("stream should yield audio")?;
+    let AudioData::Pcm(tensor) = sample.data;
     log::info!("Generated {} samples", tensor.data.len());
 
     // Write WAV file
@@ -50,8 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut writer = hound::WavWriter::create(output_path, spec)?;
-    for &sample in &tensor.data {
-        writer.write_sample(sample)?;
+    for &s in &tensor.data {
+        writer.write_sample(s)?;
     }
     writer.finalize()?;
 
