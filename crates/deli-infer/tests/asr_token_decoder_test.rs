@@ -2,7 +2,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
-use deli_infer::asr::{Config, TokenDecoder, Whisper};
+use deli_infer::asr::{Config, TokenDecoder, WhisperModel};
 use tokenizers::Tokenizer;
 
 fn build_test_tokenizer() -> Tokenizer {
@@ -44,7 +44,7 @@ fn build_test_decoder() -> (TokenDecoder, Config) {
     config.max_target_positions = 10;
     let varmap = candle_nn::VarMap::new();
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
-    let model = Whisper::load(vb.pp("model"), config.clone()).expect("load model");
+    let model = WhisperModel::load(vb.pp("model"), config.clone()).expect("load model");
     let tokenizer = build_test_tokenizer();
     let decoder = TokenDecoder::new(model, tokenizer, &device, &config).expect("create decoder");
     (decoder, config)

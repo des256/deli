@@ -5,7 +5,7 @@ mod llm;
 mod pose_detector;
 pub mod tts;
 
-pub use asr::SpeechRecognizer;
+pub use asr::Whisper;
 pub use error::InferError;
 pub use inference::Inference;
 pub use llm::Qwen3;

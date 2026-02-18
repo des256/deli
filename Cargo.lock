@@ -803,7 +803,11 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "candle-transformers",
+ "deli-audio",
  "deli-base",
+ "futures-core",
+ "futures-sink",
+ "futures-util",
  "memmap2",
  "num-traits",
  "ort",
@@ -3614,8 +3618,10 @@ dependencies = [
 name = "wav-asr"
 version = "0.1.0"
 dependencies = [
+ "deli-audio",
  "deli-base",
  "deli-infer",
+ "futures-util",
  "hound",
  "tokio",
 ]

@@ -8,7 +8,9 @@ name = "wav_asr"
 path = "src/main.rs"
 
 [dependencies]
+deli-audio = { path = "../../crates/deli-audio" }
 deli-infer = { path = "../../crates/deli-infer", features = ["cuda"] }
 deli-base = { path = "../../crates/deli-base" }
+futures-util = { version = "0.3", features = ["sink"] }
 hound = "3.5"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

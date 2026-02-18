@@ -1,9 +1,12 @@
-use deli_base::{log, Tensor};
+use deli_audio::{AudioData, AudioSample};
+use deli_base::{Tensor, log};
+use deli_infer::asr::Transcription;
 use deli_infer::Inference;
+use futures_util::{SinkExt, StreamExt};
 use std::path::PathBuf;
 use std::time::Instant;
 
-const WHISPER_SAMPLE_RATE: u32 = 16000;
+const WHISPER_SAMPLE_RATE: usize = 16000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,8 +37,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read all samples as i32 (hound normalizes per bit depth) then scale to i16 range
     let all_samples: Vec<i16> = match spec.sample_format {
         hound::SampleFormat::Int => {
-            // hound reads into i32 with values in the range for the source bit depth.
-            // Scale to fill the i16 range regardless of source bit depth.
             let max_val = (1i32 << (spec.bits_per_sample - 1)) as f32;
             reader
                 .into_samples::<i32>()
@@ -62,13 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Resample to 16kHz if needed
-    let samples = if spec.sample_rate != WHISPER_SAMPLE_RATE {
+    let samples = if spec.sample_rate != WHISPER_SAMPLE_RATE as u32 {
         log::info!(
             "Resampling from {} Hz to {} Hz",
             spec.sample_rate,
             WHISPER_SAMPLE_RATE
         );
-        resample(&mono_samples, spec.sample_rate, WHISPER_SAMPLE_RATE)
+        resample(&mono_samples, spec.sample_rate, WHISPER_SAMPLE_RATE as u32)
     } else {
         mono_samples
     };
@@ -95,23 +96,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let inference = Inference::cuda(0)?;
     log::info!("CUDA initialized");
 
-    let recognizer =
-        inference.use_speech_recognizer(&model_path, &tokenizer_path, &config_path)?;
+    let num_samples = samples.len();
+    let mut whisper = inference
+        .use_whisper(&model_path, &tokenizer_path, &config_path)?
+        .with_window_samples(num_samples); // Process entire file as one window
     log::info!("Whisper model loaded");
 
-    // Transcribe
-    let tensor = Tensor::new(vec![samples.len()], samples)?;
-    let start = Instant::now();
-    let text = recognizer.transcribe(&tensor, WHISPER_SAMPLE_RATE).await?;
-    let elapsed = start.elapsed();
+    // Send audio and close
+    let tensor = Tensor::new(vec![num_samples], samples)?;
+    let sample = AudioSample {
+        data: AudioData::Pcm(tensor),
+        sample_rate: WHISPER_SAMPLE_RATE,
+    };
 
-    let text = text.trim();
-    if !text.is_empty() {
-        println!("{}", text);
-    } else {
-        log::info!("No speech detected");
+    let start = Instant::now();
+    whisper.send(sample).await?;
+    whisper.close().await?;
+
+    // Read transcription
+    if let Some(result) = whisper.next().await {
+        let transcription = result?;
+        match transcription {
+            Transcription::Final { text, .. } => {
+                let text = text.trim();
+                if !text.is_empty() {
+                    println!("{}", text);
+                } else {
+                    log::info!("No speech detected");
+                }
+            }
+            _ => log::info!("No speech detected"),
+        }
     }
 
+    let elapsed = start.elapsed();
     log::info!("Transcription took {:?}", elapsed);
     Ok(())
 }

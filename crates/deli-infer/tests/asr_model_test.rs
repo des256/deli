@@ -1,6 +1,6 @@
 use candle_core::{DType, Device, Tensor};
 use candle_nn::{VarBuilder, VarMap};
-use deli_infer::asr::{Config, Whisper};
+use deli_infer::asr::{Config, WhisperModel};
 
 #[test]
 fn test_whisper_encoder_forward() {
@@ -10,7 +10,7 @@ fn test_whisper_encoder_forward() {
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
     // Create model with random weights
-    let model = Whisper::load(vb, config.clone()).expect("Failed to load model");
+    let model = WhisperModel::load(vb, config.clone()).expect("Failed to load model");
 
     // Test encoder: input [1, 80, 3000] → output [1, 1500, 384]
     let mel_input = Tensor::zeros(&[1, 80, 3000], DType::F32, &device).unwrap();
@@ -27,7 +27,7 @@ fn test_whisper_decoder_forward() {
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
     // Create model with random weights
-    let mut model = Whisper::load(vb, config.clone()).expect("Failed to load model");
+    let mut model = WhisperModel::load(vb, config.clone()).expect("Failed to load model");
 
     // Encoder output: [1, 1500, 384]
     let encoder_output = Tensor::zeros(&[1, 1500, 384], DType::F32, &device).unwrap();
@@ -50,7 +50,7 @@ fn test_whisper_full_forward() {
     let vb = VarBuilder::from_varmap(&varmap, DType::F32, &device);
 
     // Create model
-    let mut model = Whisper::load(vb, config.clone()).expect("Failed to load model");
+    let mut model = WhisperModel::load(vb, config.clone()).expect("Failed to load model");
 
     // Mel input: [1, 80, 3000]
     let mel = Tensor::zeros(&[1, 80, 3000], DType::F32, &device).unwrap();
@@ -66,7 +66,7 @@ fn test_whisper_full_forward() {
 }
 
 #[test]
-#[ignore]  // Only runs if real model files exist
+#[ignore] // Only runs if real model files exist
 fn test_whisper_load_real_model() {
     use std::path::Path;
 
@@ -84,5 +84,6 @@ fn test_whisper_load_real_model() {
     }
     .expect("Failed to load safetensors");
 
-    let _model = Whisper::load(weights, config).expect("Failed to load model from real weights");
+    let _model =
+        WhisperModel::load(weights, config).expect("Failed to load model from real weights");
 }

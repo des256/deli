@@ -1,6 +1,6 @@
 use deli_base::Language;
 
-pub enum Transcribed {
+pub enum Transcription {
     Partial {
         text: String,
         language: Language,

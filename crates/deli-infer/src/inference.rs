@@ -52,13 +52,13 @@ impl Inference {
         crate::PoseDetector::new(model_path, self.device.clone())
     }
 
-    pub fn use_speech_recognizer(
+    pub fn use_whisper(
         &self,
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
         config_path: impl AsRef<Path>,
-    ) -> Result<crate::SpeechRecognizer, InferError> {
-        crate::SpeechRecognizer::new(model_path, tokenizer_path, config_path, self.device.clone())
+    ) -> Result<crate::Whisper, InferError> {
+        crate::Whisper::new(model_path, tokenizer_path, config_path, self.device.clone())
     }
 
     pub fn use_qwen3(
