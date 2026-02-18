@@ -1,4 +1,4 @@
-use crate::{CameraConfig, CameraError, VideoFrame};
+use crate::{CameraConfig, CameraError, VideoData, VideoFrame};
 use futures_core::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -119,11 +119,13 @@ impl V4l2Camera {
             .ok_or_else(|| CameraError::Device("Device already consumed".to_string()))?;
 
         let buffer_count = self.config.buffer_count() as usize;
+        let width = self.config.width() as usize;
+        let height = self.config.height() as usize;
         let (tx, rx) = mpsc::channel(buffer_count);
 
         // Spawn capture thread
         let handle = thread::spawn(move || {
-            Self::capture_loop(device, tx, buffer_count);
+            Self::capture_loop(device, tx, buffer_count, width, height);
         });
 
         self.receiver = Some(rx);
@@ -134,9 +136,9 @@ impl V4l2Camera {
 
     /// Background thread capture loop.
     ///
-    /// Reads MJPEG frames from V4L2 and sends raw JPEG bytes as `VideoFrame::Jpeg`.
+    /// Reads MJPEG frames from V4L2 and sends raw JPEG bytes as `VideoData::Jpeg`.
     /// Uses `try_send` to drop frames when the channel is full rather than blocking.
-    fn capture_loop(device: Device, tx: mpsc::Sender<VideoFrameResult>, buffer_count: usize) {
+    fn capture_loop(device: Device, tx: mpsc::Sender<VideoFrameResult>, buffer_count: usize, width: usize, height: usize) {
         // Create mmap stream
         let mut stream = match MmapStream::with_buffers(&device, Type::VideoCapture, buffer_count as u32) {
             Ok(s) => s,
@@ -151,7 +153,11 @@ impl V4l2Camera {
             let frame_result = match CaptureStream::next(&mut stream) {
                 Ok((frame_data, _metadata)) => {
                     // Copy raw JPEG bytes (buffer is borrowed and only valid until next call)
-                    Ok(VideoFrame::Jpeg(frame_data.to_vec()))
+                    Ok(VideoFrame {
+                        data: VideoData::Jpeg(frame_data.to_vec()),
+                        width,
+                        height,
+                    })
                 }
                 Err(e) => Err(CameraError::Stream(e.to_string())),
             };

@@ -16,7 +16,7 @@ pub mod rpicam;
 
 pub use config::CameraConfig;
 pub use error::CameraError;
-pub use videoframe::VideoFrame;
+pub use videoframe::{VideoData, VideoFrame};
 
 #[cfg(feature = "v4l2")]
 pub use v4l2::V4l2Camera;

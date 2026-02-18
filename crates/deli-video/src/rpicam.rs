@@ -1,4 +1,4 @@
-use crate::{CameraConfig, CameraError, VideoFrame};
+use crate::{CameraConfig, CameraError, VideoData, VideoFrame};
 use deli_base::Tensor;
 use futures_core::Stream;
 use rslibcamlitelib::{ExternalCallback, LibCamClient, StreamFormat, StreamParams};
@@ -20,8 +20,14 @@ impl ExternalCallback for VideoFrameCallback {
         let slice = unsafe { std::slice::from_raw_parts(bytes, count) };
         let data = slice.to_vec();
 
-        let frame = Tensor::new(vec![self.height, self.width, 3], data)
-            .map(VideoFrame::Rgb)
+        let width = self.width;
+        let height = self.height;
+        let frame = Tensor::new(vec![height, width, 3], data)
+            .map(|tensor| VideoFrame {
+                data: VideoData::Rgb(tensor),
+                width,
+                height,
+            })
             .map_err(|e| CameraError::Stream(e.to_string()));
 
         let _ = self.tx.try_send(frame);

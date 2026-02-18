@@ -1,5 +1,5 @@
 use deli_base::log;
-use deli_video::{CameraConfig, RPiCamera, VideoFrame};
+use deli_video::{CameraConfig, RPiCamera, VideoData};
 use futures_util::StreamExt;
 use deli_com::WsServer;
 use deli_image::{encode_jpeg, Image};
@@ -29,9 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         // Capture frame
         let frame = camera.next().await.unwrap()?;
-        let jpeg = match frame {
-            VideoFrame::Jpeg(data) => data,
-            VideoFrame::Rgb(tensor) => encode_jpeg(Image::U8(tensor), 80).await?,
+        let jpeg = match frame.data {
+            VideoData::Jpeg(data) => data,
+            VideoData::Rgb(tensor) => encode_jpeg(Image::U8(tensor), 80).await?,
         };
 
         // Broadcast Data with frame
