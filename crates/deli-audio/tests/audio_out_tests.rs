@@ -1,4 +1,5 @@
 use deli_audio::AudioOut;
+use futures_sink::Sink;
 
 #[tokio::test]
 async fn test_audio_out_construction() {
@@ -12,13 +13,9 @@ async fn test_audio_out_construction() {
 }
 
 #[tokio::test]
-async fn test_audio_out_send_signature() {
-    // Verify send() is async and returns Result<(), AudioError>
-    fn assert_send_type(_: impl std::future::Future<Output = Result<(), deli_audio::AudioError>>) {}
-
-    let mut audio_out = AudioOut::new(None, 48000);
-    let data = vec![0i16; 100];
-    assert_send_type(audio_out.send(&data));
+async fn test_audio_out_implements_sink() {
+    fn assert_sink<T: Sink<deli_audio::AudioSample>>() {}
+    assert_sink::<AudioOut>();
 }
 
 #[tokio::test]

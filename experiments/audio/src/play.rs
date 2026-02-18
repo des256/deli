@@ -1,5 +1,6 @@
-use deli_audio::AudioOut;
-use deli_base::log;
+use deli_audio::{AudioOut, AudioSample};
+use deli_base::{log, Tensor};
+use futures_util::SinkExt;
 use hound;
 use std::time::Duration;
 
@@ -52,7 +53,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create AudioOut and send samples
     let mut audio_out = AudioOut::new(None, spec.sample_rate);
-    audio_out.send(&mono_samples).await?;
+    let tensor = Tensor::new(vec![mono_samples.len()], mono_samples).unwrap();
+    audio_out.send(AudioSample::Pcm(tensor)).await?;
 
     // Wait for playback to complete
     let duration_ms = (duration_secs * 1000.0) as u64 + 500;

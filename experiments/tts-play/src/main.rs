@@ -1,6 +1,7 @@
-use deli_audio::AudioOut;
+use deli_audio::{AudioOut, AudioSample};
 use deli_base::log;
 use deli_infer::Inference;
+use futures_util::SinkExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -37,11 +38,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create AudioOut and play samples
     let mut audio_out = AudioOut::new(None, SAMPLE_RATE);
-    log::info!("Sending {} samples to AudioOut", tensor.data.len());
-    audio_out.send(&tensor.data).await?;
+    let num_samples = tensor.data.len();
+    log::info!("Sending {} samples to AudioOut", num_samples);
+    audio_out.send(AudioSample::Pcm(tensor)).await?;
 
     // Wait for playback to complete (AudioOut doesn't flush on drop)
-    let duration_secs = tensor.data.len() as f64 / SAMPLE_RATE as f64;
+    let duration_secs = num_samples as f64 / SAMPLE_RATE as f64;
     let duration_ms = (duration_secs * 1000.0) as u64 + 500;
     log::info!("Waiting {:.2}s for playback to complete...", duration_secs);
     tokio::time::sleep(Duration::from_millis(duration_ms)).await;

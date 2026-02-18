@@ -741,6 +741,7 @@ version = "0.1.0"
 dependencies = [
  "deli-base",
  "futures-core",
+ "futures-sink",
  "futures-util",
  "libpulse-binding",
  "libpulse-simple-binding",
@@ -3298,6 +3299,7 @@ dependencies = [
  "deli-audio",
  "deli-base",
  "deli-infer",
+ "futures-util",
  "tokio",
 ]
 
