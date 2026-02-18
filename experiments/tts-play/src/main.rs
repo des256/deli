@@ -1,7 +1,7 @@
-use deli_audio::{AudioData, AudioOut};
-use deli_base::log;
-use deli_infer::Inference;
+use audio::{AudioData, AudioOut};
+use base::log;
 use futures_util::{SinkExt, StreamExt};
+use inference::Inference;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -10,18 +10,31 @@ const SAMPLE_RATE: usize = 24000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     // Model paths
-    let model_path = PathBuf::from("models/kokoro/kokoro-v1.0.onnx");
-    let voice_path = PathBuf::from("models/kokoro/bf_emma.npy");
+    let model_path = PathBuf::from("data/kokoro/kokoro-v1.0.onnx");
+    //let voice_path = PathBuf::from("data/kokoro/af_kore.npy");  // good general voice
+    //let voice_path = PathBuf::from("data/kokoro/af_jessica.npy");  // annoying, but useful
+    let voice_path = PathBuf::from("data/kokoro/af_nicole.npy"); // this could be the best one
+    //let voice_path = PathBuf::from("data/kokoro/af_river.npy");  // ok, but dry
+    //let voice_path = PathBuf::from("data/kokoro/af_sarah.npy");  // robotic
+    //let voice_path = PathBuf::from("data/kokoro/af_sky.npy"); // slow but clear
+    //let voice_path = PathBuf::from("data/kokoro/bf_emma.npy"); // dry, british
+    //let voice_path = PathBuf::from("data/kokoro/bf_lily.npy"); // more colorful, british
+    //let voice_path = PathBuf::from("data/kokoro/ff_siwis.npy"); // french
+    //let voice_path = PathBuf::from("data/kokoro/hf_beta.npy"); // indian
+    //let voice_path = PathBuf::from("data/kokoro/jf_gongitsune.npy"); // japanese, dramatic
+    //let voice_path = PathBuf::from("data/kokoro/jf_tebukuro.npy"); // japanese, high pitched
+    //let voice_path = PathBuf::from("data/kokoro/zf_xiaoni.npy"); // chinese, chinese intonation
+    //let voice_path = PathBuf::from("data/kokoro/zf_xiaoyi.npy"); // chinese, high pitched
     let espeak_data_path = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
 
     // Validate model files exist
     if !model_path.exists() || !voice_path.exists() {
         eprintln!("Model files missing. Expected:");
-        eprintln!("  - models/kokoro/kokoro-v1.0.onnx");
-        eprintln!("  - models/kokoro/bf_emma.npy");
+        eprintln!("  - data/kokoro/kokoro-v1.0.onnx");
+        eprintln!("  - data/kokoro/<voice>.npy");
         std::process::exit(1);
     }
 
@@ -36,10 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     kokoro.send(SENTENCE.to_string()).await?;
     kokoro.close().await?;
 
-    let sample = kokoro
-        .next()
-        .await
-        .expect("stream should yield audio")?;
+    let sample = kokoro.next().await.expect("stream should yield audio")?;
     let AudioData::Pcm(ref tensor) = sample.data;
     log::info!("Generated {} samples", tensor.data.len());
 

@@ -1,7 +1,7 @@
-use deli_audio::AudioData;
-use deli_base::log;
-use deli_infer::Inference;
+use audio::AudioData;
+use base::log;
 use futures_util::{SinkExt, StreamExt};
+use inference::Inference;
 use std::path::PathBuf;
 
 const SENTENCE: &str = "To be, or not to be, equals, minus one.";
@@ -9,7 +9,7 @@ const SAMPLE_RATE: u32 = 24000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -20,15 +20,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_path = &args[1];
 
     // Model paths
-    let model_path = PathBuf::from("models/kokoro/kokoro-v1.0.onnx");
-    let voice_path = PathBuf::from("models/kokoro/bf_emma.npy");
+    let model_path = PathBuf::from("data/kokoro/kokoro-v1.0.onnx");
+    let voice_path = PathBuf::from("data/kokoro/bf_emma.npy");
     let espeak_data_path = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
 
     // Validate model files exist
     if !model_path.exists() || !voice_path.exists() {
         eprintln!("Model files missing. Expected:");
-        eprintln!("  - models/kokoro/kokoro-v1.0.onnx");
-        eprintln!("  - models/kokoro/bf_emma.npy");
+        eprintln!("  - data/kokoro/kokoro-v1.0.onnx");
+        eprintln!("  - data/kokoro/bf_emma.npy");
         std::process::exit(1);
     }
 
@@ -43,10 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     kokoro.send(SENTENCE.to_string()).await?;
     kokoro.close().await?;
 
-    let sample = kokoro
-        .next()
-        .await
-        .expect("stream should yield audio")?;
+    let sample = kokoro.next().await.expect("stream should yield audio")?;
     let AudioData::Pcm(tensor) = sample.data;
     log::info!("Generated {} samples", tensor.data.len());
 

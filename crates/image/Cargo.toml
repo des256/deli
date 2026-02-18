@@ -1,0 +1,19 @@
+[package]
+name = "image"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base = { path = "../base" }
+crates_image = { package = "image", version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "gif",
+    "bmp",
+    "tiff",
+    "webp",
+] }
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

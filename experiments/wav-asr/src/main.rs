@@ -1,8 +1,8 @@
-use deli_audio::{AudioData, AudioSample};
-use deli_base::{Tensor, log};
-use deli_infer::asr::Transcription;
-use deli_infer::Inference;
+use audio::{AudioData, AudioSample};
+use base::{Tensor, log};
 use futures_util::{SinkExt, StreamExt};
+use inference::Inference;
+use inference::asr::Transcription;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -10,7 +10,7 @@ const WHISPER_SAMPLE_RATE: usize = 16000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_dir = args
         .get(2)
         .map(|s| s.as_str())
-        .unwrap_or("models/whisper-tiny.en");
+        .unwrap_or("data/whisper/tiny.en");
 
     // Read WAV file
     let reader = hound::WavReader::open(wav_path)?;

@@ -12,11 +12,11 @@ name = "viewer"
 path = "src/viewer.rs"
 
 [dependencies]
-deli-base = { path = "../../crates/deli-base" }
-deli-video = { path = "../../crates/deli-video", features = ["v4l2"] }
+base = { path = "../../crates/base" }
+video = { path = "../../crates/video", features = ["v4l2"] }
 futures-util = { version = "0.3", features = ["sink"] }
-deli-image = { path = "../../crates/deli-image" }
-deli-com = { path = "../../crates/deli-com" }
-deli-codec = { path = "../../crates/deli-codec" }
+image = { path = "../../crates/image" }
+com = { path = "../../crates/com" }
+codec = { path = "../../crates/codec" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
 minifb = "0.27"

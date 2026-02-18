@@ -8,8 +8,14 @@ name = "record_asr"
 path = "src/main.rs"
 
 [dependencies]
-deli-infer = { path = "../../crates/deli-infer", features = ["cuda"] }
-deli-audio = { path = "../../crates/deli-audio" }
-deli-base = { path = "../../crates/deli-base" }
+inference = { path = "../../crates/inference", features = ["cuda"] }
+audio = { path = "../../crates/audio" }
+base = { path = "../../crates/base" }
 futures-util = { version = "0.3", features = ["sink"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
+tokio = { version = "1", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "time",
+] }

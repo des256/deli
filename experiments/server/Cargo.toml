@@ -8,10 +8,10 @@ name = "server"
 path = "src/main.rs"
 
 [dependencies]
-deli-base = { path = "../../crates/deli-base" }
-deli-video = { path = "../../crates/deli-video", features = ["rpicam"] }
+base = { path = "../../crates/base" }
+video = { path = "../../crates/video", features = ["rpicam"] }
 futures-util = { version = "0.3", features = ["sink"] }
-deli-com = { path = "../../crates/deli-com" }
-deli-image = { path = "../../crates/deli-image" }
-deli-codec = { path = "../../crates/deli-codec" }
+com = { path = "../../crates/com" }
+image = { path = "../../crates/image" }
+codec = { path = "../../crates/codec" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

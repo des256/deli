@@ -8,9 +8,9 @@ name = "tts_wav"
 path = "src/main.rs"
 
 [dependencies]
-deli-infer = { path = "../../crates/deli-infer" }
-deli-audio = { path = "../../crates/deli-audio" }
-deli-base = { path = "../../crates/deli-base" }
+inference = { path = "../../crates/inference" }
+audio = { path = "../../crates/audio" }
+base = { path = "../../crates/base" }
 futures-util = { version = "0.3", features = ["sink"] }
 hound = "3.5"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

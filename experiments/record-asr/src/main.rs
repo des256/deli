@@ -1,8 +1,8 @@
-use deli_audio::AudioIn;
-use deli_base::log;
-use deli_infer::asr::Transcription;
-use deli_infer::Inference;
+use audio::AudioIn;
+use base::log;
 use futures_util::{SinkExt, StreamExt};
+use inference::Inference;
+use inference::asr::Transcription;
 use std::path::PathBuf;
 
 const SAMPLE_RATE: usize = 16000;
@@ -11,12 +11,12 @@ const WINDOW_SAMPLES: usize = 48000; // 3 seconds at 16kHz
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     // Parse CLI arguments
     let model_dir = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "models/whisper-tiny.en".to_string());
+        .unwrap_or_else(|| "data/whisper/tiny.en".to_string());
 
     let model_path = PathBuf::from(&model_dir).join("model.safetensors");
     let tokenizer_path = PathBuf::from(&model_dir).join("tokenizer.json");

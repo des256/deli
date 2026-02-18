@@ -1,0 +1,22 @@
+[package]
+name = "video"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+v4l2 = ["dep:v4l"]
+rpicam = ["dep:rslibcamlite"]
+
+[dependencies]
+base = { path = "../base" }
+image = { path = "../image" }
+futures-core = "0.3"
+log = "0.4"
+tokio = { version = "1", features = ["rt", "sync"] }
+v4l = { version = "0.14", optional = true }
+rslibcamlite = { version = "0.1.9", optional = true }
+
+[dev-dependencies]
+futures-core = "0.3"
+tokio = { version = "1", features = ["rt", "sync", "macros"] }

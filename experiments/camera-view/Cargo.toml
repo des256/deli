@@ -8,9 +8,9 @@ name = "camera-view"
 path = "src/main.rs"
 
 [dependencies]
-deli-video = { path = "../../crates/deli-video", features = ["v4l2"] }
+video = { path = "../../crates/video", features = ["v4l2"] }
 futures-util = "0.3"
-deli-image = { path = "../../crates/deli-image" }
-deli-base = { path = "../../crates/deli-base" }
+image = { path = "../../crates/image" }
+base = { path = "../../crates/base" }
 minifb = "0.27"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
