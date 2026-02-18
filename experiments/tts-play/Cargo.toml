@@ -1,0 +1,14 @@
+[package]
+name = "tts-play"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "tts_play"
+path = "src/main.rs"
+
+[dependencies]
+deli-infer = { path = "../../crates/deli-infer" }
+deli-audio = { path = "../../crates/deli-audio" }
+deli-base = { path = "../../crates/deli-base" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }

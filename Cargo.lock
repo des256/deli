@@ -3287,6 +3287,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tts-play"
+version = "0.1.0"
+dependencies = [
+ "deli-audio",
+ "deli-base",
+ "deli-infer",
+ "tokio",
+]
+
+[[package]]
 name = "tts-wav"
 version = "0.1.0"
 dependencies = [
