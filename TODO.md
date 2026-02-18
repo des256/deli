@@ -1,3 +1,5 @@
+- AudioSample should contain sampling rate and possibly a timestamp
+- VideoFrame should contain dimensions and possibly a timestamp
 - some form of VAD, collecting sentences and streaming to ASR
 - experiment: audio in + vad + asr + llm + tts + audio out
 - monitor: add tab pages
