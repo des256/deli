@@ -20,3 +20,11 @@ rslibcamlite = { version = "0.1.9", optional = true }
 [dev-dependencies]
 futures-core = "0.3"
 tokio = { version = "1", features = ["rt", "sync", "macros"] }
+crates_image = { package = "image", version = "0.25", default-features = false, features = [
+    "jpeg",
+    "png",
+    "gif",
+    "bmp",
+    "tiff",
+    "webp",
+] }

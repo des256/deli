@@ -5,8 +5,6 @@ use inference::Inference;
 use inference::asr::Transcription;
 use std::path::PathBuf;
 
-const SAMPLE_RATE: usize = 16000;
-const CHUNK_FRAMES: usize = 1600; // 100ms chunks
 const WINDOW_SAMPLES: usize = 48000; // 3 seconds at 16kHz
 
 #[tokio::main]
@@ -47,37 +45,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Whisper model loaded");
 
     // Create audio input
-    let mut audio_in = AudioIn::new(None, SAMPLE_RATE, CHUNK_FRAMES);
-
-    // Verify audio capture with timeout
-    match tokio::time::timeout(std::time::Duration::from_secs(5), audio_in.next()).await {
-        Ok(Some(_)) => {
-            log::info!("Audio capture started");
-        }
-        Ok(None) => {
-            eprintln!("Audio capture ended unexpectedly.");
-            eprintln!("Check that PulseAudio is running and a microphone is connected.");
-            std::process::exit(1);
-        }
-        Err(_) => {
-            eprintln!(
-                "Audio capture timeout. Check that PulseAudio is running and a microphone is connected."
-            );
-            std::process::exit(1);
-        }
-    }
+    let mut audioin = AudioIn::open().await;
 
     // Main loop with Ctrl+C handling
     loop {
         tokio::select! {
             // Feed audio chunks into Whisper
-            chunk = audio_in.next() => {
+            chunk = audioin.record() => {
                 match chunk {
-                    Some(sample) => {
+                    Ok(sample) => {
                         whisper.send(sample).await?;
                     }
-                    None => {
-                        log::info!("Audio capture ended");
+                    Err(error) => {
+                        log::error!("Audio capture error: {}", error);
                         break;
                     }
                 }

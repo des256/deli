@@ -1,6 +1,6 @@
+use base::log;
 use camera_viewer::Frame;
-use deli_base::log;
-use deli_com::Client;
+use com::Client;
 use futures_util::StreamExt;
 use minifb::{Key, Window, WindowOptions};
 
@@ -28,7 +28,7 @@ fn rgb_to_argb(buf: &[u8], width: usize, height: usize) -> Vec<u32> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    deli_base::init_stdout_logger();
+    base::init_stdout_logger();
 
     // Parse address from args or use default
     let addr = std::env::args()
@@ -74,7 +74,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Skip frames with unexpected dimensions
         if fw != width || fh != height {
-            log::warn!("Frame dimension mismatch: expected {}x{}, got {}x{}", width, height, fw, fh);
+            log::warn!(
+                "Frame dimension mismatch: expected {}x{}, got {}x{}",
+                width,
+                height,
+                fw,
+                fh
+            );
             continue;
         }
 

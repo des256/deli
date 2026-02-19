@@ -1,4 +1,4 @@
-use audio::{AudioData, AudioOut};
+use audio::{AudioData, AudioOut, AudioOutConfig};
 use base::log;
 use futures_util::{SinkExt, StreamExt};
 use inference::Inference;
@@ -54,10 +54,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Generated {} samples", tensor.data.len());
 
     // Create AudioOut and play samples
-    let mut audio_out = AudioOut::new(None, SAMPLE_RATE);
+    let mut audioout = AudioOut::open().await;
+    audioout
+        .select(AudioOutConfig {
+            sample_rate: SAMPLE_RATE,
+            ..Default::default()
+        })
+        .await;
     let num_samples = tensor.data.len();
     log::info!("Sending {} samples to AudioOut", num_samples);
-    audio_out.send(sample).await?;
+    audioout.play(sample).await;
 
     // Wait for playback to complete (AudioOut doesn't flush on drop)
     let duration_secs = num_samples as f64 / SAMPLE_RATE as f64;

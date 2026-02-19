@@ -1,6 +1,6 @@
-use deli_video::CameraError;
-use deli_image::ImageError;
+use image::ImageError;
 use std::io;
+use video::CameraError;
 
 #[test]
 fn test_from_io_error() {

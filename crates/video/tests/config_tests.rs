@@ -1,4 +1,4 @@
-use deli_video::CameraConfig;
+use video::CameraConfig;
 
 #[test]
 fn test_config_defaults() {
@@ -29,9 +29,7 @@ fn test_config_builder() {
 
 #[test]
 fn test_config_partial_builder() {
-    let config = CameraConfig::default()
-        .with_width(1280)
-        .with_height(720);
+    let config = CameraConfig::default().with_width(1280).with_height(720);
 
     assert_eq!(config.device(), "/dev/video0"); // default
     assert_eq!(config.width(), 1280);

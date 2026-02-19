@@ -3103,6 +3103,7 @@ dependencies = [
  "base",
  "futures-core",
  "image 0.1.0",
+ "image 0.25.9",
  "log",
  "rslibcamlite",
  "tokio",

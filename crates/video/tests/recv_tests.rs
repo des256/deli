@@ -1,6 +1,6 @@
-use deli_base::Tensor;
-use deli_video::CameraError;
-use deli_image::Image;
+use base::Tensor;
+use image::Image;
+use video::CameraError;
 
 /// Test the MJPEG decode pipeline in isolation.
 ///
@@ -9,16 +9,16 @@ use deli_image::Image;
 #[tokio::test]
 async fn test_mjpeg_decode_pipeline() {
     let mut jpeg_buffer = Vec::new();
-    let img = image::RgbImage::from_fn(16, 16, |x, y| {
+    let img = crates_image::RgbImage::from_fn(16, 16, |x, y| {
         let val = ((x + y) % 256) as u8;
-        image::Rgb([val, val + 10, val + 20])
+        crates_image::Rgb([val, val + 10, val + 20])
     });
 
-    image::codecs::jpeg::JpegEncoder::new(&mut jpeg_buffer)
+    crates_image::codecs::jpeg::JpegEncoder::new(&mut jpeg_buffer)
         .encode_image(&img)
         .unwrap();
 
-    let decoded = deli_image::decode_image(&jpeg_buffer).await.unwrap();
+    let decoded = image::decode_image(&jpeg_buffer).await.unwrap();
 
     let tensor: Tensor<u8> = match decoded {
         Image::U8(t) => t,
@@ -32,15 +32,14 @@ async fn test_mjpeg_decode_pipeline() {
 #[tokio::test]
 async fn test_mjpeg_decode_grayscale() {
     let mut jpeg_buffer = Vec::new();
-    let img = image::GrayImage::from_fn(8, 8, |x, y| {
-        image::Luma([((x + y) % 256) as u8])
-    });
+    let img =
+        crates_image::GrayImage::from_fn(8, 8, |x, y| crates_image::Luma([((x + y) % 256) as u8]));
 
-    image::codecs::jpeg::JpegEncoder::new(&mut jpeg_buffer)
+    crates_image::codecs::jpeg::JpegEncoder::new(&mut jpeg_buffer)
         .encode_image(&img)
         .unwrap();
 
-    let decoded = deli_image::decode_image(&jpeg_buffer).await.unwrap();
+    let decoded = image::decode_image(&jpeg_buffer).await.unwrap();
 
     let tensor: Tensor<u8> = match decoded {
         Image::U8(t) => t,
@@ -53,7 +52,7 @@ async fn test_mjpeg_decode_grayscale() {
 #[tokio::test]
 async fn test_corrupt_jpeg_produces_decode_error() {
     let corrupt_data = b"not a jpeg at all";
-    let result = deli_image::decode_image(corrupt_data).await;
+    let result = image::decode_image(corrupt_data).await;
     assert!(result.is_err());
 
     // Verify it converts to CameraError::Decode

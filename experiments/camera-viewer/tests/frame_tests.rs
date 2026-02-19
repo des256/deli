@@ -1,5 +1,5 @@
 use camera_viewer::Frame;
-use deli_codec::Codec;
+use codec::Codec;
 
 fn round_trip(frame: &Frame) {
     let mut buf = Vec::new();

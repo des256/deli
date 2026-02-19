@@ -1,10 +1,8 @@
 use audio::{AudioData, AudioIn, AudioSample};
 use base::log;
-use futures_util::StreamExt;
 use hound;
 
 const SAMPLE_RATE: usize = 16000;
-const CHUNK_FRAMES: usize = 1600; // 100ms chunks
 const DURATION_SECONDS: usize = 5;
 const TOTAL_SAMPLES: usize = SAMPLE_RATE * DURATION_SECONDS;
 
@@ -23,18 +21,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Recording 5 seconds...");
 
     // Create AudioIn and capture samples
-    let mut audio_in = AudioIn::new(None, SAMPLE_RATE, CHUNK_FRAMES);
+    let mut audioin = AudioIn::open().await;
     let mut all_samples: Vec<i16> = Vec::with_capacity(TOTAL_SAMPLES);
 
     while all_samples.len() < TOTAL_SAMPLES {
-        match audio_in.next().await {
-            Some(AudioSample { data, .. }) => match data {
+        match audioin.record().await {
+            Ok(AudioSample { data, .. }) => match data {
                 AudioData::Pcm(tensor) => {
                     all_samples.extend(&tensor.data);
                 }
             },
-            None => {
-                log::warn!("Audio capture ended unexpectedly");
+            Err(error) => {
+                log::error!("Audio capture ended unexpectedly: {}", error);
                 break;
             }
         }

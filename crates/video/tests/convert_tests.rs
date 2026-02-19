@@ -1,4 +1,4 @@
-use deli_video::convert::yuyv_to_rgb;
+use video::convert::yuyv_to_rgb;
 
 #[test]
 fn test_yuyv_to_rgb_gray() {
