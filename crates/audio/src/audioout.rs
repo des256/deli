@@ -21,6 +21,9 @@ use {
     tokio::sync::mpsc,
 };
 
+// capacity of the audio output channel
+const CHANNEL_CAPACITY: usize = 16;
+
 // number of seconds to wait before reconnecting to PulseAudio
 const RECONNECT_SEC: u64 = 1;
 
@@ -61,23 +64,24 @@ pub struct AudioOut {
     sender: mpsc::Sender<AudioSample>,
     new_config_sender: mpsc::Sender<AudioOutConfig>,
     cancel: Arc<AtomicBool>,
-    current_config: AudioOutConfig,
+    config: AudioOutConfig,
 }
 
 impl AudioOut {
     // open audio output
     pub async fn open() -> Self {
         // channel for sending audio samples
-        let (sender, mut receiver) = mpsc::channel::<AudioSample>(8);
+        let (sender, mut receiver) = mpsc::channel::<AudioSample>(CHANNEL_CAPACITY);
 
         // channel for sending new audio configurations
-        let (new_config_sender, mut new_config_receiver) = mpsc::channel::<AudioOutConfig>(8);
+        let (new_config_sender, mut new_config_receiver) =
+            mpsc::channel::<AudioOutConfig>(CHANNEL_CAPACITY);
 
         // canceling flag
         let cancel = Arc::new(AtomicBool::new(false));
 
         // current audio configuration
-        let current_config = AudioOutConfig::default();
+        let config = AudioOutConfig::default();
 
         // spawn separate task for audio playback loop
         tokio::task::spawn_blocking({
@@ -186,7 +190,7 @@ impl AudioOut {
         });
 
         // start default configuration
-        if let Err(error) = new_config_sender.send(current_config.clone()).await {
+        if let Err(error) = new_config_sender.send(config.clone()).await {
             log::error!("Failed to send default audio config: {}", error);
         }
 
@@ -194,13 +198,13 @@ impl AudioOut {
             sender,
             new_config_sender,
             cancel,
-            current_config,
+            config,
         }
     }
 
     // get the current audio configuration
     pub fn config(&self) -> AudioOutConfig {
-        self.current_config.clone()
+        self.config.clone()
     }
 
     // select a new audio configuration
@@ -208,7 +212,7 @@ impl AudioOut {
         if let Err(error) = self.new_config_sender.send(config.clone()).await {
             log::error!("Failed to send new audio config: {}", error);
         }
-        self.current_config = config;
+        self.config = config;
     }
 
     // play an audio sample

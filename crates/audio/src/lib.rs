@@ -1,11 +1,11 @@
-pub mod audiosample;
-pub use audiosample::{AudioData, AudioSample};
+mod audiosample;
+pub use audiosample::*;
 
-pub mod audioerror;
-pub use audioerror::AudioError;
+mod audioerror;
+pub use audioerror::*;
 
-pub mod audioin;
-pub use audioin::{AudioIn, AudioInConfig, AudioInDevice};
+mod audioin;
+pub use audioin::*;
 
-pub mod audioout;
-pub use audioout::{AudioOut, AudioOutConfig, AudioOutDevice};
+mod audioout;
+pub use audioout::*;

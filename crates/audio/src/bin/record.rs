@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut all_samples: Vec<i16> = Vec::with_capacity(TOTAL_SAMPLES);
 
     while all_samples.len() < TOTAL_SAMPLES {
-        match audioin.record().await {
+        match audioin.capture().await {
             Ok(AudioSample { data, .. }) => match data {
                 AudioData::Pcm(tensor) => {
                     all_samples.extend(&tensor.data);

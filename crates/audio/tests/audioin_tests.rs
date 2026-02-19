@@ -31,9 +31,9 @@ async fn test_audioin_drop() {
 }
 
 #[tokio::test]
-async fn test_audioin_record() {
-    let mut audio_in = AudioIn::open().await;
-    let sample = audio_in.record().await.unwrap();
+async fn test_audioin_capture() {
+    let mut audioin = AudioIn::open().await;
+    let sample = audioin.capture().await.unwrap();
     let length = match sample.data {
         AudioData::Pcm(tensor) => tensor.shape[0],
     };

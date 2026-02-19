@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["v4l2"]
 v4l2 = ["dep:v4l"]
-rpicam = ["dep:rslibcamlite"]
+rpicam = ["dep:shiguredo_libcamera"]
+realsense = ["dep:realsense-rust"]
 
 [dependencies]
 base = { path = "../base" }
@@ -15,7 +16,8 @@ futures-core = "0.3"
 log = "0.4"
 tokio = { version = "1", features = ["rt", "sync"] }
 v4l = { version = "0.14", optional = true }
-rslibcamlite = { version = "0.1.9", optional = true }
+shiguredo_libcamera = { git = "https://github.com/shiguredo/libcamera-rs", optional = true }
+realsense-rust = { version = "1.3.0", optional = true }
 
 [dev-dependencies]
 futures-core = "0.3"

@@ -1,5 +1,5 @@
 use {
-    crate::{AudioData, AudioError, AudioSample},
+    crate::*,
     base::Tensor,
     libpulse_binding::{
         callbacks::ListResult,
@@ -14,6 +14,9 @@ use {
     std::{cell::RefCell, rc::Rc},
     tokio::sync::mpsc,
 };
+
+// capacity of the audio input channel
+const CHANNEL_CAPACITY: usize = 16;
 
 // number of seconds to wait before reconnecting to PulseAudio
 const RECONNECT_SEC: u64 = 1;
@@ -50,20 +53,21 @@ impl Default for AudioInConfig {
 pub struct AudioIn {
     receiver: mpsc::Receiver<AudioSample>,
     new_config_sender: mpsc::Sender<AudioInConfig>,
-    current_config: AudioInConfig,
+    config: AudioInConfig,
 }
 
 impl AudioIn {
     // open audio input
     pub async fn open() -> Self {
         // channel for receiving audio samples
-        let (sender, receiver) = mpsc::channel::<AudioSample>(8);
+        let (sender, receiver) = mpsc::channel::<AudioSample>(CHANNEL_CAPACITY);
 
         // channel for sending new audio configurations
-        let (new_config_sender, mut new_config_receiver) = mpsc::channel::<AudioInConfig>(8);
+        let (new_config_sender, mut new_config_receiver) =
+            mpsc::channel::<AudioInConfig>(CHANNEL_CAPACITY);
 
         // current audio configuration
-        let current_config = AudioInConfig::default();
+        let config = AudioInConfig::default();
 
         // spawn separate task for audio capture loop
         tokio::task::spawn_blocking(move || {
@@ -161,20 +165,20 @@ impl AudioIn {
         });
 
         // start default configuration
-        if let Err(error) = new_config_sender.send(current_config.clone()).await {
+        if let Err(error) = new_config_sender.send(config.clone()).await {
             log::error!("Failed to send default audio config: {}", error);
         }
 
         Self {
             receiver,
             new_config_sender,
-            current_config,
+            config,
         }
     }
 
     // get the current audio configuration
     pub fn config(&self) -> AudioInConfig {
-        self.current_config.clone()
+        self.config.clone()
     }
 
     // select a new audio configuration
@@ -182,11 +186,11 @@ impl AudioIn {
         if let Err(error) = self.new_config_sender.send(config.clone()).await {
             log::error!("Failed to send new audio config: {}", error);
         }
-        self.current_config = config;
+        self.config = config;
     }
 
-    // record the next audio sample
-    pub async fn record(&mut self) -> Result<AudioSample, AudioError> {
+    // capture the next audio chunk
+    pub async fn capture(&mut self) -> Result<AudioSample, AudioError> {
         match self.receiver.recv().await {
             Some(sample) => Ok(sample),
             None => Err(AudioError::Stream("Audio input channel closed".to_string())),
