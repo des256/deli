@@ -113,11 +113,12 @@ impl VideoIn {
                 config.frame_rate.unwrap(),
             ),
             #[cfg(feature = "realsense")]
-            VideoInConfig::Realsense { size, format, frame_rate, .. } => (
-                size.unwrap(),
-                format.unwrap(),
-                frame_rate.unwrap(),
-            ),
+            VideoInConfig::Realsense {
+                size,
+                format,
+                frame_rate,
+                ..
+            } => (size.unwrap(), format.unwrap(), frame_rate.unwrap()),
         }
     }
 
@@ -134,7 +135,7 @@ impl VideoIn {
         let config = config.unwrap_or(VideoInConfig::RpiCam(rpicam::RpiCamConfig {
             index: None,
             size: None,
-            format: None,
+            format: VideoFormat::Yuyv,
             frame_rate: None,
         }));
 
