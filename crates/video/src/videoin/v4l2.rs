@@ -87,7 +87,7 @@ impl VideoInDevice for V4l2 {
             b"MJPG" => VideoFormat::Jpeg,
             _ => {
                 return Err(VideoError::Device(format!(
-                    "Unsupported pixel format: {:?}",
+                    "Unsupported pixel format: {}",
                     actual_format.fourcc
                 )));
             }

@@ -5,7 +5,7 @@ use {
         Camera, CameraManager, ConfigStatus, FrameBuffer, FrameBufferAllocator, FrameStatus,
         PixelFormat, Request, Size, Stream, StreamRole,
     },
-    std::sync::{mpsc, Arc},
+    std::sync::{Arc, mpsc},
 };
 
 const FOURCC_YUYV: u32 = u32::from_le_bytes(*b"YUYV");
@@ -140,9 +140,9 @@ impl VideoInDevice for RpiCamera {
                 FOURCC_YUYV => VideoFormat::Yuyv,
                 FOURCC_MJPG => VideoFormat::Jpeg,
                 other => {
-                    let s = String::from_utf8_lossy(&other.to_le_bytes());
                     return Err(VideoError::Device(format!(
-                        "Unsupported pixel format: {s}"
+                        "Unsupported pixel format: {}",
+                        other
                     )));
                 }
             };
@@ -165,9 +165,9 @@ impl VideoInDevice for RpiCamera {
 
         for i in 0..buffer_count {
             let buffer = allocator.get_buffer(&stream, i)?;
-            let plane = buffer.plane(0).ok_or(VideoError::Device(format!(
-                "Buffer {i} has no planes"
-            )))?;
+            let plane = buffer
+                .plane(0)
+                .ok_or(VideoError::Device(format!("Buffer {i} has no planes")))?;
 
             let mmap_len = (plane.offset as usize) + (plane.length as usize);
             let ptr = unsafe {
@@ -312,12 +312,12 @@ impl VideoInDevice for RpiCamera {
                 let request = &self.requests[pending.cookie];
                 let buffer = &self.buffers[pending.cookie];
                 request.reuse();
-                request.add_buffer(stream, buffer).map_err(|e| {
-                    VideoError::Stream(format!("Failed to re-add buffer: {e}"))
-                })?;
-                camera.queue_request(request).map_err(|e| {
-                    VideoError::Stream(format!("Failed to re-queue request: {e}"))
-                })?;
+                request
+                    .add_buffer(stream, buffer)
+                    .map_err(|e| VideoError::Stream(format!("Failed to re-add buffer: {e}")))?;
+                camera
+                    .queue_request(request)
+                    .map_err(|e| VideoError::Stream(format!("Failed to re-queue request: {e}")))?;
             }
         }
 
