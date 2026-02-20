@@ -215,32 +215,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
-name = "camera-view"
-version = "0.1.0"
-dependencies = [
- "base",
- "futures-util",
- "image 0.1.0",
- "minifb",
- "tokio",
- "video",
-]
-
-[[package]]
-name = "camera-viewer"
-version = "0.1.0"
-dependencies = [
- "base",
- "codec",
- "com",
- "futures-util",
- "image 0.1.0",
- "minifb",
- "tokio",
- "video",
-]
-
-[[package]]
 name = "candle-core"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2472,6 +2446,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "server"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "codec",
+ "com",
+ "futures-util",
+ "image 0.1.0",
+ "tokio",
+ "video",
+]
+
+[[package]]
 name = "sha1_smol"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2989,7 +2976,9 @@ dependencies = [
  "futures-core",
  "image 0.1.0",
  "image 0.25.9",
+ "libc",
  "log",
+ "minifb",
  "realsense-rust",
  "shiguredo_libcamera",
  "tokio",

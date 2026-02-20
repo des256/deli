@@ -3,7 +3,7 @@ use base::Tensor;
 
 #[tokio::test]
 async fn test_audioout_open() {
-    let audioout = AudioOut::open().await;
+    let audioout = AudioOut::open(None).await;
     let config = audioout.config();
     assert_eq!(config.device_name, None);
     assert_eq!(config.sample_rate, 16000);
@@ -11,12 +11,12 @@ async fn test_audioout_open() {
 
 #[tokio::test]
 async fn test_audioout_select() {
+    let mut audioout = AudioOut::open(None).await;
     let devices = AudioOut::list_devices().await.unwrap();
     let config = AudioOutConfig {
         device_name: Some(devices[0].name.clone()),
         ..Default::default()
     };
-    let mut audioout = AudioOut::open().await;
     audioout.select(config).await;
     let config = audioout.config();
     assert_eq!(config.device_name, Some(devices[0].name.clone()));
@@ -25,13 +25,13 @@ async fn test_audioout_select() {
 
 #[tokio::test]
 async fn test_audioout_drop() {
-    let audioout = AudioOut::open().await;
+    let audioout = AudioOut::open(None).await;
     drop(audioout);
 }
 
 #[tokio::test]
 async fn test_audioout_play() {
-    let audioout = AudioOut::open().await;
+    let audioout = AudioOut::open(None).await;
     let sample = AudioSample {
         data: AudioData::Pcm(
             Tensor::<i16>::new(vec![5], vec![32767, -32768, 32767, -32768, 0]).unwrap(),

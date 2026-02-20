@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Recording 5 seconds...");
 
     // Create AudioIn and capture samples
-    let mut audioin = AudioIn::open().await;
+    let mut audioin = AudioIn::open(None).await;
     let mut all_samples: Vec<i16> = Vec::with_capacity(TOTAL_SAMPLES);
 
     while all_samples.len() < TOTAL_SAMPLES {

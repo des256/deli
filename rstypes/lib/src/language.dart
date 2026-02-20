@@ -39,12 +39,6 @@ class LanguageEnglishUs extends Language {
     _d.setUint32(0, 0, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
   }
-
-  @override
-  bool operator ==(Object other) => other.runtimeType == runtimeType;
-
-  @override
-  int get hashCode => runtimeType.hashCode;
 }
 
 class LanguageChineseChina extends Language {
@@ -56,12 +50,6 @@ class LanguageChineseChina extends Language {
     _d.setUint32(0, 1, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
   }
-
-  @override
-  bool operator ==(Object other) => other.runtimeType == runtimeType;
-
-  @override
-  int get hashCode => runtimeType.hashCode;
 }
 
 class LanguageKoreanKorea extends Language {
@@ -73,12 +61,6 @@ class LanguageKoreanKorea extends Language {
     _d.setUint32(0, 2, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
   }
-
-  @override
-  bool operator ==(Object other) => other.runtimeType == runtimeType;
-
-  @override
-  int get hashCode => runtimeType.hashCode;
 }
 
 class LanguageDutchNetherlands extends Language {
@@ -90,12 +72,6 @@ class LanguageDutchNetherlands extends Language {
     _d.setUint32(0, 3, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
   }
-
-  @override
-  bool operator ==(Object other) => other.runtimeType == runtimeType;
-
-  @override
-  int get hashCode => runtimeType.hashCode;
 }
 
 class LanguageFrenchFrance extends Language {
@@ -107,10 +83,4 @@ class LanguageFrenchFrance extends Language {
     _d.setUint32(0, 4, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
   }
-
-  @override
-  bool operator ==(Object other) => other.runtimeType == runtimeType;
-
-  @override
-  int get hashCode => runtimeType.hashCode;
 }

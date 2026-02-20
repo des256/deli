@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 base = { path = "../../crates/base" }
-video = { path = "../../crates/video", features = ["rpicam"] }
+video = { path = "../../crates/video" }
 futures-util = { version = "0.3", features = ["sink"] }
 com = { path = "../../crates/com" }
 image = { path = "../../crates/image" }

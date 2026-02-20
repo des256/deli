@@ -1,157 +1,198 @@
-use {crate::*, base::Vec2, std::path::PathBuf, tokio::sync::mpsc};
+use {
+    crate::*,
+    base::Vec2,
+    std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    tokio::{
+        sync::mpsc,
+        task::{JoinHandle, spawn_blocking},
+    },
+};
 
 // capacity of the video input channel
 const CHANNEL_CAPACITY: usize = 4;
 
+// delay before reconnecting after failure
+const WAIT_BEFORE_RECONNECT_MS: u64 = 100;
+
 #[derive(Debug, Clone)]
-pub enum VideoInDevice {
+pub enum VideoInConfig {
     #[cfg(feature = "v4l2")]
-    V4l2(Option<PathBuf>),
+    V4l2(v4l2::V4l2Config),
     #[cfg(feature = "rpicam")]
-    RpiCam(Option<usize>),
+    RpiCam(rpicam::RpiCamConfig),
     #[cfg(feature = "realsense")]
-    RealSense(Option<usize>),
+    Realsense {
+        index: Option<usize>,
+        size: Option<Vec2<usize>>,
+        format: Option<VideoFormat>,
+        frame_rate: Option<f32>,
+    },
 }
 
-#[derive(Debug, Clone)]
-pub struct VideoInConfig {
-    pub device: Option<VideoInDevice>,
-    pub size: Vec2<usize>,
-    pub format: VideoFormat,
-    pub frame_rate: f32,
-}
-
-impl Default for VideoInConfig {
-    fn default() -> Self {
-        Self {
-            device: None,
-            size: Vec2::new(0, 0),
-            format: VideoFormat::Yuyv,
-            frame_rate: 0.0,
-        }
-    }
+pub(crate) trait VideoInDevice: Send {
+    fn open(&mut self, config: &VideoInConfig) -> Result<VideoInConfig, VideoError>; // open the device, return config that was actually set
+    fn close(&mut self); // close the device, if open
+    fn blocking_capture(&mut self) -> Result<VideoFrame, VideoError>; // capture a frame
 }
 
 pub struct VideoIn {
+    sender: mpsc::Sender<VideoFrame>,
     receiver: mpsc::Receiver<VideoFrame>,
-    new_config_sender: mpsc::Sender<VideoInConfig>,
-    current_config: VideoInConfig,
+    cancel: Arc<AtomicBool>,
+    size: Vec2<usize>,
+    format: VideoFormat,
+    frame_rate: f32,
+    join_handle: Option<JoinHandle<()>>,
 }
 
 impl VideoIn {
-    pub async fn open() -> Self {
-        // channel for receiving video frames
-        let (sender, receiver) = mpsc::channel::<VideoFrame>(4);
+    fn create_device(config: &VideoInConfig) -> Result<Box<dyn VideoInDevice>, VideoError> {
+        match config {
+            #[cfg(feature = "v4l2")]
+            VideoInConfig::V4l2(_) => Ok(Box::new(v4l2::V4l2::new())),
+            #[cfg(feature = "rpicam")]
+            VideoInConfig::RpiCam(_) => Ok(Box::new(rpicam::RpiCamera::new())),
+            #[cfg(feature = "realsense")]
+            VideoInConfig::Realsense(_) => Ok(Box::new(realsense::Realsense::new())),
+        }
+    }
 
-        // channel for sending new video configurations
-        let (new_config_sender, mut new_config_receiver) =
-            mpsc::channel::<VideoInConfig>(CHANNEL_CAPACITY);
-
-        // current video configuration
-        let current_config = VideoInConfig::default();
-
-        // spawn separate task for video capture loop
-        tokio::task::spawn_blocking(move || {
-            // wait for new video configuration
-            while let Some(config) = new_config_receiver.blocking_recv() {
-                // TODO: prepare video capture configuration
-
-                // reconnect loop
-                while new_config_receiver.len() == 0 {
-                    // decode default device behavior
-                    let config_device = match config.device {
-                        Some(ref device) => device.clone(),
-
-                        // if rpicam is enabled, use that (we're on a raspberry pi)
-                        #[cfg(feature = "rpicam")]
-                        None => VideoInDevice::RpiCam(None),
-
-                        // otherwise V4L2 is the default
-                        #[cfg(all(not(feature = "rpicam"), feature = "v4l2"))]
-                        None => VideoInDevice::V4l2(None),
-
-                        // and if neither of those are enabled, check for RealSense
-                        #[cfg(all(
-                            not(feature = "rpicam"),
-                            not(feature = "v4l2"),
-                            feature = "realsense"
-                        ))]
-                        None => VideoInDevice::RealSense(None),
-                    };
-
-                    // start video capture
-                    match config_device {
-                        #[cfg(feature = "rpicam")]
-                        VideoInDevice::RpiCam(ref index) => {
-                            let camera = match RpiCamera::open() {
-                                Ok(camera) => camera,
-                                Err(error) => {
-                                    log::error!("Failed to open RPi camera: {}", error);
-                                    continue;
-                                }
-                            };
-                            // TODO: wait until new configuration appears, or until some error occurs
+    fn spawn_worker(
+        sender: mpsc::Sender<VideoFrame>,
+        config: VideoInConfig,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<(JoinHandle<()>, VideoInConfig), VideoError> {
+        let mut device = Self::create_device(&config)?;
+        let config = device.open(&config)?;
+        let join_handle = spawn_blocking({
+            let mut config = config.clone();
+            move || {
+                while !cancel.load(Ordering::Relaxed) {
+                    // keep pumping frames until capturing fails
+                    while let Ok(frame) = device.blocking_capture() {
+                        if let Err(error) = sender.blocking_send(frame) {
+                            log::error!("Failed to send video frame: {}", error);
+                            return; // main closed the channel, so drop everything
                         }
-                        #[cfg(feature = "v4l2")]
-                        VideoInDevice::V4l2(ref path) => {
-                            let camera = match v4l2::V4l2Camera::open(
-                                path.clone(),
-                                config.size.x,
-                                config.size.y,
-                                config.format.clone(),
-                                config.frame_rate,
-                            ) {
-                                Ok(camera) => Box::new(camera),
-                                Err(error) => {
-                                    log::error!("Failed to open V4L2 camera: {}", error);
-                                    continue;
-                                }
-                            };
-                            while new_config_receiver.len() == 0 {
-                                // TODO: read video frame
-                                // TODO: send video frame through channel
-                            }
+                    }
+
+                    // close, wait, and reopen the device
+                    while !cancel.load(Ordering::Relaxed) {
+                        device.close();
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            WAIT_BEFORE_RECONNECT_MS,
+                        ));
+                        if let Ok(new_config) = device.open(&config) {
+                            config = new_config;
+                            break;
                         }
-                        #[cfg(feature = "realsense")]
-                        VideoInDevice::RealSense(ref index) => {
-                            match RealsenseCamera::open(index.clone()) {
-                                Ok(camera) => Box::new(camera),
-                                Err(error) => {
-                                    log::error!("Failed to open RealSense camera: {}", error);
-                                    continue;
-                                }
-                            }
-                            while new_config_receiver.len() == 0 {
-                                // TODO: read video frame
-                                // TODO: send video frame through channel
-                            }
-                        }
-                    };
+                        // if device.open returns error, just stay in the loop
+                    }
                 }
+                device.close();
             }
         });
+        Ok((join_handle, config))
+    }
 
-        // start default configuration
-        if let Err(error) = new_config_sender.send(current_config.clone()).await {
-            log::error!("Failed to send default video config: {}", error);
+    fn decode_config(config: VideoInConfig) -> (Vec2<usize>, VideoFormat, f32) {
+        match config {
+            #[cfg(feature = "v4l2")]
+            VideoInConfig::V4l2(config) => (
+                config.size.unwrap(),
+                config.format.unwrap(),
+                config.frame_rate.unwrap(),
+            ),
+            #[cfg(feature = "rpicam")]
+            VideoInConfig::RpiCam(config) => (
+                config.size.unwrap(),
+                config.format.unwrap(),
+                config.frame_rate.unwrap(),
+            ),
+            #[cfg(feature = "realsense")]
+            VideoInConfig::Realsense { size, format, frame_rate, .. } => (
+                size.unwrap(),
+                format.unwrap(),
+                frame_rate.unwrap(),
+            ),
         }
+    }
 
-        Self {
+    pub async fn open(config: Option<VideoInConfig>) -> Result<Self, VideoError> {
+        // if no config is provided, use a platform default
+        #[cfg(feature = "v4l2")]
+        let config = config.unwrap_or(VideoInConfig::V4l2(v4l2::V4l2Config {
+            path: None,
+            size: None,
+            format: None,
+            frame_rate: None,
+        }));
+        #[cfg(all(feature = "rpicam", not(feature = "v4l2")))]
+        let config = config.unwrap_or(VideoInConfig::RpiCam(rpicam::RpiCamConfig {
+            index: None,
+            size: None,
+            format: None,
+            frame_rate: None,
+        }));
+
+        // channel for receiving video frames
+        let (sender, receiver) = mpsc::channel::<VideoFrame>(CHANNEL_CAPACITY);
+
+        // external cancelation flag
+        let cancel = Arc::new(AtomicBool::new(false));
+
+        // spawn the worker
+        let (join_handle, config) =
+            Self::spawn_worker(sender.clone(), config.clone(), Arc::clone(&cancel))?;
+
+        let (size, format, frame_rate) = Self::decode_config(config);
+
+        Ok(Self {
+            sender,
             receiver,
-            new_config_sender,
-            current_config,
-        }
+            cancel,
+            size,
+            format,
+            frame_rate,
+            join_handle: Some(join_handle),
+        })
     }
 
-    pub fn config(&self) -> VideoInConfig {
-        self.current_config.clone()
+    pub fn size(&self) -> Vec2<usize> {
+        self.size
     }
 
-    pub async fn select(&mut self, config: VideoInConfig) {
-        if let Err(error) = self.new_config_sender.send(config.clone()).await {
-            log::error!("Failed to send new video config: {}", error);
-        }
-        self.current_config = config;
+    pub fn format(&self) -> VideoFormat {
+        self.format
+    }
+
+    pub fn frame_rate(&self) -> f32 {
+        self.frame_rate
+    }
+
+    pub async fn select(&mut self, config: VideoInConfig) -> Result<(), VideoError> {
+        // cancel the current worker
+        self.cancel.store(true, Ordering::Relaxed);
+        self.join_handle.take().unwrap().await.unwrap();
+
+        // reset cancel flag
+        self.cancel.store(false, Ordering::Relaxed);
+
+        // spawn a new worker
+        let (join_handle, config) = Self::spawn_worker(
+            self.sender.clone(),
+            config.clone(),
+            Arc::clone(&self.cancel),
+        )?;
+        self.join_handle = Some(join_handle);
+        let (size, format, frame_rate) = Self::decode_config(config);
+        self.size = size;
+        self.format = format;
+        self.frame_rate = frame_rate;
+        Ok(())
     }
 
     pub async fn capture(&mut self) -> Result<VideoFrame, VideoError> {
@@ -160,18 +201,20 @@ impl VideoIn {
             None => Err(VideoError::Stream("Video input channel closed".to_string())),
         }
     }
+}
 
-    pub async fn list_devices() -> Result<Vec<VideoInDevice>, VideoError> {
-        // TODO: implement video input device listing
-        Ok(vec![])
+impl Drop for VideoIn {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.join_handle.take().unwrap().abort();
     }
 }
 
 #[cfg(feature = "rpicam")]
-mod rpicam;
+pub mod rpicam;
 
 #[cfg(feature = "v4l2")]
-mod v4l2;
+pub mod v4l2;
 
 #[cfg(feature = "realsense")]
-mod realsense;
+pub mod realsense;

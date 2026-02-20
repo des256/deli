@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Create AudioOut and send samples
-    let audioout = AudioOut::open().await;
+    let audioout = AudioOut::open(None).await;
     let tensor = Tensor::new(vec![mono_samples.len()], mono_samples).unwrap();
     audioout
         .play(AudioSample {

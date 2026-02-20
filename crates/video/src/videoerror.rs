@@ -32,3 +32,10 @@ impl From<image::ImageError> for VideoError {
         VideoError::Decode(err)
     }
 }
+
+#[cfg(feature = "rpicam")]
+impl From<shiguredo_libcamera::Error> for VideoError {
+    fn from(err: shiguredo_libcamera::Error) -> Self {
+        VideoError::Device(err.to_string())
+    }
+}

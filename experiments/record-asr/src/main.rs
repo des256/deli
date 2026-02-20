@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         tokio::select! {
             // Feed audio chunks into Whisper
-            chunk = audioin.record() => {
+            chunk = audioin.capture() => {
                 match chunk {
                     Ok(sample) => {
                         whisper.send(sample).await?;

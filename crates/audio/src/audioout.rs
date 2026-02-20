@@ -69,7 +69,10 @@ pub struct AudioOut {
 
 impl AudioOut {
     // open audio output
-    pub async fn open() -> Self {
+    pub async fn open(config: Option<AudioOutConfig>) -> Self {
+        // current audio configuration
+        let config = config.unwrap_or_default();
+
         // channel for sending audio samples
         let (sender, mut receiver) = mpsc::channel::<AudioSample>(CHANNEL_CAPACITY);
 
@@ -80,8 +83,10 @@ impl AudioOut {
         // canceling flag
         let cancel = Arc::new(AtomicBool::new(false));
 
-        // current audio configuration
-        let config = AudioOutConfig::default();
+        // send initial configuration
+        if let Err(error) = new_config_sender.send(config.clone()).await {
+            log::error!("Failed to send initial audio config: {}", error);
+        }
 
         // spawn separate task for audio playback loop
         tokio::task::spawn_blocking({
@@ -188,11 +193,6 @@ impl AudioOut {
                 }
             }
         });
-
-        // start default configuration
-        if let Err(error) = new_config_sender.send(config.clone()).await {
-            log::error!("Failed to send default audio config: {}", error);
-        }
 
         Self {
             sender,
