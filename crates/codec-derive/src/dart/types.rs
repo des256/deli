@@ -44,6 +44,9 @@ pub(super) fn rust_type_to_dart_type(ty: &str) -> String {
     let normalized = normalize_type(ty);
 
     if let Some(inner) = extract_vec_inner(&normalized) {
+        if inner == "u8" {
+            return "Uint8List".to_string();
+        }
         let dart_inner = rust_type_to_dart_type(&inner);
         return format!("List<{}>", dart_inner);
     }
@@ -115,7 +118,7 @@ mod tests {
         assert_eq!(rust_type_to_dart_type("u32"), "int");
         assert_eq!(rust_type_to_dart_type("f64"), "double");
         assert_eq!(rust_type_to_dart_type("String"), "String");
-        assert_eq!(rust_type_to_dart_type("Vec<u8>"), "List<int>");
+        assert_eq!(rust_type_to_dart_type("Vec<u8>"), "Uint8List");
         assert_eq!(rust_type_to_dart_type("Vec<String>"), "List<String>");
         assert_eq!(rust_type_to_dart_type("Vec<Vec<f32>>"), "List<List<double>>");
         assert_eq!(rust_type_to_dart_type("Point"), "Point");

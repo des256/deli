@@ -13,7 +13,7 @@ sealed class ToMonitor {
     final variant = bd.getUint32(offset, Endian.little); offset += 4;
     switch (variant) {
       case 0:
-        final f0 = () { final _l0 = bd.getUint32(offset, Endian.little); offset += 4; final _v0 = List<int>.generate(_l0, (i) => bd.getUint8(offset + i)); offset += _l0 * 1; return _v0; }();
+        final f0 = () { final _l0 = bd.getUint32(offset, Endian.little); offset += 4; final _v0 = buf.sublist(offset, offset + _l0); offset += _l0; return _v0; }();
         return (ToMonitorVideoJpeg(f0: f0), offset);
       case 1:
         final language = () { final r = Language.decode(bd, buf, offset); offset = r.$2; return r.$1; }();
@@ -33,7 +33,7 @@ sealed class ToMonitor {
 }
 
 class ToMonitorVideoJpeg extends ToMonitor {
-  final List<int> f0;
+  final Uint8List f0;
 
   const ToMonitorVideoJpeg({required this.f0});
 
@@ -42,7 +42,7 @@ class ToMonitorVideoJpeg extends ToMonitor {
     final _d = ByteData(8);
     _d.setUint32(0, 0, Endian.little);
     builder.add(_d.buffer.asUint8List(0, 4));
-    _d.setUint32(0, f0.length, Endian.little); builder.add(_d.buffer.asUint8List(0, 4)); for (final _e0 in f0) { builder.addByte(_e0); };
+    _d.setUint32(0, f0.length, Endian.little); builder.add(_d.buffer.asUint8List(0, 4)); builder.add(f0);
   }
 }
 

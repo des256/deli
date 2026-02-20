@@ -6,27 +6,37 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'config.dart';
 
-typedef OnDataUpdate = void Function(ToMonitor data);
+typedef OnUpdate = void Function();
 
 class Server {
   WebSocketChannel? _channel;
   ToMonitor? _data;
-  Language? _language;  // Persists across VideoJpeg messages
-  final List<OnDataUpdate> _onUpdates = [];
+  Uint8List? _jpeg;
+  Language? _language;
+  final Set<OnUpdate> _onUpdates = {};
+  bool _isConnected = false;
 
   ToMonitor? get data => _data;
+  Uint8List? get jpeg => _jpeg;
   Language? get language => _language;
+  bool get isConnected => _isConnected;
 
   Server(Config config) {
     _connect(config);
   }
 
-  void onUpdate(OnDataUpdate callback) {
+  void onUpdate(OnUpdate callback) {
     _onUpdates.add(callback);
   }
 
-  void removeOnUpdate(OnDataUpdate callback) {
+  void removeOnUpdate(OnUpdate callback) {
     _onUpdates.remove(callback);
+  }
+
+  void _callOnUpdates() {
+    for (final onUpdate in List.of(_onUpdates)) {
+      onUpdate();
+    }
   }
 
   void setLanguage(Language language) {
@@ -42,21 +52,20 @@ class Server {
         _channel = WebSocketChannel.connect(uri);
         await _channel!.ready;
 
+        _isConnected = true;
+        _callOnUpdates();
+
         final done = Completer<void>();
 
         _channel!.stream.listen(
           (event) {
-            final message = ToMonitor.fromBin(Uint8List.fromList(event as List<int>));
-            // Only update _data for VideoJpeg messages to avoid a single-frame
-            // "waiting..." flash on the Audio/Video tab when Settings arrives.
-            if (message is ToMonitorSettings) {
+            final message = ToMonitor.fromBin(event as Uint8List);
+            if (message is ToMonitorVideoJpeg) {
+              _jpeg = message.f0;
+            } else if (message is ToMonitorSettings) {
               _language = message.language;
-            } else {
-              _data = message;
             }
-            for (final callback in List.of(_onUpdates)) {
-              callback(message);
-            }
+            _callOnUpdates();
           },
           onDone: () {
             debugPrint('WebSocket connection closed');
@@ -75,6 +84,10 @@ class Server {
       } catch (e) {
         debugPrint('WebSocket connection failed: $e');
       }
+
+      _isConnected = false;
+      _callOnUpdates();
+
       await Future.delayed(const Duration(seconds: 3));
     }
   }

@@ -53,10 +53,21 @@ fn gen_vec_decode_expr(inner: &str, _var_name: &str, depth: usize) -> (String, S
         "bool" | "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64"
     );
 
+    // Special-case Vec<u8>: use buf.sublist for a single memcpy into Uint8List
+    if inner == "u8" {
+        return (
+            format!(
+                "() {{ final {len} = bd.getUint32(offset, Endian.little); offset += 4; final {res} = buf.sublist(offset, offset + {len}); offset += {len}; return {res}; }}()",
+                len = len_var, res = result_var
+            ),
+            "".to_string(),
+        );
+    }
+
     if is_primitive_inner {
         let decode_stmt = match inner {
             "bool" => "buf[offset + i] != 0",
-            "u8" => "bd.getUint8(offset + i)",
+            "u8" => unreachable!(), // handled above
             "u16" => "bd.getUint16(offset + i * 2, Endian.little)",
             "u32" => "bd.getUint32(offset + i * 4, Endian.little)",
             "u64" => "bd.getUint64(offset + i * 8, Endian.little)",
@@ -69,7 +80,7 @@ fn gen_vec_decode_expr(inner: &str, _var_name: &str, depth: usize) -> (String, S
             _ => unreachable!(),
         };
         let element_size = match inner {
-            "bool" | "u8" | "i8" => 1,
+            "bool" | "i8" => 1,
             "u16" | "i16" => 2,
             "u32" | "i32" | "f32" => 4,
             "u64" | "i64" | "f64" => 8,
@@ -141,10 +152,18 @@ fn gen_vec_encode_expr(inner: &str, var_name: &str, depth: usize) -> String {
         "bool" | "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64"
     );
 
+    // Special-case Vec<u8>: bulk add instead of byte-by-byte loop
+    if inner == "u8" {
+        return format!(
+            "_d.setUint32(0, {var}.length, Endian.little); builder.add(_d.buffer.asUint8List(0, 4)); builder.add({var})",
+            var = var_name
+        );
+    }
+
     if is_primitive_inner {
         let encode_stmt = match inner {
             "bool" => format!("builder.addByte({} ? 1 : 0)", loop_var),
-            "u8" => format!("builder.addByte({})", loop_var),
+            "u8" => unreachable!(), // handled above
             "u16" => format!("_d.setUint16(0, {}, Endian.little); builder.add(_d.buffer.asUint8List(0, 2))", loop_var),
             "u32" => format!("_d.setUint32(0, {}, Endian.little); builder.add(_d.buffer.asUint8List(0, 4))", loop_var),
             "u64" => format!("_d.setUint64(0, {}, Endian.little); builder.add(_d.buffer.asUint8List(0, 8))", loop_var),
