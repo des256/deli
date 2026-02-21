@@ -1,6 +1,6 @@
 use {
     crate::*,
-    base::{Tensor, Vec2},
+    base::Vec2,
     std::path::PathBuf,
     v4l::{
         Device, Format, FourCC, buffer::Type, io::mmap::Stream as MmapStream,

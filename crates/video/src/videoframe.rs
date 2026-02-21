@@ -1,4 +1,4 @@
-use base::{Tensor, Vec2};
+use base::Vec2;
 
 #[derive(Debug, Clone, Copy)]
 pub enum VideoFormat {
