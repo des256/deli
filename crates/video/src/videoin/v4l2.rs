@@ -70,6 +70,7 @@ impl VideoInDevice for V4l2 {
             Some(format) => match format {
                 VideoFormat::Yuyv => FourCC::new(b"YUYV"),
                 VideoFormat::Jpeg => FourCC::new(b"MJPG"),
+                VideoFormat::Srggb10p => FourCC::new(b"pRAA"),
             },
             None => device_format.fourcc,
         };
@@ -85,6 +86,7 @@ impl VideoInDevice for V4l2 {
         self.format = match &actual_format.fourcc.repr {
             b"YUYV" => VideoFormat::Yuyv,
             b"MJPG" => VideoFormat::Jpeg,
+            b"pRAA" => VideoFormat::Srggb10p,
             _ => {
                 return Err(VideoError::Device(format!(
                     "Unsupported pixel format: {}",
@@ -142,6 +144,7 @@ impl VideoInDevice for V4l2 {
                                 .unwrap(),
                         ),
                         VideoFormat::Jpeg => VideoData::Jpeg(frame_data.to_vec()),
+                        VideoFormat::Srggb10p => VideoData::Srggb10p(frame_data.to_vec()),
                     };
                     Ok(VideoFrame {
                         data,

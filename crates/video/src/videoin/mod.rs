@@ -135,7 +135,7 @@ impl VideoIn {
         let config = config.unwrap_or(VideoInConfig::RpiCam(rpicam::RpiCamConfig {
             index: None,
             size: None,
-            format: VideoFormat::Yuyv,
+            format: None,
             frame_rate: None,
         }));
 

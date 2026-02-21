@@ -4,12 +4,14 @@ use base::{Tensor, Vec2};
 pub enum VideoFormat {
     Yuyv,
     Jpeg,
+    Srggb10p,
 }
 
 #[derive(Debug, Clone)]
 pub enum VideoData {
     Yuyv(Tensor<u8>),
     Jpeg(Vec<u8>),
+    Srggb10p(Vec<u8>),
 }
 
 #[derive(Debug, Clone)]

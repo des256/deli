@@ -59,6 +59,43 @@ pub async fn frame_to_argb(frame: &VideoFrame) -> Vec<u32> {
                 return Vec::new();
             }
         },
+        VideoData::Srggb10p(data) => {
+            let width = frame.size.x;
+            let height = frame.size.y;
+            let stride = data.len() / height;
+            let mut argb = vec![0u32; width * height];
+
+            // Single-pass: unpack + demosaic over 2x2 RGGB blocks
+            // x is always even, so x and x+1 share the same 5-byte pack group
+            for y in (0..height - 1).step_by(2) {
+                for x in (0..width - 1).step_by(2) {
+                    let pos = x % 4;
+                    let top = y * stride + (x / 4) * 5;
+                    let bot = top + stride;
+                    let top_lo = data[top + 4] as u32;
+                    let bot_lo = data[bot + 4] as u32;
+                    let r  = (data[top + pos] as u32) << 2 | ((top_lo >> (pos * 2)) & 0x03);
+                    let gr = (data[top + pos + 1] as u32) << 2 | ((top_lo >> (pos * 2 + 2)) & 0x03);
+                    let gb = (data[bot + pos] as u32) << 2 | ((bot_lo >> (pos * 2)) & 0x03);
+                    let b  = (data[bot + pos + 1] as u32) << 2 | ((bot_lo >> (pos * 2 + 2)) & 0x03);
+                    let g  = (gr + gb) / 2;
+
+                    let r8 = r >> 2;
+                    let g8 = g >> 2;
+                    let gr8 = gr >> 2;
+                    let gb8 = gb >> 2;
+                    let b8 = b >> 2;
+
+                    let i = y * width + x;
+                    argb[i]             = 0xFF000000 | (r8 << 16) | (g8 << 8) | b8;
+                    argb[i + 1]         = 0xFF000000 | (r8 << 16) | (gr8 << 8) | b8;
+                    argb[i + width]     = 0xFF000000 | (r8 << 16) | (gb8 << 8) | b8;
+                    argb[i + width + 1] = 0xFF000000 | (r8 << 16) | (g8 << 8) | b8;
+                }
+            }
+
+            argb
+        }
     }
 }
 
