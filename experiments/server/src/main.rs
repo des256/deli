@@ -32,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "realsense")]
     let mut videoin = VideoIn::open(Some(VideoInConfig::Realsense(RealsenseConfig {
         color: Some(Vec2::new(640, 480)),
+        depth: Some(Vec2::new(640, 480)),
         frame_rate: Some(30.0),
         ..Default::default()
     })))
@@ -55,36 +56,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut prev_client_count = 0;
 
-    let mut frame_count: u64 = 0;
-
     loop {
         // Capture frame
-        log::info!("waiting for frame...");
         let frame = videoin.capture().await?;
-        frame_count += 1;
-        log::info!(
-            "frame {} received: {}x{} {:?}, {} bytes",
-            frame_count,
-            frame.color.size.x,
-            frame.color.size.y,
-            frame.color.format,
-            frame.color.data.len(),
-        );
 
-        // convert to JPEG if needed
+        // convert color to JPEG
         let size = frame.color.size;
         let data = &frame.color.data;
-        let jpeg = match frame.color.format {
-            PixelFormat::Jpeg => data.clone(),
-            PixelFormat::Yuyv => yuyv_to_jpeg(size, data, 80),
-            PixelFormat::Srggb10p => srggb10p_to_jpeg(size, data, 80),
-            PixelFormat::Yu12 => yu12_to_jpeg(size, data, 80),
-            PixelFormat::Rgb8 => rgb_to_jpeg(size, data, 80),
-            PixelFormat::Argb8 => argb_to_jpeg(size, data, 80),
-        };
-        log::info!("jpeg encoded: {} bytes", jpeg.len());
 
-        // Broadcast frame to monitor
+        #[cfg(feature = "realsense")]
+        let jpeg = if let Some(ref depth) = frame.depth {
+            depth_to_jpeg(depth.size, &depth.data, 80)
+        } else {
+            color_to_jpeg(size, data, frame.color.format, 80)
+        };
+        #[cfg(not(feature = "realsense"))]
+        let jpeg = color_to_jpeg(size, data, frame.color.format, 80);
+
         server.send(&ToMonitor::VideoJpeg(jpeg)).await?;
 
         // Send initial settings when client count changes
@@ -102,4 +90,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             prev_client_count = client_count;
         }
     }
+}
+
+fn color_to_jpeg(size: Vec2<usize>, data: &[u8], format: PixelFormat, quality: u8) -> Vec<u8> {
+    match format {
+        PixelFormat::Jpeg => data.to_vec(),
+        PixelFormat::Yuyv => yuyv_to_jpeg(size, data, quality),
+        PixelFormat::Srggb10p => srggb10p_to_jpeg(size, data, quality),
+        PixelFormat::Yu12 => yu12_to_jpeg(size, data, quality),
+        PixelFormat::Rgb8 => rgb_to_jpeg(size, data, quality),
+        PixelFormat::Argb8 => argb_to_jpeg(size, data, quality),
+    }
+}
+
+#[cfg(feature = "realsense")]
+fn depth_to_jpeg(size: Vec2<usize>, data: &[u16], quality: u8) -> Vec<u8> {
+    let max_depth = data.iter().copied().filter(|&d| d > 0).max().unwrap_or(1);
+
+    let rgb: Vec<u8> = data
+        .iter()
+        .flat_map(|&d| {
+            let d = d.saturating_sub(200);
+            if d == 0 {
+                return [0, 0, 0];
+            }
+            let max = max_depth.saturating_sub(200).max(1);
+            let t = (d as f32).ln() / (max as f32).ln();
+            depth_rainbow(t)
+        })
+        .collect();
+
+    rgb_to_jpeg(size, &rgb, quality)
+}
+
+/// Maps a normalized depth value (0.0 = near, 1.0 = far) to yellow->grey->blue.
+#[cfg(feature = "realsense")]
+fn depth_rainbow(t: f32) -> [u8; 3] {
+    let t = t.clamp(0.0, 1.0);
+    let (r, g, b) = if t < 0.5 {
+        let f = t * 2.0; // 0..1 within first half
+        let r = 1.0 - f * 0.5;   // 1.0 -> 0.5
+        let g = 1.0 - f * 0.5;   // 1.0 -> 0.5
+        let b = f * 0.5;         // 0.0 -> 0.5
+        (r, g, b)
+    } else {
+        let f = (t - 0.5) * 2.0; // 0..1 within second half
+        let r = 0.5 - f * 0.5;   // 0.5 -> 0.0
+        let g = 0.5 - f * 0.5;   // 0.5 -> 0.0
+        let b = 0.5 + f * 0.5;   // 0.5 -> 1.0
+        (r, g, b)
+    };
+    [(r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8]
 }

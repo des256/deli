@@ -86,18 +86,84 @@ impl VideoInDevice for Realsense {
                 )));
             }
 
-            // Get device and serial number
             let device = sys::rs2_create_device(device_list, device_index, &mut err);
             check_rs2_error(err, "Failed to create device")?;
+
+            // Hardware reset (needed on Jetson/embedded)
+            sys::rs2_hardware_reset(device, &mut err);
+            check_rs2_error(err, "Failed to hardware reset device")?;
+
+            sys::rs2_delete_device(device);
+            sys::rs2_delete_device_list(device_list);
+            std::thread::sleep(std::time::Duration::from_secs(3));
+
+            // Re-query devices after reset
+            err = std::ptr::null_mut();
+            let device_list = sys::rs2_query_devices(ctx, &mut err);
+            check_rs2_error(err, "Failed to query devices after reset")?;
+
+            let device = sys::rs2_create_device(device_list, device_index, &mut err);
+            check_rs2_error(err, "Failed to create device after reset")?;
 
             // Create pipeline
             let pipeline = sys::rs2_create_pipeline(ctx, &mut err);
             check_rs2_error(err, "Failed to create pipeline")?;
 
-            // Start with default config (no stream selection) to test basic functionality
-            log::info!("realsense: starting pipeline with default config...");
-            let profile = sys::rs2_pipeline_start(pipeline, &mut err);
-            check_rs2_error(err, "Failed to start pipeline")?;
+            // Create config with explicit stream selection
+            let rs_config = sys::rs2_create_config(&mut err);
+            check_rs2_error(err, "Failed to create config")?;
+
+            // Enable color stream
+            sys::rs2_config_enable_stream(
+                rs_config,
+                sys::rs2_stream_RS2_STREAM_COLOR,
+                -1, // any index
+                color_size.x as i32,
+                color_size.y as i32,
+                sys::rs2_format_RS2_FORMAT_RGB8,
+                frame_rate,
+                &mut err,
+            );
+            check_rs2_error(err, "Failed to enable color stream")?;
+
+            // Enable depth stream if requested
+            if let Some(depth_size) = config.depth {
+                sys::rs2_config_enable_stream(
+                    rs_config,
+                    sys::rs2_stream_RS2_STREAM_DEPTH,
+                    -1,
+                    depth_size.x as i32,
+                    depth_size.y as i32,
+                    sys::rs2_format_RS2_FORMAT_Z16,
+                    frame_rate,
+                    &mut err,
+                );
+                check_rs2_error(err, "Failed to enable depth stream")?;
+            }
+
+            // Enable IR streams if requested
+            if let Some(ir_size) = config.ir {
+                for index in [1, 2] {
+                    sys::rs2_config_enable_stream(
+                        rs_config,
+                        sys::rs2_stream_RS2_STREAM_INFRARED,
+                        index,
+                        ir_size.x as i32,
+                        ir_size.y as i32,
+                        sys::rs2_format_RS2_FORMAT_Y8,
+                        frame_rate,
+                        &mut err,
+                    );
+                    check_rs2_error(err, "Failed to enable IR stream")?;
+                }
+            }
+
+            let profile = sys::rs2_pipeline_start_with_config(pipeline, rs_config, &mut err);
+            if !err.is_null() {
+                sys::rs2_delete_config(rs_config);
+                return check_rs2_error(err, "Failed to start pipeline").map(|_| unreachable!());
+            }
+            sys::rs2_delete_config(rs_config);
 
             // Log device info
             log_device_info(device);
@@ -111,7 +177,6 @@ impl VideoInDevice for Realsense {
             self.context = ctx;
         }
 
-        log::info!("realsense: pipeline started successfully");
         self.has_depth = config.depth.is_some();
         self.has_ir = config.ir.is_some();
 

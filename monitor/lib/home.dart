@@ -136,10 +136,13 @@ class _MonitorHomeState extends State<MonitorHome>
               ],
             ),
           )
-        : const Center(
-            child: Text(
-              'Connecting...',
-              style: TextStyle(color: Colors.white),
+        : const Scaffold(
+            backgroundColor: Colors.black,
+            body: Center(
+              child: Text(
+                'Connecting...',
+                style: TextStyle(color: Colors.white),
+              ),
             ),
           );
   }

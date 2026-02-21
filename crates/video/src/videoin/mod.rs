@@ -84,7 +84,6 @@ impl VideoIn {
 
                 while !cancel.load(Ordering::Relaxed) {
                     // keep pumping frames until capturing fails
-                    log::info!("video worker: starting capture loop");
                     loop {
                         match device.blocking_capture() {
                             Ok(frame) => {
