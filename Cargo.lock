@@ -2601,6 +2601,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "testy"
+version = "0.1.0"
+dependencies = [
+ "audio",
+ "base",
+ "codec",
+ "com",
+ "futures-util",
+ "image 0.1.0",
+ "inference",
+ "tokio",
+ "video",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"

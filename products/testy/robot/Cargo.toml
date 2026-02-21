@@ -1,0 +1,15 @@
+[package]
+name = "testy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base = { path = "../../../crates/base" }
+codec = { path = "../../../crates/codec" }
+com = { path = "../../../crates/com" }
+image = { path = "../../../crates/image" }
+audio = { path = "../../../crates/audio" }
+video = { path = "../../../crates/video", features = ["realsense"] }
+inference = { path = "../../../crates/inference", features = ["cuda"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+futures-util = { version = "0.3", features = ["sink"] }

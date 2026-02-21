@@ -31,9 +31,14 @@ pub(crate) enum ItemData {
     Enum(Vec<Variant>),
 }
 
+pub(crate) struct DartAttrs {
+    pub(crate) target: Option<String>,
+}
+
 pub(crate) struct ParsedItem {
     pub(crate) name: Ident,
     pub(crate) data: ItemData,
+    pub(crate) dart_attrs: DartAttrs,
 }
 
 /// Collect tokens for a type, stopping at a `,` or end of iterator.
@@ -181,13 +186,67 @@ fn parse_variants(group: &proc_macro2::Group) -> Vec<Variant> {
     variants
 }
 
+fn parse_dart_attr(group: &proc_macro2::Group) -> DartAttrs {
+    let tokens: Vec<_> = group.stream().into_iter().collect();
+    let mut attrs = DartAttrs { target: None };
+    let mut i = 0;
+    while i < tokens.len() {
+        if let TokenTree::Ident(id) = &tokens[i] {
+            if id.to_string() == "target" {
+                // expect `=` then a string literal
+                i += 1;
+                if i < tokens.len() {
+                    if let TokenTree::Punct(p) = &tokens[i] {
+                        if p.as_char() == '=' {
+                            i += 1;
+                        }
+                    }
+                }
+                if i < tokens.len() {
+                    if let TokenTree::Literal(lit) = &tokens[i] {
+                        let s = lit.to_string();
+                        // Strip surrounding quotes
+                        if s.starts_with('"') && s.ends_with('"') {
+                            attrs.target = Some(s[1..s.len() - 1].to_string());
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    attrs
+}
+
 fn parse_input(input: TokenStream2) -> ParsedItem {
     let tokens: Vec<_> = input.into_iter().collect();
 
-    // Find 'struct' or 'enum' keyword, skipping attributes and visibility
+    // Extract #[dart(...)] attributes and find 'struct' or 'enum' keyword
+    let mut dart_attrs = DartAttrs { target: None };
     let mut i = 0;
     let mut kind = None;
     while i < tokens.len() {
+        // Check for #[dart(...)]
+        if let TokenTree::Punct(p) = &tokens[i] {
+            if p.as_char() == '#' && i + 1 < tokens.len() {
+                if let TokenTree::Group(bracket) = &tokens[i + 1] {
+                    if bracket.delimiter() == Delimiter::Bracket {
+                        let inner: Vec<_> = bracket.stream().into_iter().collect();
+                        if let Some(TokenTree::Ident(id)) = inner.first() {
+                            if id.to_string() == "dart" {
+                                if let Some(TokenTree::Group(args)) = inner.get(1) {
+                                    if args.delimiter() == Delimiter::Parenthesis {
+                                        dart_attrs = parse_dart_attr(args);
+                                    }
+                                }
+                                i += 2;
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if let TokenTree::Ident(id) = &tokens[i] {
             let s = id.to_string();
             if s == "struct" || s == "enum" {
@@ -236,6 +295,7 @@ fn parse_input(input: TokenStream2) -> ParsedItem {
                     return ParsedItem {
                         name,
                         data: ItemData::Enum(parse_variants(g)),
+                        dart_attrs,
                     };
                 }
             }
@@ -244,7 +304,7 @@ fn parse_input(input: TokenStream2) -> ParsedItem {
         panic!("expected enum body");
     };
 
-    ParsedItem { name, data }
+    ParsedItem { name, data, dart_attrs }
 }
 
 // --- Code generation ---
@@ -386,36 +446,47 @@ pub fn derive_codec(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-#[proc_macro_derive(Dart)]
+fn find_workspace_root(manifest_dir: &str) -> std::path::PathBuf {
+    let mut dir = std::path::PathBuf::from(manifest_dir);
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
+                if contents.contains("[workspace]") {
+                    return dir;
+                }
+            }
+        }
+        if !dir.pop() {
+            return std::path::PathBuf::from(manifest_dir);
+        }
+    }
+}
+
+#[proc_macro_derive(Dart, attributes(dart))]
 pub fn derive_dart(input: TokenStream) -> TokenStream {
     let parsed = parse_input(input.into());
 
     // Generate Dart source code
     let dart_source = dart::generate_dart(&parsed);
 
-    // Resolve output directory: DELI_RSTYPES_PATH or <workspace>/rstypes/lib/src
-    let path = std::env::var("DELI_RSTYPES_PATH").unwrap_or_else(|_| {
-        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
-        let mut dir = std::path::PathBuf::from(&manifest_dir);
-        // Walk up to find workspace root (Cargo.toml with [workspace])
-        loop {
-            let cargo_toml = dir.join("Cargo.toml");
-            if cargo_toml.exists() {
-                if let Ok(contents) = std::fs::read_to_string(&cargo_toml) {
-                    if contents.contains("[workspace]") {
-                        return dir.join("rstypes/lib/src").to_string_lossy().into_owned();
-                    }
-                }
-            }
-            if !dir.pop() {
-                // Fallback to manifest dir if no workspace root found
-                return std::path::PathBuf::from(&manifest_dir)
-                    .join("rstypes/lib/src")
-                    .to_string_lossy()
-                    .into_owned();
-            }
+    // Resolve output directory: #[dart(target = "...")] > DELI_RSTYPES_PATH > <workspace>/rstypes/lib/src
+    let path = if let Some(target) = &parsed.dart_attrs.target {
+        // Resolve relative paths against workspace root
+        let p = std::path::PathBuf::from(target);
+        if p.is_absolute() {
+            target.clone()
+        } else {
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+            let workspace_root = find_workspace_root(&manifest_dir);
+            workspace_root.join(target).to_string_lossy().into_owned()
         }
-    });
+    } else {
+        std::env::var("DELI_RSTYPES_PATH").unwrap_or_else(|_| {
+            let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+            find_workspace_root(&manifest_dir).join("rstypes/lib/src").to_string_lossy().into_owned()
+        })
+    };
 
     // Convert type name to snake_case for filename
     let file_name = dart::to_snake_case(&parsed.name.to_string());
