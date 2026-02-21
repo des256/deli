@@ -1,10 +1,15 @@
 use {
-    base::log,
+    base::{Vec2, log},
     com::WsServer,
-    image::{argb_to_jpeg, rgb_to_jpeg, srggb10p_to_jpeg, yu12_to_jpeg, yuyv_to_jpeg, PixelFormat},
+    image::{PixelFormat, argb_to_jpeg, rgb_to_jpeg, srggb10p_to_jpeg, yu12_to_jpeg, yuyv_to_jpeg},
     server::{Language, ToMonitor},
-    video::VideoIn,
+    video::{VideoIn, VideoInConfig},
 };
+
+#[cfg(feature = "rpicam")]
+use video::rpicam::RpiCamConfig;
+#[cfg(feature = "v4l2")]
+use video::v4l2::V4l2Config;
 
 const DEFAULT_ADDR: &str = "0.0.0.0:5090";
 
@@ -14,8 +19,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log::info!("websocket server: {}", DEFAULT_ADDR);
 
-    // Open default video input
-    let mut videoin = VideoIn::open(None).await?;
+    // Open video input
+    #[cfg(feature = "rpicam")]
+    let mut videoin = VideoIn::open(Some(VideoInConfig::RpiCam(RpiCamConfig {
+        size: Some(Vec2::new(640, 480)),
+        frame_rate: Some(60.0),
+        ..Default::default()
+    })))
+    .await?;
+    #[cfg(all(not(feature = "rpicam"), feature = "v4l2"))]
+    let mut videoin = VideoIn::open(Some(VideoInConfig::V4l2(V4l2Config {
+        size: Some(Vec2::new(640, 480)),
+        frame_rate: Some(60.0),
+        ..Default::default()
+    })))
+    .await?;
     let size = videoin.size();
     log::info!("resolution: {}x{}", size.x, size.y);
     let format = videoin.format();

@@ -7,6 +7,11 @@ edition = "2024"
 name = "server"
 path = "src/main.rs"
 
+[features]
+default = ["v4l2"]
+rpicam = ["video/rpicam"]
+v4l2 = ["video/v4l2"]
+
 [dependencies]
 base = { path = "../../crates/base" }
 video = { path = "../../crates/video" }

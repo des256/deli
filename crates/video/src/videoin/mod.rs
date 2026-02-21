@@ -125,16 +125,16 @@ impl VideoIn {
 
     pub async fn open(config: Option<VideoInConfig>) -> Result<Self, VideoError> {
         // if no config is provided, use a platform default
-        #[cfg(feature = "v4l2")]
-        let config = config.unwrap_or(VideoInConfig::V4l2(v4l2::V4l2Config {
-            path: None,
+        #[cfg(feature = "rpicam")]
+        let config = config.unwrap_or(VideoInConfig::RpiCam(rpicam::RpiCamConfig {
+            index: None,
             size: None,
             format: None,
             frame_rate: None,
         }));
-        #[cfg(all(feature = "rpicam", not(feature = "v4l2")))]
-        let config = config.unwrap_or(VideoInConfig::RpiCam(rpicam::RpiCamConfig {
-            index: None,
+        #[cfg(all(feature = "v4l2", not(feature = "rpicam")))]
+        let config = config.unwrap_or(VideoInConfig::V4l2(v4l2::V4l2Config {
+            path: None,
             size: None,
             format: None,
             frame_rate: None,

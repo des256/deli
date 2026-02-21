@@ -1,8 +1,4 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
-
-import 'package:rstypes/rstypes.dart';
 
 import 'config.dart';
 import 'server.dart';
@@ -41,7 +37,6 @@ class _MonitorHomeState extends State<MonitorHome>
 
   @override
   Widget build(BuildContext context) {
-    final data = widget.server.data;
     return widget.server.isConnected
         ? Scaffold(
             backgroundColor: Colors.black,

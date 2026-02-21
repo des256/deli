@@ -1,12 +1,12 @@
 use crate::*;
 
 // fourcc codes
-pub(crate) const FOURCC_RGB8: u32 = u32::from_le_bytes(*b"RGB8");
-pub(crate) const FOURCC_ARGB8: u32 = u32::from_le_bytes(*b"ARGB");
-pub(crate) const FOURCC_YUYV: u32 = u32::from_le_bytes(*b"YUYV");
-pub(crate) const FOURCC_MJPG: u32 = u32::from_le_bytes(*b"MJPG");
-pub(crate) const FOURCC_SRGGB10P: u32 = u32::from_le_bytes(*b"pRAA");
-pub(crate) const FOURCC_YU12: u32 = u32::from_le_bytes(*b"YU12");
+pub const FOURCC_RGB8: u32 = u32::from_le_bytes(*b"RGB8");
+pub const FOURCC_ARGB8: u32 = u32::from_le_bytes(*b"ARGB");
+pub const FOURCC_YUYV: u32 = u32::from_le_bytes(*b"YUYV");
+pub const FOURCC_MJPG: u32 = u32::from_le_bytes(*b"MJPG");
+pub const FOURCC_SRGGB10P: u32 = u32::from_le_bytes(*b"pRAA");
+pub const FOURCC_YU12: u32 = u32::from_le_bytes(*b"YU12");
 
 /// Convert a fourcc code to a readable 4-character string.
 pub fn fourcc_to_string(fourcc: u32) -> String {
@@ -24,15 +24,18 @@ pub enum PixelFormat {
 }
 
 impl PixelFormat {
-    pub fn from_fourcc(fourcc: u32) -> Self {
+    pub fn from_fourcc(fourcc: u32) -> Result<Self, ImageError> {
         match u32::from_le_bytes(fourcc.to_le_bytes()) {
-            FOURCC_RGB8 => PixelFormat::Rgb8,
-            FOURCC_ARGB8 => PixelFormat::Argb8,
-            FOURCC_YUYV => PixelFormat::Yuyv,
-            FOURCC_YU12 => PixelFormat::Yu12,
-            FOURCC_SRGGB10P => PixelFormat::Srggb10p,
-            FOURCC_MJPG => PixelFormat::Jpeg,
-            _ => panic!("Unsupported pixel format: {}", fourcc),
+            FOURCC_RGB8 => Ok(PixelFormat::Rgb8),
+            FOURCC_ARGB8 => Ok(PixelFormat::Argb8),
+            FOURCC_YUYV => Ok(PixelFormat::Yuyv),
+            FOURCC_YU12 => Ok(PixelFormat::Yu12),
+            FOURCC_SRGGB10P => Ok(PixelFormat::Srggb10p),
+            FOURCC_MJPG => Ok(PixelFormat::Jpeg),
+            _ => Err(ImageError::Decode(format!(
+                "Unsupported pixel format: {}",
+                fourcc_to_string(fourcc)
+            ))),
         }
     }
 

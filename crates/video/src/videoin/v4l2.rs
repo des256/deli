@@ -1,7 +1,7 @@
 use {
     crate::*,
     base::Vec2,
-    image::{Image, PixelFormat, fourcc_to_string},
+    image::{Image, PixelFormat},
     std::path::PathBuf,
     v4l::{
         Device, Format, FourCC, buffer::Type, io::mmap::Stream as MmapStream,
@@ -9,7 +9,7 @@ use {
     },
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct V4l2Config {
     pub path: Option<PathBuf>,
     pub size: Option<Vec2<usize>>,
@@ -90,18 +90,7 @@ impl VideoInDevice for V4l2 {
 
         // extract size and pixel format
         self.size = Vec2::new(actual_format.width as usize, actual_format.height as usize);
-        self.format = match u32::from_le_bytes(actual_format.fourcc.repr) {
-            FOURCC_YUYV => PixelFormat::Yuyv,
-            FOURCC_MJPG => PixelFormat::Jpeg,
-            FOURCC_SRGGB10P => PixelFormat::Srggb10p,
-            FOURCC_YU12 => PixelFormat::Yu12,
-            _ => {
-                return Err(VideoError::Device(format!(
-                    "Unsupported pixel format: {}",
-                    fourcc_to_string(u32::from_le_bytes(actual_format.fourcc.repr))
-                )));
-            }
-        };
+        self.format = PixelFormat::from_fourcc(u32::from_le_bytes(actual_format.fourcc.repr))?;
 
         // build frame rate
         let desired_frame_rate = match config.frame_rate {

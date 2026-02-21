@@ -9,7 +9,7 @@ use {
     std::sync::{Arc, mpsc},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RpiCamConfig {
     pub index: Option<usize>,
     pub size: Option<Vec2<usize>>,
@@ -49,7 +49,7 @@ impl Drop for MmapBuffer {
 
 struct PendingFrame {
     cookie: usize,
-    frame: VideoFrame,
+    frame: Option<VideoFrame>,
 }
 
 pub(crate) struct RpiCamera {
@@ -100,24 +100,12 @@ impl VideoInDevice for RpiCamera {
         let mut camera = manager.get_camera(index)?;
         camera.acquire()?;
 
-        // Generate configuration for video recording
+        // Generate and apply configuration
         let mut cam_config = camera.generate_configuration(&[StreamRole::VideoRecording])?;
-
-        // Apply requested pixel format and size
         {
             let mut sc = cam_config.at(0)?;
             if let Some(format) = &config.format {
-                let fourcc = match format {
-                    ImagePixelFormat::Yuyv => FOURCC_YUYV,
-                    ImagePixelFormat::Jpeg => FOURCC_MJPG,
-                    ImagePixelFormat::Srggb10p => FOURCC_SRGGB10P,
-                    ImagePixelFormat::Yu12 => FOURCC_YU12,
-                    ImagePixelFormat::Rgb8 | ImagePixelFormat::Argb8 => {
-                        return Err(VideoError::Device(
-                            "RGB formats are not supported for RPi camera capture".to_string(),
-                        ))
-                    }
-                };
+                let fourcc = format.as_fourcc();
                 sc.set_pixel_format(PixelFormat::from_fourcc(fourcc));
             }
             if let Some(size) = &config.size {
@@ -125,8 +113,8 @@ impl VideoInDevice for RpiCamera {
             }
         }
 
-        // Validate and apply configuration
-        match cam_config.validate()? {
+        let validate_status = cam_config.validate()?;
+        match validate_status {
             ConfigStatus::Invalid => {
                 return Err(VideoError::Device(
                     "Invalid camera configuration".to_string(),
@@ -141,18 +129,7 @@ impl VideoInDevice for RpiCamera {
         {
             let sc = cam_config.at(0)?;
             let pf = sc.pixel_format();
-            actual_format = match pf.fourcc {
-                FOURCC_YUYV => ImagePixelFormat::Yuyv,
-                FOURCC_MJPG => ImagePixelFormat::Jpeg,
-                FOURCC_SRGGB10P => ImagePixelFormat::Srggb10p,
-                FOURCC_YU12 => ImagePixelFormat::Yu12,
-                other => {
-                    return Err(VideoError::Device(format!(
-                        "Unsupported pixel format: {}",
-                        super::fourcc_to_string(other)
-                    )));
-                }
-            };
+            actual_format = ImagePixelFormat::from_fourcc(pf.fourcc)?;
             let sz = sc.size();
             actual_size = Vec2::new(sz.width as usize, sz.height as usize);
             stream = sc
@@ -166,24 +143,34 @@ impl VideoInDevice for RpiCamera {
         let allocator = FrameBufferAllocator::new(&camera);
         let buffer_count = allocator.allocate(&stream)?;
 
-        // Get buffer handles and mmap each buffer's first plane
+        // Get buffer handles and mmap each buffer covering all planes
         let mut buffers = Vec::with_capacity(buffer_count);
         let mut mmap_buffers = Vec::with_capacity(buffer_count);
 
         for i in 0..buffer_count {
             let buffer = allocator.get_buffer(&stream, i)?;
-            let plane = buffer
+            let plane0 = buffer
                 .plane(0)
                 .ok_or(VideoError::Device(format!("Buffer {i} has no planes")))?;
 
-            let mmap_len = (plane.offset as usize) + (plane.length as usize);
+            // Find the total extent across all planes (they share the same fd)
+            let mut mmap_len = (plane0.offset as usize) + (plane0.length as usize);
+            for p in 1..buffer.planes_count() {
+                if let Some(plane) = buffer.plane(p) {
+                    let end = (plane.offset as usize) + (plane.length as usize);
+                    if end > mmap_len {
+                        mmap_len = end;
+                    }
+                }
+            }
+
             let ptr = unsafe {
                 libc::mmap(
                     std::ptr::null_mut(),
                     mmap_len,
                     libc::PROT_READ,
                     libc::MAP_SHARED,
-                    plane.fd,
+                    plane0.fd,
                     0,
                 )
             };
@@ -198,8 +185,8 @@ impl VideoInDevice for RpiCamera {
             mmap_buffers.push(MmapBuffer {
                 base: ptr,
                 base_len: mmap_len,
-                data_offset: plane.offset as usize,
-                data_len: plane.length as usize,
+                data_offset: 0,
+                data_len: mmap_len,
             });
             buffers.push(buffer);
         }
@@ -222,37 +209,39 @@ impl VideoInDevice for RpiCamera {
         let cb_format = actual_format;
 
         camera.on_request_completed(move |completed| {
-            let Some(buffer) = completed.find_buffer(&stream_cb) else {
-                return;
-            };
-            if buffer.metadata().status != FrameStatus::Success {
-                return;
-            }
-
             let cookie = completed.cookie() as usize;
-            if cookie >= mmaps_cb.len() {
-                return;
-            }
 
-            let raw_data = mmaps_cb[cookie].data();
-
-            let data = match cb_format {
-                ImagePixelFormat::Yuyv => {
-                    let expected = cb_size.x * cb_size.y * 2;
-                    raw_data[..expected.min(raw_data.len())].to_vec()
+            let frame = (|| -> Option<VideoFrame> {
+                let buffer = completed.find_buffer(&stream_cb)?;
+                if buffer.metadata().status != FrameStatus::Success {
+                    return None;
                 }
-                ImagePixelFormat::Jpeg => raw_data.to_vec(),
-                ImagePixelFormat::Srggb10p => raw_data.to_vec(),
-                ImagePixelFormat::Yu12 => {
-                    let expected = cb_size.x * cb_size.y * 3 / 2;
-                    raw_data[..expected.min(raw_data.len())].to_vec()
+                if cookie >= mmaps_cb.len() {
+                    return None;
                 }
-                _ => return, // Unreachable: Rgb8/Argb8 rejected in open()
-            };
 
-            let image = Image::new(cb_size, data, cb_format);
-            let frame = VideoFrame { image };
+                let raw_data = mmaps_cb[cookie].data();
 
+                let data = match cb_format {
+                    ImagePixelFormat::Yuyv => {
+                        let expected = cb_size.x * cb_size.y * 2;
+                        raw_data[..expected.min(raw_data.len())].to_vec()
+                    }
+                    ImagePixelFormat::Jpeg => raw_data.to_vec(),
+                    ImagePixelFormat::Srggb10p => raw_data.to_vec(),
+                    ImagePixelFormat::Yu12 => {
+                        let expected = cb_size.x * cb_size.y * 3 / 2;
+                        raw_data[..expected.min(raw_data.len())].to_vec()
+                    }
+                    _ => return None,
+                };
+
+                Some(VideoFrame {
+                    image: Image::new(cb_size, data, cb_format),
+                })
+            })();
+
+            // Always send so the request gets re-queued in blocking_capture
             let _ = frame_tx.send(PendingFrame { cookie, frame });
         });
 
@@ -302,32 +291,33 @@ impl VideoInDevice for RpiCamera {
             .as_ref()
             .ok_or(VideoError::Stream("Camera not open".to_string()))?;
 
-        // Use timeout so the worker thread can check cancel flag and exit cleanly
-        let pending = match frame_rx.recv_timeout(std::time::Duration::from_secs(1)) {
-            Ok(pending) => pending,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                return Err(VideoError::Stream("Capture timeout".to_string()));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(VideoError::Stream("Frame channel closed".to_string()));
-            }
-        };
+        loop {
+            let pending = match frame_rx.recv_timeout(std::time::Duration::from_secs(1)) {
+                Ok(pending) => pending,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(VideoError::Stream("Capture timeout".to_string()));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(VideoError::Stream("Frame channel closed".to_string()));
+                }
+            };
 
-        // Reuse the completed request and re-queue it for the next capture
-        if let (Some(camera), Some(stream)) = (self.camera.as_ref(), self.stream.as_ref()) {
-            if pending.cookie < self.requests.len() {
-                let request = &self.requests[pending.cookie];
-                let buffer = &self.buffers[pending.cookie];
-                request.reuse();
-                request
-                    .add_buffer(stream, buffer)
-                    .map_err(|e| VideoError::Stream(format!("Failed to re-add buffer: {e}")))?;
-                camera
-                    .queue_request(request)
-                    .map_err(|e| VideoError::Stream(format!("Failed to re-queue request: {e}")))?;
+            // Reuse the completed request and re-queue it for the next capture.
+            // Don't re-add the buffer — reuse() preserves buffer associations.
+            if let Some(camera) = self.camera.as_ref() {
+                if pending.cookie < self.requests.len() {
+                    let request = &self.requests[pending.cookie];
+                    request.reuse();
+                    camera.queue_request(request).map_err(|e| {
+                        VideoError::Stream(format!("Failed to re-queue request: {e}"))
+                    })?;
+                }
+            }
+
+            // Skip startup/failed frames, loop to wait for the next one
+            if let Some(frame) = pending.frame {
+                return Ok(frame);
             }
         }
-
-        Ok(pending.frame)
     }
 }
