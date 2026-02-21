@@ -135,8 +135,8 @@ impl VideoInDevice for V4l2 {
         if let Some(ref mut stream) = self.stream.as_mut() {
             match CaptureStream::next(*stream) {
                 Ok((frame_data, _metadata)) => {
-                    let image = Image::new(self.size, frame_data.to_vec(), self.format);
-                    Ok(VideoFrame { image })
+                    let color = Image::new(self.size, frame_data.to_vec(), self.format);
+                    Ok(VideoFrame { color, depth: None, left: None, right: None })
                 }
                 Err(error) => Err(VideoError::Stream(error.to_string())),
             }

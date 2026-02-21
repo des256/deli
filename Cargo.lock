@@ -2144,19 +2144,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "realsense-rust"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7595b5cfd3d9c7f11419904869f85aa1813ac501bdb8a519ed34a8ba2b463609"
-dependencies = [
- "anyhow",
- "num-derive",
- "num-traits",
- "realsense-sys",
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "realsense-sys"
 version = "2.56.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2978,7 +2965,7 @@ dependencies = [
  "libc",
  "log",
  "minifb",
- "realsense-rust",
+ "realsense-sys",
  "shiguredo_libcamera",
  "tokio",
  "v4l",

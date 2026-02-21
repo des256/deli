@@ -237,7 +237,10 @@ impl VideoInDevice for RpiCamera {
                 };
 
                 Some(VideoFrame {
-                    image: Image::new(cb_size, data, cb_format),
+                    color: Image::new(cb_size, data, cb_format),
+                    depth: None,
+                    left: None,
+                    right: None,
                 })
             })();
 

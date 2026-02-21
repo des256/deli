@@ -6,9 +6,9 @@ use {
 };
 
 fn frame_to_u32(frame: &VideoFrame) -> Vec<u32> {
-    let size = frame.image.size;
-    let data = &frame.image.data;
-    match frame.image.format {
+    let size = frame.color.size;
+    let data = &frame.color.data;
+    match frame.color.format {
         PixelFormat::Yuyv => yuyv_to_u32(size, data),
         PixelFormat::Srggb10p => srggb10p_to_u32(size, data),
         PixelFormat::Yu12 => yu12_to_u32(size, data),
@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while window.is_open() && !window.is_key_down(Key::Escape) {
         let frame = videoin.capture().await?;
         let buf = frame_to_u32(&frame);
-        window.update_with_buffer(&buf, frame.image.size.x, frame.image.size.y)?;
+        window.update_with_buffer(&buf, frame.color.size.x, frame.color.size.y)?;
     }
 
     Ok(())

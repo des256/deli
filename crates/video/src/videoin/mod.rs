@@ -25,12 +25,7 @@ pub enum VideoInConfig {
     #[cfg(feature = "rpicam")]
     RpiCam(rpicam::RpiCamConfig),
     #[cfg(feature = "realsense")]
-    Realsense {
-        index: Option<usize>,
-        size: Option<Vec2<usize>>,
-        format: Option<PixelFormat>,
-        frame_rate: Option<f32>,
-    },
+    Realsense(realsense::RealsenseConfig),
 }
 
 pub(crate) trait VideoInDevice: Send {
@@ -57,31 +52,57 @@ impl VideoIn {
             #[cfg(feature = "rpicam")]
             VideoInConfig::RpiCam(_) => Ok(Box::new(rpicam::RpiCamera::new())),
             #[cfg(feature = "realsense")]
-            VideoInConfig::Realsense { .. } => Ok(Box::new(realsense::Realsense::new())),
+            VideoInConfig::Realsense(_) => Ok(Box::new(realsense::Realsense::new())),
         }
     }
 
-    fn spawn_worker(
+    async fn spawn_worker(
         sender: mpsc::Sender<VideoFrame>,
         config: VideoInConfig,
         cancel: Arc<AtomicBool>,
     ) -> Result<(JoinHandle<()>, VideoInConfig), VideoError> {
         let mut device = Self::create_device(&config)?;
-        let config = device.open(&config)?;
+
+        // Send the resolved config back from the worker thread via oneshot channel.
+        // device.open() must run on the same OS thread as blocking_capture() because
+        // some backends (e.g. librealsense2) have thread affinity requirements.
+        let (init_tx, init_rx) = tokio::sync::oneshot::channel::<Result<VideoInConfig, VideoError>>();
+
         let join_handle = spawn_blocking({
-            let mut config = config.clone();
             move || {
+                // Open device on the worker thread
+                let mut config = match device.open(&config) {
+                    Ok(config) => {
+                        let _ = init_tx.send(Ok(config.clone()));
+                        config
+                    }
+                    Err(e) => {
+                        let _ = init_tx.send(Err(e));
+                        return;
+                    }
+                };
+
                 while !cancel.load(Ordering::Relaxed) {
                     // keep pumping frames until capturing fails
-                    while let Ok(frame) = device.blocking_capture() {
-                        if let Err(error) = sender.blocking_send(frame) {
-                            log::error!("Failed to send video frame: {}", error);
-                            return; // main closed the channel, so drop everything
+                    log::info!("video worker: starting capture loop");
+                    loop {
+                        match device.blocking_capture() {
+                            Ok(frame) => {
+                                if let Err(error) = sender.blocking_send(frame) {
+                                    log::error!("Failed to send video frame: {}", error);
+                                    return; // main closed the channel, so drop everything
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("video worker: capture failed: {}", e);
+                                break;
+                            }
                         }
                     }
 
                     // close, wait, and reopen the device
                     while !cancel.load(Ordering::Relaxed) {
+                        log::info!("video worker: reconnecting...");
                         device.close();
                         std::thread::sleep(std::time::Duration::from_millis(
                             WAIT_BEFORE_RECONNECT_MS,
@@ -96,6 +117,11 @@ impl VideoIn {
                 device.close();
             }
         });
+
+        let config = init_rx
+            .await
+            .map_err(|_| VideoError::Device("Worker thread died during init".to_string()))??;
+
         Ok((join_handle, config))
     }
 
@@ -114,12 +140,11 @@ impl VideoIn {
                 config.frame_rate.unwrap(),
             ),
             #[cfg(feature = "realsense")]
-            VideoInConfig::Realsense {
-                size,
-                format,
-                frame_rate,
-                ..
-            } => (size.unwrap(), format.unwrap(), frame_rate.unwrap()),
+            VideoInConfig::Realsense(config) => (
+                config.color.unwrap(),
+                PixelFormat::Rgb8,
+                config.frame_rate.unwrap(),
+            ),
         }
     }
 
@@ -139,6 +164,14 @@ impl VideoIn {
             format: None,
             frame_rate: None,
         }));
+        #[cfg(all(feature = "realsense", not(feature = "rpicam"), not(feature = "v4l2")))]
+        let config = config.unwrap_or(VideoInConfig::Realsense(realsense::RealsenseConfig {
+            index: None,
+            color: None,
+            depth: None,
+            ir: None,
+            frame_rate: None,
+        }));
 
         // channel for receiving video frames
         let (sender, receiver) = mpsc::channel::<VideoFrame>(CHANNEL_CAPACITY);
@@ -148,7 +181,7 @@ impl VideoIn {
 
         // spawn the worker
         let (join_handle, config) =
-            Self::spawn_worker(sender.clone(), config.clone(), Arc::clone(&cancel))?;
+            Self::spawn_worker(sender.clone(), config.clone(), Arc::clone(&cancel)).await?;
 
         let (size, format, frame_rate) = Self::decode_config(config);
 
@@ -188,7 +221,8 @@ impl VideoIn {
             self.sender.clone(),
             config.clone(),
             Arc::clone(&self.cancel),
-        )?;
+        )
+        .await?;
         self.join_handle = Some(join_handle);
         let (size, format, frame_rate) = Self::decode_config(config);
         self.size = size;

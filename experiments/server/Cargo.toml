@@ -11,6 +11,7 @@ path = "src/main.rs"
 default = ["v4l2"]
 rpicam = ["video/rpicam"]
 v4l2 = ["video/v4l2"]
+realsense = ["video/realsense"]
 
 [dependencies]
 base = { path = "../../crates/base" }

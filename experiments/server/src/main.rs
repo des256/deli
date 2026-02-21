@@ -6,6 +6,8 @@ use {
     video::{VideoIn, VideoInConfig},
 };
 
+#[cfg(feature = "realsense")]
+use video::realsense::RealsenseConfig;
 #[cfg(feature = "rpicam")]
 use video::rpicam::RpiCamConfig;
 #[cfg(feature = "v4l2")]
@@ -23,14 +25,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "rpicam")]
     let mut videoin = VideoIn::open(Some(VideoInConfig::RpiCam(RpiCamConfig {
         size: Some(Vec2::new(640, 480)),
-        frame_rate: Some(60.0),
+        frame_rate: Some(30.0),
         ..Default::default()
     })))
     .await?;
-    #[cfg(all(not(feature = "rpicam"), feature = "v4l2"))]
+    #[cfg(feature = "realsense")]
+    let mut videoin = VideoIn::open(Some(VideoInConfig::Realsense(RealsenseConfig {
+        color: Some(Vec2::new(640, 480)),
+        frame_rate: Some(30.0),
+        ..Default::default()
+    })))
+    .await?;
+    #[cfg(all(not(feature = "rpicam"), not(feature = "realsense"), feature = "v4l2"))]
     let mut videoin = VideoIn::open(Some(VideoInConfig::V4l2(V4l2Config {
         size: Some(Vec2::new(640, 480)),
-        frame_rate: Some(60.0),
+        frame_rate: Some(30.0),
         ..Default::default()
     })))
     .await?;
@@ -46,14 +55,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut prev_client_count = 0;
 
+    let mut frame_count: u64 = 0;
+
     loop {
         // Capture frame
+        log::info!("waiting for frame...");
         let frame = videoin.capture().await?;
+        frame_count += 1;
+        log::info!(
+            "frame {} received: {}x{} {:?}, {} bytes",
+            frame_count,
+            frame.color.size.x,
+            frame.color.size.y,
+            frame.color.format,
+            frame.color.data.len(),
+        );
 
         // convert to JPEG if needed
-        let size = frame.image.size;
-        let data = &frame.image.data;
-        let jpeg = match frame.image.format {
+        let size = frame.color.size;
+        let data = &frame.color.data;
+        let jpeg = match frame.color.format {
             PixelFormat::Jpeg => data.clone(),
             PixelFormat::Yuyv => yuyv_to_jpeg(size, data, 80),
             PixelFormat::Srggb10p => srggb10p_to_jpeg(size, data, 80),
@@ -61,6 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PixelFormat::Rgb8 => rgb_to_jpeg(size, data, 80),
             PixelFormat::Argb8 => argb_to_jpeg(size, data, 80),
         };
+        log::info!("jpeg encoded: {} bytes", jpeg.len());
 
         // Broadcast frame to monitor
         server.send(&ToMonitor::VideoJpeg(jpeg)).await?;
