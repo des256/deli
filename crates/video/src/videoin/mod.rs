@@ -1,6 +1,7 @@
 use {
     crate::*,
     base::Vec2,
+    image::PixelFormat,
     std::sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -27,7 +28,7 @@ pub enum VideoInConfig {
     Realsense {
         index: Option<usize>,
         size: Option<Vec2<usize>>,
-        format: Option<VideoFormat>,
+        format: Option<PixelFormat>,
         frame_rate: Option<f32>,
     },
 }
@@ -43,7 +44,7 @@ pub struct VideoIn {
     receiver: mpsc::Receiver<VideoFrame>,
     cancel: Arc<AtomicBool>,
     size: Vec2<usize>,
-    format: VideoFormat,
+    format: PixelFormat,
     frame_rate: f32,
     join_handle: Option<JoinHandle<()>>,
 }
@@ -56,7 +57,7 @@ impl VideoIn {
             #[cfg(feature = "rpicam")]
             VideoInConfig::RpiCam(_) => Ok(Box::new(rpicam::RpiCamera::new())),
             #[cfg(feature = "realsense")]
-            VideoInConfig::Realsense(_) => Ok(Box::new(realsense::Realsense::new())),
+            VideoInConfig::Realsense { .. } => Ok(Box::new(realsense::Realsense::new())),
         }
     }
 
@@ -98,7 +99,7 @@ impl VideoIn {
         Ok((join_handle, config))
     }
 
-    fn decode_config(config: VideoInConfig) -> (Vec2<usize>, VideoFormat, f32) {
+    fn decode_config(config: VideoInConfig) -> (Vec2<usize>, PixelFormat, f32) {
         match config {
             #[cfg(feature = "v4l2")]
             VideoInConfig::V4l2(config) => (
@@ -166,7 +167,7 @@ impl VideoIn {
         self.size
     }
 
-    pub fn format(&self) -> VideoFormat {
+    pub fn format(&self) -> PixelFormat {
         self.format
     }
 

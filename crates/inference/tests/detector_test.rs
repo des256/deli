@@ -28,11 +28,12 @@ async fn test_pose_detector_with_real_model() {
         .expect("Failed to load real model");
 
     // Create a synthetic 480x640 RGB frame (all 128s — gray)
-    let data = vec![128.0f32; 480 * 640 * 3];
-    let frame = base::Tensor::new(vec![480, 640, 3], data).unwrap();
+    let data = vec![128u8; 480 * 640 * 3];
+    let size = base::Vec2::new(640, 480);
+    let frame = Image::new(size, data, image::PixelFormat::Rgb8);
 
     // Send image via Sink and close
-    detector.send(Image::F32(frame)).await.expect("Send failed");
+    detector.send(frame).await.expect("Send failed");
     detector.close().await.expect("Close failed");
 
     // Read detection result from Stream

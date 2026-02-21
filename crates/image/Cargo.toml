@@ -13,7 +13,3 @@ crates_image = { package = "image", version = "0.25", default-features = false, 
     "tiff",
     "webp",
 ] }
-tokio = { version = "1", features = ["rt"] }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros"] }

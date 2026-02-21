@@ -1,21 +1,7 @@
-use base::Vec2;
-
-#[derive(Debug, Clone, Copy)]
-pub enum VideoFormat {
-    Yuyv,
-    Jpeg,
-    Srggb10p,
-}
-
-#[derive(Debug, Clone)]
-pub enum VideoData {
-    Yuyv(Vec<u8>),
-    Jpeg(Vec<u8>),
-    Srggb10p(Vec<u8>),
-}
+use image::Image;
 
 #[derive(Debug, Clone)]
 pub struct VideoFrame {
-    pub data: VideoData,
-    pub size: Vec2<usize>,
+    pub image: Image,
+    // TODO: timestamp
 }

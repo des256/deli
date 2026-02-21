@@ -1,30 +1,14 @@
-use base::Tensor;
+use {crate::*, base::Vec2};
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Image {
-    U8(Tensor<u8>),
-    U16(Tensor<u16>),
-    F32(Tensor<f32>),
+#[derive(Debug, Clone)]
+pub struct Image {
+    pub size: Vec2<usize>,
+    pub data: Vec<u8>,
+    pub format: PixelFormat,
 }
 
 impl Image {
-    pub fn shape(&self) -> &[usize] {
-        match self {
-            Image::U8(t) => &t.shape,
-            Image::U16(t) => &t.shape,
-            Image::F32(t) => &t.shape,
-        }
-    }
-
-    pub fn height(&self) -> usize {
-        self.shape()[0]
-    }
-
-    pub fn width(&self) -> usize {
-        self.shape()[1]
-    }
-
-    pub fn channels(&self) -> usize {
-        self.shape()[2]
+    pub fn new(size: Vec2<usize>, data: Vec<u8>, format: PixelFormat) -> Self {
+        Self { size, data, format }
     }
 }

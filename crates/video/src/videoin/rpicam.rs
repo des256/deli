@@ -1,6 +1,7 @@
 use {
     crate::*,
     base::Vec2,
+    image::{Image, PixelFormat as ImagePixelFormat},
     shiguredo_libcamera::{
         Camera, CameraManager, ConfigStatus, FrameBuffer, FrameBufferAllocator, FrameStatus,
         PixelFormat, Request, Size, Stream, StreamRole,
@@ -8,15 +9,11 @@ use {
     std::sync::{Arc, mpsc},
 };
 
-const FOURCC_YUYV: u32 = u32::from_le_bytes(*b"YUYV");
-const FOURCC_MJPG: u32 = u32::from_le_bytes(*b"MJPG");
-const FOURCC_SRGGB10P: u32 = u32::from_le_bytes(*b"pRAA");
-
 #[derive(Debug, Clone)]
 pub struct RpiCamConfig {
     pub index: Option<usize>,
     pub size: Option<Vec2<usize>>,
-    pub format: Option<VideoFormat>,
+    pub format: Option<ImagePixelFormat>,
     pub frame_rate: Option<f32>,
 }
 
@@ -111,9 +108,15 @@ impl VideoInDevice for RpiCamera {
             let mut sc = cam_config.at(0)?;
             if let Some(format) = &config.format {
                 let fourcc = match format {
-                    VideoFormat::Yuyv => FOURCC_YUYV,
-                    VideoFormat::Jpeg => FOURCC_MJPG,
-                    VideoFormat::Srggb10p => FOURCC_SRGGB10P,
+                    ImagePixelFormat::Yuyv => FOURCC_YUYV,
+                    ImagePixelFormat::Jpeg => FOURCC_MJPG,
+                    ImagePixelFormat::Srggb10p => FOURCC_SRGGB10P,
+                    ImagePixelFormat::Yu12 => FOURCC_YU12,
+                    ImagePixelFormat::Rgb8 | ImagePixelFormat::Argb8 => {
+                        return Err(VideoError::Device(
+                            "RGB formats are not supported for RPi camera capture".to_string(),
+                        ))
+                    }
                 };
                 sc.set_pixel_format(PixelFormat::from_fourcc(fourcc));
             }
@@ -139,12 +142,14 @@ impl VideoInDevice for RpiCamera {
             let sc = cam_config.at(0)?;
             let pf = sc.pixel_format();
             actual_format = match pf.fourcc {
-                FOURCC_YUYV => VideoFormat::Yuyv,
-                FOURCC_MJPG => VideoFormat::Jpeg,
+                FOURCC_YUYV => ImagePixelFormat::Yuyv,
+                FOURCC_MJPG => ImagePixelFormat::Jpeg,
+                FOURCC_SRGGB10P => ImagePixelFormat::Srggb10p,
+                FOURCC_YU12 => ImagePixelFormat::Yu12,
                 other => {
                     return Err(VideoError::Device(format!(
                         "Unsupported pixel format: {}",
-                        other
+                        super::fourcc_to_string(other)
                     )));
                 }
             };
@@ -231,24 +236,22 @@ impl VideoInDevice for RpiCamera {
 
             let raw_data = mmaps_cb[cookie].data();
 
-            let frame = match cb_format {
-                VideoFormat::Yuyv => {
+            let data = match cb_format {
+                ImagePixelFormat::Yuyv => {
                     let expected = cb_size.x * cb_size.y * 2;
-                    let bytes = &raw_data[..expected.min(raw_data.len())];
-                    VideoFrame {
-                        data: VideoData::Yuyv(bytes.to_vec()),
-                        size: cb_size,
-                    }
+                    raw_data[..expected.min(raw_data.len())].to_vec()
                 }
-                VideoFormat::Jpeg => VideoFrame {
-                    data: VideoData::Jpeg(raw_data.to_vec()),
-                    size: cb_size,
-                },
-                VideoFormat::Srggb10p => VideoFrame {
-                    data: VideoData::Srggb10p(raw_data.to_vec()),
-                    size: cb_size,
-                },
+                ImagePixelFormat::Jpeg => raw_data.to_vec(),
+                ImagePixelFormat::Srggb10p => raw_data.to_vec(),
+                ImagePixelFormat::Yu12 => {
+                    let expected = cb_size.x * cb_size.y * 3 / 2;
+                    raw_data[..expected.min(raw_data.len())].to_vec()
+                }
+                _ => return, // Unreachable: Rgb8/Argb8 rejected in open()
             };
+
+            let image = Image::new(cb_size, data, cb_format);
+            let frame = VideoFrame { image };
 
             let _ = frame_tx.send(PendingFrame { cookie, frame });
         });

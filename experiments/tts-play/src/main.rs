@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Generated {} samples", tensor.data.len());
 
     // Create AudioOut and play samples
-    let mut audioout = AudioOut::open().await;
+    let mut audioout = AudioOut::open(None).await;
     audioout
         .select(AudioOutConfig {
             sample_rate: SAMPLE_RATE,

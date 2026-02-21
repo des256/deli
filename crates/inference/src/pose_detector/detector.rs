@@ -94,7 +94,7 @@ impl PoseDetector {
         self.inflight = Some(Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 use candle_nn::Module;
-                let frame = image_to_f32(image);
+                let frame = image_to_f32(image)?;
                 let (preprocessed, original_hw, model_hw) = preprocess(&frame, &device)?;
                 let output = model.forward(&preprocessed).map_err(InferError::from)?;
                 postprocess(
@@ -113,18 +113,19 @@ impl PoseDetector {
 }
 
 /// Convert an `Image` to `Tensor<f32>` in the 0-255 range expected by `preprocess`.
-fn image_to_f32(image: Image) -> Tensor<f32> {
-    match image {
-        Image::F32(t) => t,
-        Image::U8(t) => {
-            let data = t.data.iter().map(|&v| v as f32).collect();
-            Tensor::new(t.shape.clone(), data).unwrap()
-        }
-        Image::U16(t) => {
-            let data = t.data.iter().map(|&v| v as f32 / 257.0).collect();
-            Tensor::new(t.shape.clone(), data).unwrap()
-        }
+/// Only accepts Rgb8 format. Other formats must be converted first.
+fn image_to_f32(image: Image) -> Result<Tensor<f32>, InferError> {
+    if image.format != image::PixelFormat::Rgb8 {
+        return Err(InferError::Runtime(format!(
+            "image_to_f32 requires Rgb8 format, got {:?}",
+            image.format
+        )));
     }
+
+    let data: Vec<f32> = image.data.iter().map(|&v| v as f32).collect();
+    let shape = vec![image.size.y, image.size.x, 3];
+    Tensor::new(shape, data)
+        .map_err(|e| InferError::Runtime(format!("failed to create tensor: {e}")))
 }
 
 impl Sink<Image> for PoseDetector {
@@ -391,11 +392,12 @@ mod tests {
         use futures_util::{SinkExt, StreamExt};
 
         let mut detector = test_detector();
-        let data = vec![128.0f32; 64 * 64 * 3];
-        let frame = Tensor::new(vec![64, 64, 3], data).unwrap();
+        let data = vec![128u8; 64 * 64 * 3];
+        let size = base::Vec2::new(64, 64);
+        let frame = Image::new(size, data, image::PixelFormat::Rgb8);
 
         // Send image via Sink and close
-        detector.send(Image::F32(frame)).await.unwrap();
+        detector.send(frame).await.unwrap();
         detector.close().await.unwrap();
 
         // With random (zero) weights, inference should complete without panic

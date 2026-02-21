@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Whisper model loaded");
 
     // Create audio input
-    let mut audioin = AudioIn::open().await;
+    let mut audioin = AudioIn::open(None).await;
 
     // Main loop with Ctrl+C handling
     loop {

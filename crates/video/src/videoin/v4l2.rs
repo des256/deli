@@ -1,6 +1,7 @@
 use {
     crate::*,
     base::Vec2,
+    image::{Image, PixelFormat, fourcc_to_string},
     std::path::PathBuf,
     v4l::{
         Device, Format, FourCC, buffer::Type, io::mmap::Stream as MmapStream,
@@ -12,7 +13,7 @@ use {
 pub struct V4l2Config {
     pub path: Option<PathBuf>,
     pub size: Option<Vec2<usize>>,
-    pub format: Option<VideoFormat>,
+    pub format: Option<PixelFormat>,
     pub frame_rate: Option<f32>,
 }
 
@@ -20,7 +21,7 @@ pub(crate) struct V4l2 {
     stream: Option<MmapStream<'static>>,
     path: Option<PathBuf>,
     size: Vec2<usize>,
-    format: VideoFormat,
+    format: PixelFormat,
     frame_rate: f32,
 }
 
@@ -30,7 +31,7 @@ impl V4l2 {
             stream: None,
             path: None,
             size: Vec2::new(0, 0),
-            format: VideoFormat::Yuyv,
+            format: PixelFormat::Yuyv,
             frame_rate: 0.0,
         }
     }
@@ -68,9 +69,15 @@ impl VideoInDevice for V4l2 {
         // build pixel format
         let desired_fourcc = match &config.format {
             Some(format) => match format {
-                VideoFormat::Yuyv => FourCC::new(b"YUYV"),
-                VideoFormat::Jpeg => FourCC::new(b"MJPG"),
-                VideoFormat::Srggb10p => FourCC::new(b"pRAA"),
+                PixelFormat::Yuyv => FourCC::new(b"YUYV"),
+                PixelFormat::Jpeg => FourCC::new(b"MJPG"),
+                PixelFormat::Srggb10p => FourCC::new(b"pRAA"),
+                PixelFormat::Yu12 => FourCC::new(b"YU12"),
+                PixelFormat::Rgb8 | PixelFormat::Argb8 => {
+                    return Err(VideoError::Device(
+                        "RGB formats are not supported for V4L2 capture".to_string(),
+                    ));
+                }
             },
             None => device_format.fourcc,
         };
@@ -83,14 +90,15 @@ impl VideoInDevice for V4l2 {
 
         // extract size and pixel format
         self.size = Vec2::new(actual_format.width as usize, actual_format.height as usize);
-        self.format = match &actual_format.fourcc.repr {
-            b"YUYV" => VideoFormat::Yuyv,
-            b"MJPG" => VideoFormat::Jpeg,
-            b"pRAA" => VideoFormat::Srggb10p,
+        self.format = match u32::from_le_bytes(actual_format.fourcc.repr) {
+            FOURCC_YUYV => PixelFormat::Yuyv,
+            FOURCC_MJPG => PixelFormat::Jpeg,
+            FOURCC_SRGGB10P => PixelFormat::Srggb10p,
+            FOURCC_YU12 => PixelFormat::Yu12,
             _ => {
                 return Err(VideoError::Device(format!(
                     "Unsupported pixel format: {}",
-                    actual_format.fourcc
+                    fourcc_to_string(u32::from_le_bytes(actual_format.fourcc.repr))
                 )));
             }
         };
@@ -125,7 +133,7 @@ impl VideoInDevice for V4l2 {
         Ok(VideoInConfig::V4l2(V4l2Config {
             path: config.path.clone(),
             size: Some(self.size),
-            format: Some(self.format.clone()),
+            format: Some(self.format),
             frame_rate: Some(self.frame_rate),
         }))
     }
@@ -138,15 +146,8 @@ impl VideoInDevice for V4l2 {
         if let Some(ref mut stream) = self.stream.as_mut() {
             match CaptureStream::next(*stream) {
                 Ok((frame_data, _metadata)) => {
-                    let data = match &self.format {
-                        VideoFormat::Yuyv => VideoData::Yuyv(frame_data.to_vec()),
-                        VideoFormat::Jpeg => VideoData::Jpeg(frame_data.to_vec()),
-                        VideoFormat::Srggb10p => VideoData::Srggb10p(frame_data.to_vec()),
-                    };
-                    Ok(VideoFrame {
-                        data,
-                        size: self.size,
-                    })
+                    let image = Image::new(self.size, frame_data.to_vec(), self.format);
+                    Ok(VideoFrame { image })
                 }
                 Err(error) => Err(VideoError::Stream(error.to_string())),
             }

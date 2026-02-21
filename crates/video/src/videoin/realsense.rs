@@ -1,22 +1,29 @@
-use crate::{Camera, VideoData, VideoError, VideoFrame};
+use {
+    crate::*,
+    base::Vec2,
+    image::{Image, PixelFormat},
+};
 
-pub(crate) struct RealsenseCamera {}
+pub(crate) struct Realsense {}
 
-impl RealsenseCamera {
-    pub fn open(index: usize) -> Result<Self, VideoError> {
-        // TODO: open RealSense camera with index
-        Ok(Self {})
+impl Realsense {
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
-impl Camera for RealsenseCamera {
-    fn capture(&mut self) -> Result<VideoFrame, VideoError> {
-        // read frame
-        // return
-        Ok(VideoFrame {
-            data: VideoData::Jpeg(vec![0; 1]),
-            width: 1,
-            height: 1,
-        })
+impl VideoInDevice for Realsense {
+    fn open(&mut self, _config: &VideoInConfig) -> Result<VideoInConfig, VideoError> {
+        todo!("RealSense camera support not implemented")
+    }
+
+    fn close(&mut self) {
+        // No-op stub
+    }
+
+    fn blocking_capture(&mut self) -> Result<VideoFrame, VideoError> {
+        // Return a minimal placeholder frame
+        let image = Image::new(Vec2::new(1, 1), vec![0; 1], PixelFormat::Jpeg);
+        Ok(VideoFrame { image })
     }
 }
