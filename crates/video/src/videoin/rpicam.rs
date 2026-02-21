@@ -1,6 +1,6 @@
 use {
     crate::*,
-    base::{Tensor, Vec2},
+    base::Vec2,
     shiguredo_libcamera::{
         Camera, CameraManager, ConfigStatus, FrameBuffer, FrameBufferAllocator, FrameStatus,
         PixelFormat, Request, Size, Stream, StreamRole,
@@ -236,9 +236,7 @@ impl VideoInDevice for RpiCamera {
                     let expected = cb_size.x * cb_size.y * 2;
                     let bytes = &raw_data[..expected.min(raw_data.len())];
                     VideoFrame {
-                        data: VideoData::Yuyv(
-                            Tensor::new(vec![cb_size.y, cb_size.x, 2], bytes.to_vec()).unwrap(),
-                        ),
+                        data: VideoData::Yuyv(bytes.to_vec()),
                         size: cb_size,
                     }
                 }
