@@ -10,6 +10,7 @@ use {
 
 const FOURCC_YUYV: u32 = u32::from_le_bytes(*b"YUYV");
 const FOURCC_MJPG: u32 = u32::from_le_bytes(*b"MJPG");
+const FOURCC_SRGGB10P: u32 = u32::from_le_bytes(*b"pRAA");
 
 #[derive(Debug, Clone)]
 pub struct RpiCamConfig {
@@ -112,6 +113,7 @@ impl VideoInDevice for RpiCamera {
                 let fourcc = match format {
                     VideoFormat::Yuyv => FOURCC_YUYV,
                     VideoFormat::Jpeg => FOURCC_MJPG,
+                    VideoFormat::Srggb10p => FOURCC_SRGGB10P,
                 };
                 sc.set_pixel_format(PixelFormat::from_fourcc(fourcc));
             }
@@ -242,6 +244,10 @@ impl VideoInDevice for RpiCamera {
                 }
                 VideoFormat::Jpeg => VideoFrame {
                     data: VideoData::Jpeg(raw_data.to_vec()),
+                    size: cb_size,
+                },
+                VideoFormat::Srggb10p => VideoFrame {
+                    data: VideoData::Srggb10p(raw_data.to_vec()),
                     size: cb_size,
                 },
             };
