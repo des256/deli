@@ -9,7 +9,7 @@ pub enum VideoFormat {
 
 #[derive(Debug, Clone)]
 pub enum VideoData {
-    Yuyv(Tensor<u8>),
+    Yuyv(Vec<u8>),
     Jpeg(Vec<u8>),
     Srggb10p(Vec<u8>),
 }

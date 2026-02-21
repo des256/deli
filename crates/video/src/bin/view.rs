@@ -7,13 +7,13 @@ use {
 
 pub async fn frame_to_argb(frame: &VideoFrame) -> Vec<u32> {
     match &frame.data {
-        VideoData::Yuyv(tensor) => {
-            let pixel_count = tensor.shape[0] * tensor.shape[1];
+        VideoData::Yuyv(data) => {
+            let pixel_count = frame.size.x * frame.size.y;
 
             let mut argb = Vec::with_capacity(pixel_count);
 
             // YUYV has 2 bytes per pixel (4 bytes for 2 pixels: Y0 U Y1 V)
-            for chunk in tensor.data[..pixel_count * 2].chunks_exact(4) {
+            for chunk in data[..pixel_count * 2].chunks_exact(4) {
                 let y0 = chunk[0] as f32;
                 let u = chunk[1] as f32;
                 let y1 = chunk[2] as f32;
@@ -74,11 +74,11 @@ pub async fn frame_to_argb(frame: &VideoFrame) -> Vec<u32> {
                     let bot = top + stride;
                     let top_lo = data[top + 4] as u32;
                     let bot_lo = data[bot + 4] as u32;
-                    let r  = (data[top + pos] as u32) << 2 | ((top_lo >> (pos * 2)) & 0x03);
+                    let r = (data[top + pos] as u32) << 2 | ((top_lo >> (pos * 2)) & 0x03);
                     let gr = (data[top + pos + 1] as u32) << 2 | ((top_lo >> (pos * 2 + 2)) & 0x03);
                     let gb = (data[bot + pos] as u32) << 2 | ((bot_lo >> (pos * 2)) & 0x03);
-                    let b  = (data[bot + pos + 1] as u32) << 2 | ((bot_lo >> (pos * 2 + 2)) & 0x03);
-                    let g  = (gr + gb) / 2;
+                    let b = (data[bot + pos + 1] as u32) << 2 | ((bot_lo >> (pos * 2 + 2)) & 0x03);
+                    let g = (gr + gb) / 2;
 
                     let r8 = r >> 2;
                     let g8 = g >> 2;
@@ -87,9 +87,9 @@ pub async fn frame_to_argb(frame: &VideoFrame) -> Vec<u32> {
                     let b8 = b >> 2;
 
                     let i = y * width + x;
-                    argb[i]             = 0xFF000000 | (r8 << 16) | (g8 << 8) | b8;
-                    argb[i + 1]         = 0xFF000000 | (r8 << 16) | (gr8 << 8) | b8;
-                    argb[i + width]     = 0xFF000000 | (r8 << 16) | (gb8 << 8) | b8;
+                    argb[i] = 0xFF000000 | (r8 << 16) | (g8 << 8) | b8;
+                    argb[i + 1] = 0xFF000000 | (r8 << 16) | (gr8 << 8) | b8;
+                    argb[i + width] = 0xFF000000 | (r8 << 16) | (gb8 << 8) | b8;
                     argb[i + width + 1] = 0xFF000000 | (r8 << 16) | (g8 << 8) | b8;
                 }
             }

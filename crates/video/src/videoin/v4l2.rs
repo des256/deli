@@ -139,10 +139,7 @@ impl VideoInDevice for V4l2 {
             match CaptureStream::next(*stream) {
                 Ok((frame_data, _metadata)) => {
                     let data = match &self.format {
-                        VideoFormat::Yuyv => VideoData::Yuyv(
-                            Tensor::new(vec![self.size.y, self.size.x, 2], frame_data.to_vec())
-                                .unwrap(),
-                        ),
+                        VideoFormat::Yuyv => VideoData::Yuyv(frame_data.to_vec()),
                         VideoFormat::Jpeg => VideoData::Jpeg(frame_data.to_vec()),
                         VideoFormat::Srggb10p => VideoData::Srggb10p(frame_data.to_vec()),
                     };
