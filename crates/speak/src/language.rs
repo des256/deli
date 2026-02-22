@@ -1,6 +1,7 @@
+use codec::{Codec, Dart};
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Codec, Dart)]
 pub enum Language {
     EnglishUs,
     ChineseChina,

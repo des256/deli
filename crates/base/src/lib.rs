@@ -1,4 +1,3 @@
-pub mod language;
 pub mod logging;
 pub mod mat2;
 pub mod mat3;
@@ -11,7 +10,6 @@ pub mod vec2;
 pub mod vec3;
 pub mod vec4;
 
-pub use language::Language;
 pub use logging::{FileLogger, StdoutLogger, init_file_logger, init_stdout_logger};
 pub use mat2::Mat2;
 pub use mat3::Mat3;

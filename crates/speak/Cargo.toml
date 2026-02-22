@@ -1,0 +1,10 @@
+[package]
+name = "speak"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+audio = { path = "../audio" }
+base = { path = "../base" }
+codec = { path = "../codec" }
+inference = { path = "../inference" }
