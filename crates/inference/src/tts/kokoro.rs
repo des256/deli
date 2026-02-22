@@ -8,7 +8,7 @@ use {
     base::Tensor,
     futures_core::Stream,
     futures_sink::Sink,
-    ort::{session::Session, value::Tensor as OrtTensor},
+    onnx::{Session, Value},
     std::{
         collections::{HashMap, VecDeque},
         future::Future,
@@ -130,16 +130,16 @@ impl Kokoro {
                 // Build input tensors
                 let tokens_shape = [1usize, token_ids.len()];
                 let tokens =
-                    OrtTensor::from_array((tokens_shape, token_ids.into_boxed_slice()))?;
+                    Value::from_slice::<i64>(&tokens_shape, &token_ids)?;
 
                 let style_shape = [1usize, 256];
                 let style_vec = style_slice.to_vec();
                 let style_tensor =
-                    OrtTensor::from_array((style_shape, style_vec.into_boxed_slice()))?;
+                    Value::from_slice::<f32>(&style_shape, &style_vec)?;
 
                 let speed_shape = [1usize];
                 let speed_tensor =
-                    OrtTensor::from_array((speed_shape, vec![1.0f32].into_boxed_slice()))?;
+                    Value::from_slice::<f32>(&speed_shape, &[1.0f32])?;
 
                 // Run inference with named inputs, extract data within lock scope
                 let samples: Vec<i16> = {
@@ -147,11 +147,11 @@ impl Kokoro {
                         InferError::Runtime(format!("Session lock poisoned: {}", e))
                     })?;
                     let outputs = session_guard
-                        .run(ort::inputs!["tokens" => tokens, "style" => style_tensor, "speed" => speed_tensor])
+                        .run(&[("tokens", &tokens), ("style", &style_tensor), ("speed", &speed_tensor)], &["audio"])
                         .map_err(|e| InferError::Onnx(e.to_string()))?;
 
-                    let (_shape, output_data) = outputs[0]
-                        .try_extract_tensor::<f32>()
+                    let output_data = outputs[0]
+                        .extract_tensor::<f32>()
                         .map_err(|e| {
                             InferError::Runtime(format!("Failed to extract output: {}", e))
                         })?;

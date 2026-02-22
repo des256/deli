@@ -11,7 +11,7 @@ use {
 
 const DEFAULT_ADDR: &str = "0.0.0.0:5090";
 
-const WHISPER_MODEL_PATH: &str = "data/whisper/tiny.en";
+const WHISPER_MODEL_PATH: &str = "data/whisper/tiny.en/model.safetensors";
 const WHISPER_TOKENIZER_PATH: &str = "data/whisper/tiny.en/tokenizer.json";
 const WHISPER_CONFIG_PATH: &str = "data/whisper/tiny.en/config.json";
 

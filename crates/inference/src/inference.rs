@@ -1,10 +1,12 @@
-use {crate::InferError, candle_core::Device, ort::session::Session as OrtSession, std::{path::Path, sync::OnceLock}};
+use {crate::InferError, candle_core::Device, onnx::Session, std::{path::Path, sync::OnceLock}};
 
-static ORT_INIT: OnceLock<()> = OnceLock::new();
+static ONNX_INIT: OnceLock<()> = OnceLock::new();
 
-fn ensure_ort_init() {
-    ORT_INIT.get_or_init(|| {
-        let _ = ort::init().commit();
+fn ensure_onnx_init() {
+    ONNX_INIT.get_or_init(|| {
+        if let Err(e) = onnx::init() {
+            base::log_error!("ONNX Runtime init failed: {}", e);
+        }
     });
 }
 
@@ -23,7 +25,7 @@ pub struct Inference {
 
 impl Inference {
     pub fn cpu() -> Self {
-        ensure_ort_init();
+        ensure_onnx_init();
         Self {
             device: Device::Cpu,
             onnx_device: OnnxDevice::Cpu,
@@ -32,7 +34,7 @@ impl Inference {
 
     #[cfg(feature = "cuda")]
     pub fn cuda(ordinal: usize) -> Result<Self, InferError> {
-        ensure_ort_init();
+        ensure_onnx_init();
         let device = Device::new_cuda(ordinal)?;
         Ok(Self {
             device,
@@ -65,23 +67,18 @@ impl Inference {
         crate::Qwen3::new(model_path, tokenizer_path, self.device.clone())
     }
 
-    pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<OrtSession, InferError> {
+    pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<Session, InferError> {
         let path = model_path.as_ref();
         let session = match &self.onnx_device {
             OnnxDevice::Cpu => {
-                OrtSession::builder()?
-                    .with_execution_providers([ort::execution_providers::CPUExecutionProvider::default().build()])?
+                onnx::session_builder()?
+                    .with_cpu()
                     .commit_from_file(path)?
             }
             #[cfg(feature = "cuda")]
             OnnxDevice::Cuda(ordinal) => {
-                OrtSession::builder()?
-                    .with_execution_providers([
-                        ort::execution_providers::CUDAExecutionProvider::default()
-                            .with_device_id(*ordinal as i32)
-                            .build(),
-                        ort::execution_providers::CPUExecutionProvider::default().build(),
-                    ])?
+                onnx::session_builder()?
+                    .with_cuda(*ordinal as i32)?
                     .commit_from_file(path)?
             }
             #[cfg(not(feature = "cuda"))]

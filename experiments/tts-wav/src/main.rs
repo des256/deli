@@ -1,4 +1,10 @@
-use {audio::AudioData, base::*, futures_util::{SinkExt, StreamExt}, inference::Inference, std::path::PathBuf};
+use {
+    audio::AudioData,
+    base::*,
+    futures_util::{SinkExt, StreamExt},
+    inference::Inference,
+    std::path::PathBuf,
+};
 
 const SENTENCE: &str = "To be, or not to be, equals, minus one.";
 const SAMPLE_RATE: u32 = 24000;
@@ -24,7 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !model_path.exists() || !voice_path.exists() {
         eprintln!("Model files missing. Expected:");
         eprintln!("  - data/kokoro/kokoro-v1.0.onnx");
-        eprintln!("  - data/kokoro/bf_emma.npy");
+        eprintln!("  - data/kokoro/af_nicole.npy");
         std::process::exit(1);
     }
 

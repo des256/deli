@@ -41,8 +41,8 @@ impl From<std::io::Error> for InferError {
     }
 }
 
-impl From<ort::Error> for InferError {
-    fn from(err: ort::Error) -> Self {
+impl From<onnx::OnnxError> for InferError {
+    fn from(err: onnx::OnnxError) -> Self {
         InferError::Onnx(err.to_string())
     }
 }
