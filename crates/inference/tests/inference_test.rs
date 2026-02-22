@@ -37,7 +37,8 @@ fn test_onnx_session_nonexistent_file() {
             assert!(
                 msg.to_lowercase().contains("not found")
                     || msg.to_lowercase().contains("no such file")
-                    || msg.to_lowercase().contains("does not exist"),
+                    || msg.to_lowercase().contains("does not exist")
+                    || msg.to_lowercase().contains("doesn't exist"),
                 "Expected error message about file not found, got: {}",
                 msg
             );
