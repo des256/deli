@@ -1,3 +1,3 @@
-- VAD from ASR to partial and final output sentences
-- add hard limit of 512 phonemes to kokoro implementation
+- switch firmware on the respeaker
+- find better fit for sherpa english model
 - cut up the LLM output into sentences and pipe them to TTS as soon as they become available
