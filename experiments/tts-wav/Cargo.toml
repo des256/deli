@@ -7,6 +7,9 @@ edition = "2024"
 name = "tts_wav"
 path = "src/main.rs"
 
+[features]
+cuda = ["inference/cuda"]
+
 [dependencies]
 inference = { path = "../../crates/inference" }
 audio = { path = "../../crates/audio" }
