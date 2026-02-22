@@ -199,53 +199,40 @@ pub type ReleaseTensorTypeAndShapeInfoFn = unsafe extern "C" fn(info: *mut OrtTe
 pub type GetTensorElementTypeFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut ONNXTensorElementDataType) -> *mut OrtStatus;
 pub type GetTensorShapeElementCountFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
 
-// API function indices (from onnxruntime_c_api.h v1.17.0)
-// These must match the exact order in the OrtApi struct
+// OrtApi vtable indices — verified against onnxruntime_c_api.h v1.24.2
+// on Jetson (aarch64). These indices are stable across versions since
+// the vtable only grows (new entries appended, existing entries never move).
+//
+// Indices 0-2: raw function pointers (CreateStatus, GetErrorCode, GetErrorMessage)
+// Indices 3+: ORT_API2_STATUS and ORT_CLASS_RELEASE entries
 pub const IDX_CREATE_STATUS: usize = 0;
 pub const IDX_GET_ERROR_CODE: usize = 1;
 pub const IDX_GET_ERROR_MESSAGE: usize = 2;
 pub const IDX_CREATE_ENV: usize = 3;
-pub const IDX_CREATE_ENV_WITH_CUSTOM_LOGGER: usize = 4;
-pub const IDX_ENABLE_TELEMETRY: usize = 5;
-pub const IDX_DISABLE_TELEMETRY: usize = 6;
 pub const IDX_CREATE_SESSION: usize = 7;
-pub const IDX_CREATE_SESSION_FROM_ARRAY: usize = 8;
 pub const IDX_RUN: usize = 9;
 pub const IDX_CREATE_SESSION_OPTIONS: usize = 10;
-pub const IDX_SET_OPTIMIZED_MODEL_FILE_PATH: usize = 11;
-pub const IDX_CLONE_SESSION_OPTIONS: usize = 12;
-pub const IDX_SET_SESSION_EXECUTION_MODE: usize = 13;
-pub const IDX_ENABLE_PROFILING: usize = 14;
-pub const IDX_DISABLE_PROFILING: usize = 15;
-pub const IDX_ENABLE_MEM_PATTERN: usize = 16;
-pub const IDX_DISABLE_MEM_PATTERN: usize = 17;
-pub const IDX_ENABLE_CPU_MEM_ARENA: usize = 18;
-pub const IDX_DISABLE_CPU_MEM_ARENA: usize = 19;
-pub const IDX_SET_SESSION_LOG_ID: usize = 20;
-pub const IDX_SET_SESSION_LOG_VERBOSITY_LEVEL: usize = 21;
-pub const IDX_SET_SESSION_LOG_SEVERITY_LEVEL: usize = 22;
 pub const IDX_SET_SESSION_GRAPH_OPTIMIZATION_LEVEL: usize = 23;
 pub const IDX_SET_INTRA_OP_NUM_THREADS: usize = 24;
-pub const IDX_SET_INTER_OP_NUM_THREADS: usize = 25;
-// ... (many more functions in between)
-// Release functions are at higher indices
-pub const IDX_RELEASE_ENV: usize = 63;
-pub const IDX_RELEASE_STATUS: usize = 64;
-pub const IDX_RELEASE_MEMORY_INFO: usize = 65;
-pub const IDX_RELEASE_SESSION: usize = 66;
-pub const IDX_RELEASE_VALUE: usize = 67;
-pub const IDX_RELEASE_RUN_OPTIONS: usize = 68;
-pub const IDX_RELEASE_TYPE_INFO: usize = 69;
-pub const IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO: usize = 70;
-pub const IDX_RELEASE_SESSION_OPTIONS: usize = 71;
-// Memory and tensor functions
-pub const IDX_CREATE_CPU_MEMORY_INFO: usize = 72;
-pub const IDX_CREATE_TENSOR_WITH_DATA_AS_ORT_VALUE: usize = 74;
-pub const IDX_GET_TENSOR_MUTABLE_DATA: usize = 76;
-pub const IDX_GET_TENSOR_TYPE_AND_SHAPE: usize = 85;
-pub const IDX_GET_TENSOR_ELEMENT_TYPE: usize = 87;
-// GetDimensionsCount=88, GetDimensions=89, GetSymbolicDimensions=90 (consecutive in vtable)
-pub const IDX_GET_TENSOR_SHAPE_ELEMENT_COUNT: usize = 91;
+// Tensor creation and data access
+pub const IDX_CREATE_TENSOR_WITH_DATA_AS_ORT_VALUE: usize = 49;
+pub const IDX_GET_TENSOR_MUTABLE_DATA: usize = 51;
+// Tensor type/shape info
+pub const IDX_GET_TENSOR_ELEMENT_TYPE: usize = 60;
+pub const IDX_GET_TENSOR_SHAPE_ELEMENT_COUNT: usize = 64;
+pub const IDX_GET_TENSOR_TYPE_AND_SHAPE: usize = 65;
+// Memory info
+pub const IDX_CREATE_CPU_MEMORY_INFO: usize = 69;
+// Release functions
+pub const IDX_RELEASE_ENV: usize = 92;
+pub const IDX_RELEASE_STATUS: usize = 93;
+pub const IDX_RELEASE_MEMORY_INFO: usize = 94;
+pub const IDX_RELEASE_SESSION: usize = 95;
+pub const IDX_RELEASE_VALUE: usize = 96;
+pub const IDX_RELEASE_RUN_OPTIONS: usize = 97;
+pub const IDX_RELEASE_TYPE_INFO: usize = 98;
+pub const IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO: usize = 99;
+pub const IDX_RELEASE_SESSION_OPTIONS: usize = 100;
 
 impl OrtApi {
     /// Access a function in the vtable by index
