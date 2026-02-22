@@ -1,6 +1,4 @@
-use {audio::AudioIn, base::*, futures_util::{SinkExt, StreamExt}, inference::{Inference, asr::Transcription}, std::path::PathBuf};
-
-const WINDOW_SAMPLES: usize = 48000; // 3 seconds at 16kHz
+use {audio::AudioIn, base::*, futures_util::{SinkExt, StreamExt}, inference::asr::Transcription, std::path::PathBuf};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -9,47 +7,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse CLI arguments
     let model_dir = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "data/whisper/tiny.en".to_string());
+        .unwrap_or_else(|| "data/sherpa".to_string());
 
-    let model_path = PathBuf::from(&model_dir).join("model.safetensors");
-    let tokenizer_path = PathBuf::from(&model_dir).join("tokenizer.json");
-    let config_path = PathBuf::from(&model_dir).join("config.json");
+    let dir = PathBuf::from(&model_dir);
+    let encoder_path = dir.join("encoder-epoch-99-avg-1.int8.onnx");
+    let decoder_path = dir.join("decoder-epoch-99-avg-1.int8.onnx");
+    let joiner_path = dir.join("joiner-epoch-99-avg-1.int8.onnx");
+    let tokens_path = dir.join("tokens.txt");
 
-    // Validate model directory
-    if !model_path.exists() || !tokenizer_path.exists() || !config_path.exists() {
-        eprintln!("Model directory incomplete. Expected files:");
-        eprintln!("  - model.safetensors");
-        eprintln!("  - tokenizer.json");
-        eprintln!("  - config.json");
-        eprintln!("In directory: {}", model_dir);
-        std::process::exit(1);
-    }
-
-    log_info!("Speech Recognition Experiment");
+    log_info!("Streaming ASR");
     log_info!("Model directory: {}", model_dir);
 
-    // Initialize CUDA
-    log_info!("Initializing CUDA...");
-    let inference = Inference::cuda(0)?;
-    log_info!("CUDA initialized");
-
-    // Load Whisper model with 3-second window
-    let mut whisper = inference
-        .use_whisper(&model_path, &tokenizer_path, &config_path)?
-        .with_window_samples(WINDOW_SAMPLES);
-    log_info!("Whisper model loaded");
+    // Load streaming ASR model
+    let mut asr = inference::StreamingAsr::new(
+        &encoder_path,
+        &decoder_path,
+        &joiner_path,
+        &tokens_path,
+    )?;
+    log_info!("Model loaded");
 
     // Create audio input
     let mut audioin = AudioIn::open(None).await;
 
-    // Main loop with Ctrl+C handling
+    // Track how much text we've already printed so we only print new words
+    let mut printed_len = 0;
+
+    // Main loop
     loop {
         tokio::select! {
-            // Feed audio chunks into Whisper
             chunk = audioin.capture() => {
                 match chunk {
                     Ok(sample) => {
-                        whisper.send(sample).await?;
+                        asr.send(sample).await?;
                     }
                     Err(error) => {
                         log_error!("Audio capture error: {}", error);
@@ -58,45 +48,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            // Read transcription results from Whisper
-            result = whisper.next() => {
+            result = asr.next() => {
                 match result {
-                    Some(Ok(Transcription::Final { text, .. })) => {
-                        let text = text.trim();
-                        if !text.is_empty() {
-                            println!("{}", text);
-                        } else {
-                            log_debug!("No speech detected in window");
+                    Some(Ok(Transcription::Partial { ref text, .. })) => {
+                        if text.len() > printed_len {
+                            print!("{}", &text[printed_len..]);
+                            printed_len = text.len();
                         }
                     }
-                    Some(Ok(_)) => {}
+                    Some(Ok(Transcription::Final { ref text, .. })) => {
+                        if text.len() > printed_len {
+                            print!("{}", &text[printed_len..]);
+                        }
+                        println!();
+                        printed_len = 0;
+                    }
+                    Some(Ok(Transcription::Cancelled)) => {}
                     Some(Err(e)) => {
                         log_error!("Transcription error: {}", e);
                     }
                     None => {
-                        log_info!("Whisper stream ended");
+                        log_info!("ASR stream ended");
                         break;
                     }
                 }
             }
 
-            // Handle Ctrl+C
             _ = tokio::signal::ctrl_c() => {
                 log_info!("Shutting down...");
 
-                // Close sink to flush remaining audio
-                whisper.close().await?;
+                asr.close().await?;
 
-                // Drain remaining transcriptions
-                while let Some(result) = whisper.next().await {
+                while let Some(result) = asr.next().await {
                     match result {
-                        Ok(Transcription::Final { text, .. }) => {
-                            let text = text.trim();
-                            if !text.is_empty() {
-                                println!("{}", text);
+                        Ok(Transcription::Partial { ref text, .. }) => {
+                            if text.len() > printed_len {
+                                print!("{}", &text[printed_len..]);
+                                printed_len = text.len();
                             }
                         }
-                        Ok(_) => {}
+                        Ok(Transcription::Final { ref text, .. }) => {
+                            if text.len() > printed_len {
+                                print!("{}", &text[printed_len..]);
+                            }
+                            println!();
+                        }
+                        Ok(Transcription::Cancelled) => {}
                         Err(e) => {
                             log_error!("Transcription error: {}", e);
                         }

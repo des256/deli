@@ -133,4 +133,19 @@ impl Inference {
         let session = self.onnx_session(model_path)?;
         crate::tts::Kokoro::new(session, voice_path, espeak_data_path)
     }
+
+    pub fn use_streaming_asr<P: AsRef<Path>>(
+        &self,
+        encoder_path: P,
+        decoder_path: P,
+        joiner_path: P,
+        tokens_path: P,
+    ) -> Result<crate::asr::streaming::StreamingAsr, InferError> {
+        crate::asr::streaming::StreamingAsr::new(
+            encoder_path,
+            decoder_path,
+            joiner_path,
+            tokens_path,
+        )
+    }
 }

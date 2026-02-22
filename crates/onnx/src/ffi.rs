@@ -1,4 +1,4 @@
-use std::ffi::c_char;
+use std::ffi::{c_char, c_void};
 
 // Opaque types - never constructed in Rust, only passed as pointers
 #[repr(C)]
@@ -43,6 +43,11 @@ pub struct OrtRunOptions {
 
 #[repr(C)]
 pub struct OrtTensorTypeAndShapeInfo {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct OrtTypeInfo {
     _private: [u8; 0],
 }
 
@@ -160,6 +165,8 @@ pub type GetErrorCodeFn = unsafe extern "C" fn(status: *const OrtStatus) -> OrtE
 pub type GetErrorMessageFn = unsafe extern "C" fn(status: *const OrtStatus) -> *const c_char;
 pub type CreateEnvFn = unsafe extern "C" fn(log_level: OrtLoggingLevel, log_id: *const c_char, out: *mut *mut OrtEnv) -> *mut OrtStatus;
 pub type ReleaseEnvFn = unsafe extern "C" fn(env: *mut OrtEnv);
+pub type GetAllocatorWithDefaultOptionsFn = unsafe extern "C" fn(out: *mut *mut OrtAllocator) -> *mut OrtStatus;
+pub type AllocatorFreeFn = unsafe extern "C" fn(allocator: *mut OrtAllocator, ptr: *mut c_void);
 pub type ReleaseStatusFn = unsafe extern "C" fn(status: *mut OrtStatus);
 pub type CreateSessionFn = unsafe extern "C" fn(env: *const OrtEnv, model_path: *const c_char, options: *const OrtSessionOptions, out: *mut *mut OrtSession) -> *mut OrtStatus;
 pub type ReleaseSessionFn = unsafe extern "C" fn(session: *mut OrtSession);
@@ -173,6 +180,37 @@ pub type RunFn = unsafe extern "C" fn(
     output_names_len: usize,
     outputs: *mut *mut OrtValue,
 ) -> *mut OrtStatus;
+
+pub type SessionGetInputCountFn = unsafe extern "C" fn(
+    session: *const OrtSession,
+    out: *mut usize,
+) -> *mut OrtStatus;
+
+pub type SessionGetOutputCountFn = unsafe extern "C" fn(
+    session: *const OrtSession,
+    out: *mut usize,
+) -> *mut OrtStatus;
+
+pub type SessionGetInputNameFn = unsafe extern "C" fn(
+    session: *const OrtSession,
+    index: usize,
+    allocator: *mut OrtAllocator,
+    value: *mut *mut c_char,
+) -> *mut OrtStatus;
+
+pub type SessionGetOutputNameFn = unsafe extern "C" fn(
+    session: *const OrtSession,
+    index: usize,
+    allocator: *mut OrtAllocator,
+    value: *mut *mut c_char,
+) -> *mut OrtStatus;
+
+pub type SessionGetInputTypeInfoFn = unsafe extern "C" fn(
+    session: *const OrtSession,
+    index: usize,
+    type_info: *mut *mut OrtTypeInfo,
+) -> *mut OrtStatus;
+
 pub type CreateSessionOptionsFn = unsafe extern "C" fn(out: *mut *mut OrtSessionOptions) -> *mut OrtStatus;
 pub type ReleaseSessionOptionsFn = unsafe extern "C" fn(options: *mut OrtSessionOptions);
 pub type SetSessionGraphOptimizationLevelFn = unsafe extern "C" fn(options: *mut OrtSessionOptions, level: GraphOptimizationLevel) -> *mut OrtStatus;
@@ -196,7 +234,11 @@ pub type ReleaseValueFn = unsafe extern "C" fn(value: *mut OrtValue);
 pub type GetTensorMutableDataFn = unsafe extern "C" fn(value: *mut OrtValue, out: *mut *mut std::ffi::c_void) -> *mut OrtStatus;
 pub type GetTensorTypeAndShapeFn = unsafe extern "C" fn(value: *const OrtValue, out: *mut *mut OrtTensorTypeAndShapeInfo) -> *mut OrtStatus;
 pub type ReleaseTensorTypeAndShapeInfoFn = unsafe extern "C" fn(info: *mut OrtTensorTypeAndShapeInfo);
+pub type ReleaseTypeInfoFn = unsafe extern "C" fn(info: *mut OrtTypeInfo);
 pub type GetTensorElementTypeFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut ONNXTensorElementDataType) -> *mut OrtStatus;
+pub type CastTypeInfoToTensorInfoFn = unsafe extern "C" fn(type_info: *const OrtTypeInfo, out: *mut *const OrtTensorTypeAndShapeInfo) -> *mut OrtStatus;
+pub type GetDimensionsCountFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
+pub type GetDimensionsFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, dim_values: *mut i64, dim_count: usize) -> *mut OrtStatus;
 pub type GetTensorShapeElementCountFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
 
 // OrtApi vtable indices — verified against onnxruntime_c_api.h v1.24.2
@@ -212,12 +254,23 @@ pub const IDX_CREATE_ENV: usize = 3;
 pub const IDX_CREATE_SESSION: usize = 7;
 pub const IDX_RUN: usize = 9;
 pub const IDX_CREATE_SESSION_OPTIONS: usize = 10;
+pub const IDX_SESSION_GET_INPUT_COUNT: usize = 30;
+pub const IDX_SESSION_GET_OUTPUT_COUNT: usize = 31;
+pub const IDX_SESSION_GET_INPUT_TYPE_INFO: usize = 33;
+pub const IDX_SESSION_GET_INPUT_NAME: usize = 36;
+pub const IDX_SESSION_GET_OUTPUT_NAME: usize = 37;
+pub const IDX_ALLOCATOR_FREE: usize = 76;
+pub const IDX_GET_ALLOCATOR_WITH_DEFAULT_OPTIONS: usize = 78;
 pub const IDX_SET_SESSION_GRAPH_OPTIMIZATION_LEVEL: usize = 23;
 pub const IDX_SET_INTRA_OP_NUM_THREADS: usize = 24;
 // Tensor creation and data access
 pub const IDX_CREATE_TENSOR_WITH_DATA_AS_ORT_VALUE: usize = 49;
 pub const IDX_GET_TENSOR_MUTABLE_DATA: usize = 51;
+// Type info casting
+pub const IDX_CAST_TYPE_INFO_TO_TENSOR_INFO: usize = 55;
 // Tensor type/shape info
+pub const IDX_GET_DIMENSIONS_COUNT: usize = 61;
+pub const IDX_GET_DIMENSIONS: usize = 62;
 pub const IDX_GET_TENSOR_ELEMENT_TYPE: usize = 60;
 pub const IDX_GET_TENSOR_SHAPE_ELEMENT_COUNT: usize = 64;
 pub const IDX_GET_TENSOR_TYPE_AND_SHAPE: usize = 65;

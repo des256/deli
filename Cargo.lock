@@ -2792,6 +2792,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wav-streaming"
+version = "0.1.0"
+dependencies = [
+ "audio",
+ "base",
+ "futures-util",
+ "hound",
+ "inference",
+ "tokio",
+]
+
+[[package]]
 name = "wayland-client"
 version = "0.29.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -125,6 +125,219 @@ pub struct Session {
 unsafe impl Send for Session {}
 
 impl Session {
+    /// Get the number of model inputs
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails
+    pub fn input_count(&self) -> Result<usize> {
+        unsafe {
+            let mut count: usize = 0;
+            let get_input_count: ffi::SessionGetInputCountFn =
+                (*self.api).get_fn(ffi::IDX_SESSION_GET_INPUT_COUNT);
+            let status = get_input_count(self.session, &mut count as *mut _);
+            error::check_status(self.api, status, count)
+        }
+    }
+
+    /// Get the number of model outputs
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails
+    pub fn output_count(&self) -> Result<usize> {
+        unsafe {
+            let mut count: usize = 0;
+            let get_output_count: ffi::SessionGetOutputCountFn =
+                (*self.api).get_fn(ffi::IDX_SESSION_GET_OUTPUT_COUNT);
+            let status = get_output_count(self.session, &mut count as *mut _);
+            error::check_status(self.api, status, count)
+        }
+    }
+
+    /// Get the name of an input by index
+    ///
+    /// # Errors
+    /// Returns an error if the index is invalid or the operation fails
+    pub fn input_name(&self, index: usize) -> Result<String> {
+        unsafe {
+            // Get allocator
+            let mut allocator: *mut ffi::OrtAllocator = std::ptr::null_mut();
+            let get_allocator: ffi::GetAllocatorWithDefaultOptionsFn =
+                (*self.api).get_fn(ffi::IDX_GET_ALLOCATOR_WITH_DEFAULT_OPTIONS);
+            let status = get_allocator(&mut allocator as *mut _);
+            error::check_status(self.api, status, ())?;
+
+            // Get input name
+            let mut name_ptr: *mut std::os::raw::c_char = std::ptr::null_mut();
+            let get_input_name: ffi::SessionGetInputNameFn =
+                (*self.api).get_fn(ffi::IDX_SESSION_GET_INPUT_NAME);
+            let status = get_input_name(self.session, index, allocator, &mut name_ptr as *mut _);
+
+            if !status.is_null() {
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            // Convert C string to Rust String
+            let name = std::ffi::CStr::from_ptr(name_ptr)
+                .to_str()
+                .map_err(|_| error::OnnxError::runtime_error("Invalid UTF-8 in input name"))?
+                .to_string();
+
+            // Free the allocated string
+            let allocator_free: ffi::AllocatorFreeFn =
+                (*self.api).get_fn(ffi::IDX_ALLOCATOR_FREE);
+            allocator_free(allocator, name_ptr as *mut std::ffi::c_void);
+
+            Ok(name)
+        }
+    }
+
+    /// Get the name of an output by index
+    ///
+    /// # Errors
+    /// Returns an error if the index is invalid or the operation fails
+    pub fn output_name(&self, index: usize) -> Result<String> {
+        unsafe {
+            // Get allocator
+            let mut allocator: *mut ffi::OrtAllocator = std::ptr::null_mut();
+            let get_allocator: ffi::GetAllocatorWithDefaultOptionsFn =
+                (*self.api).get_fn(ffi::IDX_GET_ALLOCATOR_WITH_DEFAULT_OPTIONS);
+            let status = get_allocator(&mut allocator as *mut _);
+            error::check_status(self.api, status, ())?;
+
+            // Get output name
+            let mut name_ptr: *mut std::os::raw::c_char = std::ptr::null_mut();
+            let get_output_name: ffi::SessionGetOutputNameFn =
+                (*self.api).get_fn(ffi::IDX_SESSION_GET_OUTPUT_NAME);
+            let status = get_output_name(self.session, index, allocator, &mut name_ptr as *mut _);
+
+            if !status.is_null() {
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            // Convert C string to Rust String
+            let name = std::ffi::CStr::from_ptr(name_ptr)
+                .to_str()
+                .map_err(|_| error::OnnxError::runtime_error("Invalid UTF-8 in output name"))?
+                .to_string();
+
+            // Free the allocated string
+            let allocator_free: ffi::AllocatorFreeFn =
+                (*self.api).get_fn(ffi::IDX_ALLOCATOR_FREE);
+            allocator_free(allocator, name_ptr as *mut std::ffi::c_void);
+
+            Ok(name)
+        }
+    }
+
+    /// Get the shape of an input tensor by index
+    ///
+    /// Returns the dimensions as `Vec<i64>`. Dynamic dimensions are represented as `-1`.
+    ///
+    /// # Errors
+    /// Returns an error if the index is invalid or the operation fails
+    pub fn input_shape(&self, index: usize) -> Result<Vec<i64>> {
+        unsafe {
+            // Get input type info
+            let mut type_info: *mut ffi::OrtTypeInfo = std::ptr::null_mut();
+            let get_input_type_info: ffi::SessionGetInputTypeInfoFn =
+                (*self.api).get_fn(ffi::IDX_SESSION_GET_INPUT_TYPE_INFO);
+            let status = get_input_type_info(self.session, index, &mut type_info as *mut _);
+            if !status.is_null() {
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            // Cast OrtTypeInfo to OrtTensorTypeAndShapeInfo
+            let mut tensor_info: *const ffi::OrtTensorTypeAndShapeInfo = std::ptr::null();
+            let cast_fn: ffi::CastTypeInfoToTensorInfoFn =
+                (*self.api).get_fn(ffi::IDX_CAST_TYPE_INFO_TO_TENSOR_INFO);
+            let status = cast_fn(type_info, &mut tensor_info as *mut _);
+            if !status.is_null() {
+                let release_type_info: ffi::ReleaseTypeInfoFn =
+                    (*self.api).get_fn(ffi::IDX_RELEASE_TYPE_INFO);
+                release_type_info(type_info);
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            if tensor_info.is_null() {
+                let release_type_info: ffi::ReleaseTypeInfoFn =
+                    (*self.api).get_fn(ffi::IDX_RELEASE_TYPE_INFO);
+                release_type_info(type_info);
+                return Err(error::OnnxError::runtime_error("Input is not a tensor type"));
+            }
+
+            // Get dimensions count
+            let mut dim_count: usize = 0;
+            let get_dims_count: ffi::GetDimensionsCountFn =
+                (*self.api).get_fn(ffi::IDX_GET_DIMENSIONS_COUNT);
+            let status = get_dims_count(tensor_info, &mut dim_count as *mut _);
+            if !status.is_null() {
+                let release_type_info: ffi::ReleaseTypeInfoFn =
+                    (*self.api).get_fn(ffi::IDX_RELEASE_TYPE_INFO);
+                release_type_info(type_info);
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            // Get dimensions
+            let mut dims = vec![0i64; dim_count];
+            let get_dims: ffi::GetDimensionsFn =
+                (*self.api).get_fn(ffi::IDX_GET_DIMENSIONS);
+            let status = get_dims(tensor_info, dims.as_mut_ptr(), dim_count);
+
+            // Release type info (tensor_info is a borrowed pointer, not owned)
+            let release_type_info: ffi::ReleaseTypeInfoFn =
+                (*self.api).get_fn(ffi::IDX_RELEASE_TYPE_INFO);
+            release_type_info(type_info);
+
+            if !status.is_null() {
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            Ok(dims)
+        }
+    }
+
+    /// Get the element type of an input tensor by index
+    ///
+    /// # Errors
+    /// Returns an error if the index is invalid or the input is not a tensor
+    pub fn input_element_type(&self, index: usize) -> Result<ffi::ONNXTensorElementDataType> {
+        unsafe {
+            let mut type_info: *mut ffi::OrtTypeInfo = std::ptr::null_mut();
+            let get_input_type_info: ffi::SessionGetInputTypeInfoFn =
+                (*self.api).get_fn(ffi::IDX_SESSION_GET_INPUT_TYPE_INFO);
+            let status = get_input_type_info(self.session, index, &mut type_info as *mut _);
+            if !status.is_null() {
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            let mut tensor_info: *const ffi::OrtTensorTypeAndShapeInfo = std::ptr::null();
+            let cast_fn: ffi::CastTypeInfoToTensorInfoFn =
+                (*self.api).get_fn(ffi::IDX_CAST_TYPE_INFO_TO_TENSOR_INFO);
+            let status = cast_fn(type_info, &mut tensor_info as *mut _);
+            if !status.is_null() {
+                let release_type_info: ffi::ReleaseTypeInfoFn =
+                    (*self.api).get_fn(ffi::IDX_RELEASE_TYPE_INFO);
+                release_type_info(type_info);
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            let mut elem_type = ffi::ONNXTensorElementDataType::Undefined;
+            let get_elem_type: ffi::GetTensorElementTypeFn =
+                (*self.api).get_fn(ffi::IDX_GET_TENSOR_ELEMENT_TYPE);
+            let status = get_elem_type(tensor_info, &mut elem_type as *mut _);
+
+            let release_type_info: ffi::ReleaseTypeInfoFn =
+                (*self.api).get_fn(ffi::IDX_RELEASE_TYPE_INFO);
+            release_type_info(type_info);
+
+            if !status.is_null() {
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            Ok(elem_type)
+        }
+    }
+
     /// Run the model with named inputs and outputs
     ///
     /// # Errors

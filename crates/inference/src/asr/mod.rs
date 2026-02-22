@@ -5,9 +5,11 @@ pub(crate) mod model;
 pub(crate) mod token_decoder;
 pub mod transcription;
 pub(crate) mod whisper;
+pub mod streaming;
 
 // Public API
 pub use config::Config;
+pub use streaming::StreamingAsr;
 pub use transcription::Transcription;
 pub use whisper::Whisper;
 

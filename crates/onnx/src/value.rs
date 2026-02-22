@@ -115,6 +115,19 @@ impl Value {
         }
     }
 
+    /// Create a zero-filled tensor with the given shape
+    ///
+    /// Dimensions of -1 (dynamic) are replaced with 1.
+    ///
+    /// # Errors
+    /// Returns an error if tensor creation fails
+    pub fn zeros<T: TensorElement + Default>(shape: &[i64]) -> Result<Self> {
+        let resolved: Vec<usize> = shape.iter().map(|&d| if d < 0 { 1 } else { d as usize }).collect();
+        let total: usize = resolved.iter().product();
+        let data = vec![T::default(); total];
+        Self::from_slice(&resolved, &data)
+    }
+
     /// Extract tensor data as a slice
     ///
     /// # Errors
@@ -163,6 +176,43 @@ impl Value {
             error::check_status(self.api, status, ())?;
 
             Ok(std::slice::from_raw_parts(data_ptr as *const T, elem_count))
+        }
+    }
+
+    /// Get the tensor shape as a Vec of dimensions.
+    ///
+    /// # Errors
+    /// Returns an error if the value is not a tensor or shape extraction fails
+    pub fn tensor_shape(&self) -> Result<Vec<i64>> {
+        unsafe {
+            let mut type_info: *mut ffi::OrtTensorTypeAndShapeInfo = std::ptr::null_mut();
+            let get_type_shape: ffi::GetTensorTypeAndShapeFn =
+                (*self.api).get_fn(ffi::IDX_GET_TENSOR_TYPE_AND_SHAPE);
+            let status = get_type_shape(self.value, &mut type_info as *mut _);
+            error::check_status(self.api, status, ())?;
+
+            let mut dim_count: usize = 0;
+            let get_dims_count: ffi::GetDimensionsCountFn =
+                (*self.api).get_fn(ffi::IDX_GET_DIMENSIONS_COUNT);
+            let status = get_dims_count(type_info, &mut dim_count as *mut _);
+            if !status.is_null() {
+                let release: ffi::ReleaseTensorTypeAndShapeInfoFn =
+                    (*self.api).get_fn(ffi::IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO);
+                release(type_info);
+                return Err(error::OnnxError::from_status(self.api, status));
+            }
+
+            let mut dims = vec![0i64; dim_count];
+            let get_dims: ffi::GetDimensionsFn =
+                (*self.api).get_fn(ffi::IDX_GET_DIMENSIONS);
+            let status = get_dims(type_info, dims.as_mut_ptr(), dim_count);
+
+            let release: ffi::ReleaseTensorTypeAndShapeInfoFn =
+                (*self.api).get_fn(ffi::IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO);
+            release(type_info);
+
+            error::check_status(self.api, status, ())?;
+            Ok(dims)
         }
     }
 

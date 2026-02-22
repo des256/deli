@@ -5,7 +5,7 @@ mod llm;
 mod pose_detector;
 pub mod tts;
 
-pub use asr::Whisper;
+pub use asr::{StreamingAsr, Whisper};
 pub use error::{InferError, Result};
 pub use image::Image;
 pub use inference::Inference;
