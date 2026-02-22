@@ -39,14 +39,15 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "anyhow"
-version = "1.0.101"
+version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
+checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "audio"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base",
  "futures-core",
  "futures-sink",
@@ -54,7 +55,6 @@ dependencies = [
  "hound",
  "libpulse-binding",
  "libpulse-simple-binding",
- "log",
  "tokio",
 ]
 
@@ -68,7 +68,7 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 name = "base"
 version = "0.1.0"
 dependencies = [
- "log",
+ "anyhow",
 ]
 
 [[package]]
@@ -364,12 +364,12 @@ checksum = "3d7b894f5411737b7867f4827955924d7c254fc9f4d91a6aad6b097804b1018b"
 name = "com"
 version = "0.1.0"
 dependencies = [
+ "base",
  "codec",
  "futures-core",
  "futures-sink",
  "futures-util",
  "http",
- "log",
  "tokio",
  "tokio-websockets",
 ]
@@ -2522,6 +2522,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "speak"
+version = "0.1.0"
+dependencies = [
+ "audio",
+ "base",
+ "codec",
+ "inference",
+]
+
+[[package]]
 name = "spm_precompiled"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2978,7 +2988,6 @@ dependencies = [
  "image 0.1.0",
  "image 0.25.9",
  "libc",
- "log",
  "minifb",
  "realsense-sys",
  "shiguredo_libcamera",

@@ -1,6 +1,6 @@
 use {
     audio::{AudioIn, AudioOut},
-    base::{Vec2, log},
+    base::*,
     com::WsServer,
     image::{PixelFormat, argb_to_jpeg, rgb_to_jpeg, srggb10p_to_jpeg, yu12_to_jpeg, yuyv_to_jpeg},
     inference::Inference,
@@ -26,40 +26,40 @@ const QWEN3_TOKENIZER_PATH: &str = "data/qwen3/tokenizer.json";
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     base::init_stdout_logger();
 
-    log::info!("initializing inference");
+    log_info!("initializing inference");
     let inference = Inference::cuda(0)?;
 
-    log::info!("opening audio input");
+    log_info!("opening audio input");
     let audioin = AudioIn::open(None).await;
 
-    log::info!("opening audio output");
+    log_info!("opening audio output");
     let audioout = AudioOut::open(None).await;
 
     tokio::task::spawn(async move {
-        log::info!("spawning audio pipeline");
+        log_info!("spawning audio pipeline");
         // TODO: first VAD the incoming audio stream
         // TOOD: push the VAD results to ASR
         // TODO: extract partial and final transcription results
     });
 
-    log::info!("loading ASR model");
+    log_info!("loading ASR model");
     let asr = inference.use_whisper(
         WHISPER_MODEL_PATH,
         WHISPER_TOKENIZER_PATH,
         WHISPER_CONFIG_PATH,
     )?;
 
-    log::info!("loading TTS model");
+    log_info!("loading TTS model");
     let tts = inference.use_kokoro(
         KOKORO_MODEL_PATH,
         KOKORO_VOICE_PATH,
         Some(KOKORO_ESPEAK_DATA_PATH),
     )?;
 
-    log::info!("loading LLM");
+    log_info!("loading LLM");
     let llm = inference.use_qwen3(QWEN3_MODEL_PATH, QWEN3_TOKENIZER_PATH)?;
 
-    log::info!("opening video input");
+    log_info!("opening video input");
     let mut videoin = VideoIn::open(Some(VideoInConfig::Realsense(RealsenseConfig {
         color: Some(Vec2::new(640, 480)),
         frame_rate: Some(30.0),
@@ -67,13 +67,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })))
     .await?;
 
-    log::info!("creating websocket server at {}", DEFAULT_ADDR);
+    log_info!("creating websocket server at {}", DEFAULT_ADDR);
     let server: Arc<WsServer<ToMonitor>> = Arc::new(WsServer::bind(DEFAULT_ADDR).await?);
 
     tokio::task::spawn({
         let server = Arc::clone(&server);
         async move {
-            log::info!("spawning video pipeline");
+            log_info!("spawning video pipeline");
             // TODO: detect poses from the video stream
             // TODO: magically map poses to humans without any problems
 
@@ -82,14 +82,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let frame = match videoin.capture().await {
                     Ok(frame) => frame,
                     Err(error) => {
-                        log::error!("video capture failed: {}", error);
+                        log_error!("video capture failed: {}", error);
                         continue;
                     }
                 };
                 let jpeg =
                     color_to_jpeg(frame.color.size, &frame.color.data, frame.color.format, 80);
                 if let Err(error) = server.send(&ToMonitor::Jpeg(jpeg)).await {
-                    log::error!("websocket send failed: {}", error);
+                    log_error!("websocket send failed: {}", error);
                     continue;
                 }
             }

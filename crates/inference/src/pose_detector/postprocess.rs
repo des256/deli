@@ -1,7 +1,4 @@
-use super::types::{Keypoint, PoseDetection};
-use base::{Rect, Vec2};
-use candle_core::{Result, Tensor};
-use std::collections::VecDeque;
+use {super::types::{Keypoint, PoseDetection}, base::{Rect, Vec2}, candle_core::{Result, Tensor}, std::collections::VecDeque};
 
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())

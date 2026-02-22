@@ -15,11 +15,7 @@ pub use blocks::{C2f, ConvBlock, Dfl, Sppf, Upsample};
 pub use detector::PoseDetector;
 pub use types::{CocoKeypoint, Keypoint, PoseDetection, PoseDetections};
 
-use backbone::DarkNet;
-use candle_core::{Result, Tensor};
-use candle_nn::{Module, VarBuilder};
-use head::PoseHead;
-use neck::YoloV8Neck;
+use {backbone::DarkNet, candle_core::{Result, Tensor}, candle_nn::{Module, VarBuilder}, head::PoseHead, neck::YoloV8Neck};
 
 /// Model size configuration (width, depth, and ratio multipliers)
 #[derive(Debug, Clone, Copy)]

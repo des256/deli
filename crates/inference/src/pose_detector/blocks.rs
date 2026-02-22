@@ -3,8 +3,7 @@
 // Source: https://github.com/huggingface/candle/tree/main/candle-wasm-examples/yolo
 // License: Apache-2.0 OR MIT
 
-use candle_core::{Result, Tensor};
-use candle_nn::{batch_norm, conv2d_no_bias, Conv2dConfig, Module, VarBuilder};
+use {candle_core::{Result, Tensor}, candle_nn::{batch_norm, conv2d_no_bias, Conv2dConfig, Module, VarBuilder}};
 
 /// Convolution block: Conv2d + BatchNorm + SiLU activation
 #[derive(Debug)]

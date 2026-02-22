@@ -1,8 +1,12 @@
-use com::Server;
-use futures_util::SinkExt;
-use tokio::io::AsyncReadExt;
-use tokio::net::TcpStream;
-use tokio::time::{Duration, sleep, timeout};
+use {
+    com::Server,
+    futures_util::SinkExt,
+    tokio::{
+        io::AsyncReadExt,
+        net::TcpStream,
+        time::{Duration, sleep, timeout},
+    },
+};
 
 #[tokio::test]
 async fn test_sender_bind_creates_server() {

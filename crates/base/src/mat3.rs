@@ -1,6 +1,4 @@
-use std::ops::{Add, Mul, Neg, Sub};
-
-use crate::Vec3;
+use {crate::Vec3, std::ops::{Add, Mul, Neg, Sub}};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Mat3<T> {

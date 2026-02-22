@@ -1,6 +1,4 @@
-use crate::ComError;
-use codec::Codec;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use {crate::ComError, codec::Codec, tokio::io::{AsyncReadExt, AsyncWriteExt}};
 
 pub const MAX_MESSAGE_SIZE: u32 = 64 * 1024 * 1024; // 64 MB
 

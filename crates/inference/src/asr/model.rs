@@ -3,11 +3,11 @@
 // Ported from candle-transformers (Apache-2.0/MIT)
 // https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/whisper/model.rs
 
-use candle_core::{Module, Result, Tensor};
-use candle_nn::{layer_norm, Conv1d, Conv1dConfig, LayerNorm, VarBuilder};
-
-use super::attention::ResidualAttentionBlock;
-use super::config::Config;
+use {
+    super::{attention::ResidualAttentionBlock, config::Config},
+    candle_core::{Module, Result, Tensor},
+    candle_nn::{layer_norm, Conv1d, Conv1dConfig, LayerNorm, VarBuilder},
+};
 
 // Helper: 1D convolution with configurable stride
 fn conv1d(

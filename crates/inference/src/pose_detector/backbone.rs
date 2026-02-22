@@ -3,10 +3,7 @@
 // Source: https://github.com/huggingface/candle/tree/main/candle-wasm-examples/yolo
 // License: Apache-2.0 OR MIT
 
-use super::{C2f, ConvBlock, Sppf};
-use crate::pose_detector::Multiples;
-use candle_core::{Result, Tensor};
-use candle_nn::VarBuilder;
+use {super::{C2f, ConvBlock, Sppf}, crate::pose_detector::Multiples, candle_core::{Result, Tensor}, candle_nn::VarBuilder};
 
 /// DarkNet backbone - extracts features at 3 scales
 #[derive(Debug)]

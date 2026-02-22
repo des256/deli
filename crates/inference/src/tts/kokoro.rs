@@ -1,22 +1,22 @@
-use crate::{
-    InferError,
-    error::Result,
-    tts::{
-        phonemize::phonemize,
-        vocab::{tokenize, vocab},
+use {
+    crate::{
+        InferError,
+        error::Result,
+        tts::{phonemize::phonemize, vocab::{tokenize, vocab}},
+    },
+    audio::{AudioData, AudioSample},
+    base::Tensor,
+    futures_core::Stream,
+    futures_sink::Sink,
+    ort::{session::Session, value::Tensor as OrtTensor},
+    std::{
+        collections::{HashMap, VecDeque},
+        future::Future,
+        pin::Pin,
+        sync::{Arc, Mutex},
+        task::{Context, Poll},
     },
 };
-use audio::{AudioData, AudioSample};
-use base::Tensor;
-use futures_core::Stream;
-use futures_sink::Sink;
-use ort::session::Session;
-use ort::value::Tensor as OrtTensor;
-use std::collections::{HashMap, VecDeque};
-use std::future::Future;
-use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
 
 /// Load and validate an NPY voice style file.
 ///

@@ -1,6 +1,6 @@
 use {
     crate::*,
-    base::Tensor,
+    base::*,
     libpulse_binding::{
         callbacks::ListResult,
         context::{Context, FlagSet, State},
@@ -71,7 +71,7 @@ impl AudioIn {
 
         // send initial configuration
         if let Err(error) = new_config_sender.send(config.clone()).await {
-            log::error!("Failed to send initial audio config: {}", error);
+            log_fatal!("Failed to send initial audio config: {}", error);
         }
 
         // spawn separate task for audio capture loop
@@ -114,7 +114,7 @@ impl AudioIn {
                         ) {
                             Ok(pulse) => pulse,
                             Err(error) => {
-                                log::warn!(
+                                log_warn!(
                                     "Failed to connect to PulseAudion, reconnecting...: {}",
                                     error
                                 );
@@ -148,7 +148,7 @@ impl AudioIn {
 
                                         // if channel is full, silently drop the chunk
                                         Err(mpsc::error::TrySendError::Full(_)) => {
-                                            log::debug!(
+                                            log_debug!(
                                                 "Audio input chunk dropped: consumer too slow"
                                             );
                                         }
@@ -162,7 +162,7 @@ impl AudioIn {
 
                                 // if read error, break inner loop to reconnect
                                 Err(error) => {
-                                    log::warn!("PulseAudio read error: {}", error);
+                                    log_warn!("PulseAudio read error: {}", error);
                                     std::thread::sleep(std::time::Duration::from_millis(
                                         RECONNECT_SEC,
                                     ));
@@ -188,11 +188,13 @@ impl AudioIn {
     }
 
     // select a new audio configuration
-    pub async fn select(&mut self, config: AudioInConfig) {
-        if let Err(error) = self.new_config_sender.send(config.clone()).await {
-            log::error!("Failed to send new audio config: {}", error);
-        }
+    pub async fn select(&mut self, config: AudioInConfig) -> Result<(), AudioError> {
+        self.new_config_sender
+            .send(config.clone())
+            .await
+            .map_err(|error| AudioError::Device(error.to_string()))?;
         self.config = config;
+        Ok(())
     }
 
     // capture the next audio chunk

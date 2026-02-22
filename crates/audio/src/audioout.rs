@@ -1,5 +1,6 @@
 use {
-    crate::{AudioData, AudioError, AudioSample},
+    crate::*,
+    base::*,
     libpulse_binding::{
         callbacks::ListResult,
         context::{Context, FlagSet, State},
@@ -85,7 +86,7 @@ impl AudioOut {
 
         // send initial configuration
         if let Err(error) = new_config_sender.send(config.clone()).await {
-            log::error!("Failed to send initial audio config: {}", error);
+            log_fatal!("Failed to send initial audio config: {}", error);
         }
 
         // spawn separate task for audio playback loop
@@ -124,7 +125,7 @@ impl AudioOut {
                         ) {
                             Ok(pulse) => pulse,
                             Err(error) => {
-                                log::warn!(
+                                log_warn!(
                                     "Failed to connect to PulseAudio, reconnecting...: {}",
                                     error
                                 );
@@ -145,7 +146,7 @@ impl AudioOut {
                                             break;
                                         }
                                         Err(mpsc::error::TryRecvError::Disconnected) => {
-                                            log::error!("Audio output channel disconnected");
+                                            log_error!("Audio output channel disconnected");
                                             return;
                                         }
                                     }
@@ -162,7 +163,7 @@ impl AudioOut {
                                 },
                                 Err(mpsc::error::TryRecvError::Empty) => {}
                                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                                    log::error!("Audio output channel disconnected");
+                                    log_error!("Audio output channel disconnected");
                                     return;
                                 }
                             }
@@ -184,7 +185,7 @@ impl AudioOut {
                                 )
                             };
                             if let Err(error) = pulse.write(slice) {
-                                log::warn!("PulseAudio write error: {}", error);
+                                log_warn!("PulseAudio write error: {}", error);
                                 std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
                                 break;
                             }
@@ -210,7 +211,7 @@ impl AudioOut {
     // select a new audio configuration
     pub async fn select(&mut self, config: AudioOutConfig) {
         if let Err(error) = self.new_config_sender.send(config.clone()).await {
-            log::error!("Failed to send new audio config: {}", error);
+            log_error!("Failed to send new audio config: {}", error);
         }
         self.config = config;
     }
@@ -218,7 +219,7 @@ impl AudioOut {
     // play an audio sample
     pub async fn play(&self, sample: AudioSample) {
         if let Err(error) = self.sender.send(sample).await {
-            log::error!("Failed to play audio sample: {}", error);
+            log_error!("Failed to play audio sample: {}", error);
         }
     }
 

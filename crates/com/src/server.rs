@@ -1,17 +1,23 @@
-use crate::{ComError, framing};
-use codec::Codec;
-use futures_core::Stream;
-use futures_sink::Sink;
-use std::collections::HashMap;
-use std::future::Future;
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use tokio::net::tcp::OwnedWriteHalf;
-use tokio::net::{TcpListener, ToSocketAddrs};
-use tokio::sync::{RwLock, mpsc};
-use tokio::task::JoinHandle;
+use {
+    crate::{ComError, framing},
+    base::*,
+    codec::Codec,
+    futures_core::Stream,
+    futures_sink::Sink,
+    std::{
+        collections::HashMap,
+        future::Future,
+        net::SocketAddr,
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Poll},
+    },
+    tokio::{
+        net::{tcp::OwnedWriteHalf, TcpListener, ToSocketAddrs},
+        sync::{RwLock, mpsc},
+        task::JoinHandle,
+    },
+};
 
 pub struct Server<T> {
     clients: Arc<RwLock<HashMap<SocketAddr, OwnedWriteHalf>>>,
@@ -58,7 +64,7 @@ impl<T: Codec + Send + 'static> Server<T> {
                                         }
                                     }
                                     Err(e) => {
-                                        log::warn!("Client {} disconnected: {}", addr, e);
+                                        log_warn!("Client {} disconnected: {}", addr, e);
                                         clients_for_cleanup.write().await.remove(&addr);
                                         break;
                                     }
@@ -67,7 +73,7 @@ impl<T: Codec + Send + 'static> Server<T> {
                         });
                     }
                     Err(e) => {
-                        log::warn!("Accept error: {}", e);
+                        log_warn!("Accept error: {}", e);
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                 }
@@ -131,7 +137,7 @@ impl<T: Codec + Send + Sync + 'static> Sink<T> for Server<T> {
             let mut failed = Vec::new();
             for (addr, writer) in lock.iter_mut() {
                 if let Err(e) = framing::write_message(writer, &item).await {
-                    log::warn!("Failed to send to {}: {}", addr, e);
+                    log_warn!("Failed to send to {}: {}", addr, e);
                     failed.push(*addr);
                 }
             }

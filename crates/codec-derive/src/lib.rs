@@ -1,6 +1,8 @@
-use proc_macro::TokenStream;
-use proc_macro2::{Delimiter, Ident, Span, TokenStream as TokenStream2, TokenTree};
-use quote::quote;
+use {
+    proc_macro::TokenStream,
+    proc_macro2::{Delimiter, Ident, Span, TokenStream as TokenStream2, TokenTree},
+    quote::quote,
+};
 
 mod dart;
 

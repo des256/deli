@@ -1,5 +1,4 @@
-use base::Vec2;
-use image::{Image, PixelFormat};
+use {base::Vec2, image::{Image, PixelFormat}};
 
 #[test]
 fn test_rgb_to_jpeg_roundtrip() {

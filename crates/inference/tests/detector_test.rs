@@ -1,6 +1,4 @@
-use futures_util::{SinkExt, StreamExt};
-use image::Image;
-use inference::Inference;
+use {futures_util::{SinkExt, StreamExt}, image::Image, inference::Inference};
 
 fn cuda() -> Inference {
     Inference::cuda(0).expect("CUDA device required")

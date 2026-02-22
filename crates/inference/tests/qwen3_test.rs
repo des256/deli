@@ -1,8 +1,6 @@
 // Tests for Qwen3 LLM public API
 
-use candle_core::Device;
-use inference::{Inference, Qwen3};
-use std::path::Path;
+use {candle_core::Device, inference::{Inference, Qwen3}, std::path::Path};
 
 fn cuda_device() -> Device {
     Device::new_cuda(0).expect("CUDA device required")

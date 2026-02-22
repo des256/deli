@@ -1,5 +1,4 @@
-use com::{WsClient, WsServer};
-use tokio::time::{Duration, sleep, timeout};
+use {com::{WsClient, WsServer}, tokio::time::{Duration, sleep, timeout}};
 
 #[tokio::test]
 async fn test_ws_single_sender_single_receiver() {

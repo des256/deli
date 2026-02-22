@@ -1,5 +1,4 @@
-use base::{Rect, Vec2};
-use inference::{CocoKeypoint, InferError, Keypoint, PoseDetection};
+use {base::{Rect, Vec2}, inference::{CocoKeypoint, InferError, Keypoint, PoseDetection}};
 
 #[test]
 fn test_keypoint_construction() {

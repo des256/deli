@@ -1,6 +1,4 @@
-use com::{Client, ComError, Server};
-use futures_util::{SinkExt, StreamExt};
-use tokio::time::{Duration, sleep, timeout};
+use {com::{Client, ComError, Server}, futures_util::{SinkExt, StreamExt}, tokio::time::{Duration, sleep, timeout}};
 
 #[tokio::test]
 async fn test_receiver_connect() {

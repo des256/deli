@@ -1,5 +1,4 @@
-use base::{Mat3, Quat, Vec3};
-use std::f64::consts::{FRAC_PI_2, PI};
+use {base::{Mat3, Quat, Vec3}, std::f64::consts::{FRAC_PI_2, PI}};
 
 const EPS: f64 = 1e-10;
 

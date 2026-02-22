@@ -3,9 +3,7 @@
 // Source: https://github.com/huggingface/candle/tree/main/candle-wasm-examples/yolo
 // License: Apache-2.0 OR MIT
 
-use super::{ConvBlock, Dfl};
-use candle_core::{Device, Result, Tensor};
-use candle_nn::{conv2d, Conv2dConfig, Module, VarBuilder};
+use {super::{ConvBlock, Dfl}, candle_core::{Device, Result, Tensor}, candle_nn::{conv2d, Conv2dConfig, Module, VarBuilder}};
 
 /// Pose detection head for YOLOv8-Pose
 #[derive(Debug)]

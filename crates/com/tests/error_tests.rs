@@ -1,6 +1,4 @@
-use codec::DecodeError;
-use com::ComError;
-use std::io;
+use {codec::DecodeError, com::ComError, std::io};
 
 #[test]
 fn test_error_has_all_variants() {

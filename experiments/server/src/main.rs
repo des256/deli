@@ -1,5 +1,5 @@
 use {
-    base::{Vec2, log},
+    base::*,
     com::WsServer,
     image::{PixelFormat, argb_to_jpeg, rgb_to_jpeg, srggb10p_to_jpeg, yu12_to_jpeg, yuyv_to_jpeg},
     server::{Language, ToMonitor},
@@ -17,9 +17,9 @@ const DEFAULT_ADDR: &str = "0.0.0.0:5090";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    base::init_stdout_logger();
+    init_stdout_logger();
 
-    log::info!("websocket server: {}", DEFAULT_ADDR);
+    log_info!("websocket server: {}", DEFAULT_ADDR);
 
     // Open video input
     #[cfg(feature = "rpicam")]
@@ -45,11 +45,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })))
     .await?;
     let size = videoin.size();
-    log::info!("resolution: {}x{}", size.x, size.y);
+    log_info!("resolution: {}x{}", size.x, size.y);
     let format = videoin.format();
-    log::info!("format: {:?}", format);
+    log_info!("format: {:?}", format);
     let frame_rate = videoin.frame_rate();
-    log::info!("frame rate: {}", frame_rate);
+    log_info!("frame rate: {}", frame_rate);
 
     // Bind WebSocket server
     let server = WsServer::<ToMonitor>::bind(DEFAULT_ADDR).await?;
@@ -78,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Send initial settings when client count changes
         let client_count = server.client_count().await;
         if client_count != prev_client_count {
-            log::info!("Connected clients: {}", client_count);
+            log_info!("Connected clients: {}", client_count);
             // Send Settings after video frame (not before) to avoid race with client listener setup
             if client_count > 0 {
                 server

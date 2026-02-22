@@ -1,9 +1,4 @@
-use audio::AudioIn;
-use base::log;
-use futures_util::{SinkExt, StreamExt};
-use inference::Inference;
-use inference::asr::Transcription;
-use std::path::PathBuf;
+use {audio::AudioIn, base::*, futures_util::{SinkExt, StreamExt}, inference::{Inference, asr::Transcription}, std::path::PathBuf};
 
 const WINDOW_SAMPLES: usize = 48000; // 3 seconds at 16kHz
 
@@ -30,19 +25,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    log::info!("Speech Recognition Experiment");
-    log::info!("Model directory: {}", model_dir);
+    log_info!("Speech Recognition Experiment");
+    log_info!("Model directory: {}", model_dir);
 
     // Initialize CUDA
-    log::info!("Initializing CUDA...");
+    log_info!("Initializing CUDA...");
     let inference = Inference::cuda(0)?;
-    log::info!("CUDA initialized");
+    log_info!("CUDA initialized");
 
     // Load Whisper model with 3-second window
     let mut whisper = inference
         .use_whisper(&model_path, &tokenizer_path, &config_path)?
         .with_window_samples(WINDOW_SAMPLES);
-    log::info!("Whisper model loaded");
+    log_info!("Whisper model loaded");
 
     // Create audio input
     let mut audioin = AudioIn::open(None).await;
@@ -57,7 +52,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         whisper.send(sample).await?;
                     }
                     Err(error) => {
-                        log::error!("Audio capture error: {}", error);
+                        log_error!("Audio capture error: {}", error);
                         break;
                     }
                 }
@@ -71,15 +66,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if !text.is_empty() {
                             println!("{}", text);
                         } else {
-                            log::debug!("No speech detected in window");
+                            log_debug!("No speech detected in window");
                         }
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
-                        log::error!("Transcription error: {}", e);
+                        log_error!("Transcription error: {}", e);
                     }
                     None => {
-                        log::info!("Whisper stream ended");
+                        log_info!("Whisper stream ended");
                         break;
                     }
                 }
@@ -87,7 +82,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Handle Ctrl+C
             _ = tokio::signal::ctrl_c() => {
-                log::info!("Shutting down...");
+                log_info!("Shutting down...");
 
                 // Close sink to flush remaining audio
                 whisper.close().await?;
@@ -103,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            log::error!("Transcription error: {}", e);
+                            log_error!("Transcription error: {}", e);
                         }
                     }
                 }

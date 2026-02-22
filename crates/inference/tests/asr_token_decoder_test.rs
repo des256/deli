@@ -1,9 +1,6 @@
 // Tests for ASR token decoder (greedy decoding loop)
 
-use candle_core::{DType, Device, Tensor};
-use candle_nn::VarBuilder;
-use inference::asr::{Config, TokenDecoder, WhisperModel};
-use tokenizers::Tokenizer;
+use {candle_core::{DType, Device, Tensor}, candle_nn::VarBuilder, inference::asr::{Config, TokenDecoder, WhisperModel}, tokenizers::Tokenizer};
 
 fn cuda_device() -> Device {
     Device::new_cuda(0).expect("CUDA device required")

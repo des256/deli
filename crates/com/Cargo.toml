@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+base = { path = "../base" }
 codec = { path = "../codec" }
 tokio = { version = "1", features = [
     "rt",
@@ -23,7 +24,6 @@ futures-core = "0.3"
 futures-sink = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
 http = "1"
-log = "0.4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }

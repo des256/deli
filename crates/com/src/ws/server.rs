@@ -1,13 +1,16 @@
-use crate::ComError;
-use codec::Codec;
-use futures_util::{SinkExt, StreamExt};
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use tokio::net::{TcpListener, ToSocketAddrs};
-use tokio::sync::{RwLock, mpsc};
-use tokio::task::JoinHandle;
-use tokio_websockets::{Message, ServerBuilder, WebSocketStream};
+use {
+    crate::ComError,
+    base::*,
+    codec::Codec,
+    futures_util::{SinkExt, StreamExt},
+    std::{collections::HashMap, net::SocketAddr, sync::Arc},
+    tokio::{
+        net::{TcpListener, ToSocketAddrs},
+        sync::{RwLock, mpsc},
+        task::JoinHandle,
+    },
+    tokio_websockets::{Message, ServerBuilder, WebSocketStream},
+};
 
 type WsSink = futures_util::stream::SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>;
 
@@ -42,7 +45,7 @@ impl<T: Codec + Send + 'static> WsServer<T> {
                         let ws_stream = match ServerBuilder::new().accept(tcp_stream).await {
                             Ok((_request, ws_stream)) => ws_stream,
                             Err(e) => {
-                                log::warn!("WebSocket handshake failed for {}: {}", addr, e);
+                                log_warn!("WebSocket handshake failed for {}: {}", addr, e);
                                 continue;
                             }
                         };
@@ -65,7 +68,7 @@ impl<T: Codec + Send + 'static> WsServer<T> {
                                             if payload.len()
                                                 > crate::framing::MAX_MESSAGE_SIZE as usize
                                             {
-                                                log::warn!(
+                                                log_warn!(
                                                     "Message from {} too large: {} bytes",
                                                     addr,
                                                     payload.len()
@@ -79,7 +82,7 @@ impl<T: Codec + Send + 'static> WsServer<T> {
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    log::warn!(
+                                                    log_warn!(
                                                         "Failed to decode message from {}: {}",
                                                         addr,
                                                         e
@@ -90,12 +93,12 @@ impl<T: Codec + Send + 'static> WsServer<T> {
                                         // Ignore text messages and control frames
                                     }
                                     Some(Err(e)) => {
-                                        log::warn!("Client {} error: {}", addr, e);
+                                        log_warn!("Client {} error: {}", addr, e);
                                         clients_for_cleanup.write().await.remove(&addr);
                                         break;
                                     }
                                     None => {
-                                        log::warn!("Client {} disconnected", addr);
+                                        log_warn!("Client {} disconnected", addr);
                                         clients_for_cleanup.write().await.remove(&addr);
                                         break;
                                     }
@@ -104,7 +107,7 @@ impl<T: Codec + Send + 'static> WsServer<T> {
                         });
                     }
                     Err(e) => {
-                        log::warn!("Accept error: {}", e);
+                        log_warn!("Accept error: {}", e);
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                 }
@@ -134,7 +137,7 @@ impl<T: Codec + Send + 'static> WsServer<T> {
 
         for (addr, writer) in lock.iter_mut() {
             if let Err(e) = writer.send(msg.clone()).await {
-                log::warn!("Failed to send to {}: {}", addr, e);
+                log_warn!("Failed to send to {}: {}", addr, e);
                 failed_addrs.push(*addr);
             }
         }

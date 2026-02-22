@@ -1,10 +1,10 @@
-use crate::InferError;
-use candle_core::{Device, Tensor};
-use candle_transformers::generation::{LogitsProcessor, Sampling};
-use candle_transformers::models::quantized_qwen3::ModelWeights;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use tokenizers::Tokenizer;
+use {
+    crate::InferError,
+    candle_core::{Device, Tensor},
+    candle_transformers::{generation::{LogitsProcessor, Sampling}, models::quantized_qwen3::ModelWeights},
+    std::{path::Path, sync::{Arc, Mutex}},
+    tokenizers::Tokenizer,
+};
 
 /// Quantized Qwen3 8B language model for text generation.
 ///

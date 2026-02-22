@@ -3,8 +3,7 @@
 // Ported from candle-transformers (Apache-2.0/MIT)
 // https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/whisper/model.rs
 
-use candle_core::{Module, Result, Tensor};
-use candle_nn::{layer_norm, linear, linear_no_bias, LayerNorm, Linear, VarBuilder};
+use {candle_core::{Module, Result, Tensor}, candle_nn::{layer_norm, linear, linear_no_bias, LayerNorm, Linear, VarBuilder}};
 
 #[derive(Debug, Clone)]
 pub(crate) struct MultiHeadAttention {

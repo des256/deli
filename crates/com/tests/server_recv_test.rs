@@ -1,9 +1,13 @@
-use codec::Codec;
-use com::Server;
-use futures_util::StreamExt;
-use tokio::io::AsyncWriteExt;
-use tokio::net::TcpStream;
-use tokio::time::{Duration, sleep, timeout};
+use {
+    codec::Codec,
+    com::Server,
+    futures_util::StreamExt,
+    tokio::{
+        io::AsyncWriteExt,
+        net::TcpStream,
+        time::{Duration, sleep, timeout},
+    },
+};
 
 #[tokio::test]
 async fn test_server_recv_from_client() {

@@ -1,9 +1,4 @@
-use audio::{AudioData, AudioOut, AudioOutConfig};
-use base::log;
-use futures_util::{SinkExt, StreamExt};
-use inference::Inference;
-use std::path::PathBuf;
-use std::time::Duration;
+use {audio::{AudioData, AudioOut, AudioOutConfig}, base::*, futures_util::{SinkExt, StreamExt}, inference::Inference, std::{path::PathBuf, time::Duration}};
 
 const SENTENCE: &str = "To be, or not to be, equals, minus one.";
 const SAMPLE_RATE: usize = 24000;
@@ -39,19 +34,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Initialize inference and load Kokoro model
-    log::info!("Initializing Kokoro TTS...");
+    log_info!("Initializing Kokoro TTS...");
     let inference = Inference::cpu();
     let mut kokoro = inference.use_kokoro(&model_path, &voice_path, Some(espeak_data_path))?;
-    log::info!("Kokoro model loaded");
+    log_info!("Kokoro model loaded");
 
     // Synthesize speech
-    log::info!("Synthesizing: \"{}\"", SENTENCE);
+    log_info!("Synthesizing: \"{}\"", SENTENCE);
     kokoro.send(SENTENCE.to_string()).await?;
     kokoro.close().await?;
 
     let sample = kokoro.next().await.expect("stream should yield audio")?;
     let AudioData::Pcm(ref tensor) = sample.data;
-    log::info!("Generated {} samples", tensor.data.len());
+    log_info!("Generated {} samples", tensor.data.len());
 
     // Create AudioOut and play samples
     let mut audioout = AudioOut::open(None).await;
@@ -62,15 +57,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await;
     let num_samples = tensor.data.len();
-    log::info!("Sending {} samples to AudioOut", num_samples);
+    log_info!("Sending {} samples to AudioOut", num_samples);
     audioout.play(sample).await;
 
     // Wait for playback to complete (AudioOut doesn't flush on drop)
     let duration_secs = num_samples as f64 / SAMPLE_RATE as f64;
     let duration_ms = (duration_secs * 1000.0) as u64 + 500;
-    log::info!("Waiting {:.2}s for playback to complete...", duration_secs);
+    log_info!("Waiting {:.2}s for playback to complete...", duration_secs);
     tokio::time::sleep(Duration::from_millis(duration_ms)).await;
 
-    log::info!("Playback complete");
+    log_info!("Playback complete");
     Ok(())
 }

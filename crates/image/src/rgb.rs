@@ -1,5 +1,4 @@
-use crate::*;
-use base::Vec2;
+use {crate::*, base::Vec2};
 
 pub fn yuyv_to_rgb(size: Vec2<usize>, data: &[u8]) -> Vec<u8> {
     let pixel_count = size.x * size.y;

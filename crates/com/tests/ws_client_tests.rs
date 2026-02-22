@@ -1,5 +1,4 @@
-use com::{WsServer, ws::WsClient};
-use tokio::time::{Duration, sleep, timeout};
+use {com::{WsServer, ws::WsClient}, tokio::time::{Duration, sleep, timeout}};
 
 #[tokio::test]
 async fn test_ws_client_connect() {

@@ -1,6 +1,6 @@
 use {
     crate::*,
-    base::Vec2,
+    base::*,
     image::PixelFormat,
     std::sync::{
         Arc,
@@ -88,12 +88,12 @@ impl VideoIn {
                         match device.blocking_capture() {
                             Ok(frame) => {
                                 if let Err(error) = sender.blocking_send(frame) {
-                                    log::error!("Failed to send video frame: {}", error);
+                                    log_error!("Failed to send video frame: {}", error);
                                     return; // main closed the channel, so drop everything
                                 }
                             }
                             Err(e) => {
-                                log::error!("video worker: capture failed: {}", e);
+                                log_error!("video worker: capture failed: {}", e);
                                 break;
                             }
                         }
@@ -101,7 +101,7 @@ impl VideoIn {
 
                     // close, wait, and reopen the device
                     while !cancel.load(Ordering::Relaxed) {
-                        log::info!("video worker: reconnecting...");
+                        log_info!("video worker: reconnecting...");
                         device.close();
                         std::thread::sleep(std::time::Duration::from_millis(
                             WAIT_BEFORE_RECONNECT_MS,

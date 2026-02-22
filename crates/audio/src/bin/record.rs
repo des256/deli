@@ -1,6 +1,4 @@
-use audio::{AudioData, AudioIn, AudioSample};
-use base::log;
-use hound;
+use {audio::*, base::*, hound};
 
 const SAMPLE_RATE: usize = 16000;
 const DURATION_SECONDS: usize = 5;
@@ -8,17 +6,16 @@ const TOTAL_SAMPLES: usize = SAMPLE_RATE * DURATION_SECONDS;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    base::init_stdout_logger();
+    init_stdout_logger();
 
     // Parse CLI arguments
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: {} <output-wav-path>", args[0]);
-        std::process::exit(1);
+        log_fatal!("Usage: {} <output-wav-path>", args[0]);
     }
     let output_path = &args[1];
 
-    log::info!("Recording 5 seconds...");
+    log_info!("Recording 5 seconds...");
 
     // Create AudioIn and capture samples
     let mut audioin = AudioIn::open(None).await;
@@ -32,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             },
             Err(error) => {
-                log::error!("Audio capture ended unexpectedly: {}", error);
+                log_error!("Audio capture ended unexpectedly: {}", error);
                 break;
             }
         }
@@ -41,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Truncate to exactly 80000 samples
     all_samples.truncate(TOTAL_SAMPLES);
 
-    log::info!("Recorded {} samples", all_samples.len());
+    log_info!("Recorded {} samples", all_samples.len());
 
     // Write to WAV file
     let spec = hound::WavSpec {
@@ -57,6 +54,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     writer.finalize()?;
 
-    log::info!("Saved to {}", output_path);
+    log_info!("Saved to {}", output_path);
     Ok(())
 }

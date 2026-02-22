@@ -1,19 +1,21 @@
-use super::postprocess::postprocess;
-use super::types::PoseDetections;
-use super::{Multiples, YoloV8Pose};
-use crate::InferError;
-use base::Tensor;
-use candle_core::{DType, Device, Tensor as CanTensor};
-use futures_core::Stream;
-use futures_sink::Sink;
-use image::Image;
-use std::collections::VecDeque;
-use std::fmt;
-use std::future::Future;
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
+use {
+    super::{postprocess::postprocess, types::PoseDetections, Multiples, YoloV8Pose},
+    crate::InferError,
+    base::Tensor,
+    candle_core::{DType, Device, Tensor as CanTensor},
+    futures_core::Stream,
+    futures_sink::Sink,
+    image::Image,
+    std::{
+        collections::VecDeque,
+        fmt,
+        future::Future,
+        path::Path,
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Poll, Waker},
+    },
+};
 
 /// Pose detector for running YOLOv8-Pose inference.
 ///

@@ -3,9 +3,7 @@
 // Ported from candle-transformers (Apache-2.0/MIT)
 // https://github.com/huggingface/candle/blob/main/candle-transformers/src/models/whisper/audio.rs
 
-use num_traits::Float;
-
-use super::config::{Config, HOP_LENGTH, N_FFT};
+use {num_traits::Float, super::config::{Config, HOP_LENGTH, N_FFT}};
 
 const EPSILON: f32 = 1e-10;
 

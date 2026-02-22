@@ -1,20 +1,19 @@
-use crate::asr::transcription::Transcription;
-use crate::asr::{
-    audio::pcm_to_mel, config::Config, model::Whisper as WhisperModel, token_decoder::TokenDecoder,
+use {
+    crate::{
+        asr::{
+            audio::pcm_to_mel, config::Config, model::Whisper as WhisperModel,
+            token_decoder::TokenDecoder, transcription::Transcription,
+        },
+        error::{InferError, Result},
+    },
+    audio::{AudioData, AudioSample},
+    candle_core::{Device, Tensor as CandleTensor},
+    candle_nn::VarBuilder,
+    futures_core::Stream,
+    futures_sink::Sink,
+    std::{future::Future, path::Path, pin::Pin, sync::Arc, task::{Context, Poll}},
+    tokenizers::Tokenizer,
 };
-use crate::error::{InferError, Result};
-use audio::{AudioData, AudioSample};
-use base::Language;
-use candle_core::{Device, Tensor as CandleTensor};
-use candle_nn::VarBuilder;
-use futures_core::Stream;
-use futures_sink::Sink;
-use std::future::Future;
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
-use tokenizers::Tokenizer;
 
 const DEFAULT_WINDOW_SAMPLES: usize = 48000; // 3 seconds at 16kHz
 const REQUIRED_SAMPLE_RATE: usize = 16000;
@@ -135,7 +134,6 @@ impl Whisper {
 
             Ok(Transcription::Final {
                 text,
-                language: Language::EnglishUs,
                 confidence: 1.0,
             })
         }));

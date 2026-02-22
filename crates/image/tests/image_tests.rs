@@ -1,5 +1,4 @@
-use base::Vec2;
-use image::{Image, ImageError, PixelFormat};
+use {base::Vec2, image::{Image, ImageError, PixelFormat}};
 
 #[test]
 fn test_image_new_rgb8() {

@@ -1,7 +1,6 @@
 // Dart struct code generation
 
-use super::codec::{gen_decode_expr, gen_encode_expr};
-use super::types::{collect_custom_types, rust_type_to_dart_type, to_snake_case};
+use super::{codec::{gen_decode_expr, gen_encode_expr}, types::{collect_custom_types, rust_type_to_dart_type, to_snake_case}};
 
 pub(super) fn generate_struct_dart(name: &str, fields: &crate::FieldsKind) -> String {
     let mut imports = vec!["import 'dart:typed_data';".to_string()];

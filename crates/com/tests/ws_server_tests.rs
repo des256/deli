@@ -1,5 +1,4 @@
-use com::ws::WsServer;
-use tokio::time::{Duration, sleep};
+use {com::ws::WsServer, tokio::time::{Duration, sleep}};
 
 #[tokio::test]
 async fn test_ws_server_bind_creates_server() {

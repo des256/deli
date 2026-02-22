@@ -1,6 +1,6 @@
 use {
     crate::*,
-    base::Vec2,
+    base::*,
     image::{Image, PixelFormat},
     realsense_sys as sys,
 };
@@ -291,7 +291,7 @@ unsafe fn log_device_info(dev: *mut sys::rs2_device) {
             "?".into()
         };
 
-        log::info!("realsense: device={name_str}, fw={fw_str}, usb={usb_str}");
+        log_info!("realsense: device={name_str}, fw={fw_str}, usb={usb_str}");
     }
 }
 

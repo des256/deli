@@ -1,13 +1,19 @@
-use crate::{ComError, framing};
-use codec::Codec;
-use futures_core::Stream;
-use futures_sink::Sink;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::{TcpStream, ToSocketAddrs};
+use {
+    crate::{ComError, framing},
+    codec::Codec,
+    futures_core::Stream,
+    futures_sink::Sink,
+    std::{
+        future::Future,
+        marker::PhantomData,
+        pin::Pin,
+        task::{Context, Poll},
+    },
+    tokio::net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpStream, ToSocketAddrs,
+    },
+};
 
 pub struct Client<T> {
     reader: Option<OwnedReadHalf>,

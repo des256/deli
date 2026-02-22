@@ -1,5 +1,5 @@
 use {
-    base::log,
+    base::*,
     image::{argb_to_u32, jpeg_to_u32, rgb_to_u32, srggb10p_to_u32, yu12_to_u32, yuyv_to_u32, PixelFormat},
     minifb::{Key, Window, WindowOptions},
     video::{VideoFrame, VideoIn},
@@ -20,16 +20,16 @@ fn frame_to_u32(frame: &VideoFrame) -> Vec<u32> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    base::init_stdout_logger();
+    init_stdout_logger();
 
     // Initialize camera
     let mut videoin = VideoIn::open(None).await?;
     let size = videoin.size();
-    log::info!("resolution: {}x{}", size.x, size.y);
+    log_info!("resolution: {}x{}", size.x, size.y);
     let format = videoin.format();
-    log::info!("format: {:?}", format);
+    log_info!("format: {:?}", format);
     let frame_rate = videoin.frame_rate();
-    log::info!("frame rate: {}", frame_rate);
+    log_info!("frame rate: {}", frame_rate);
 
     // Create display window
     let mut window = Window::new(

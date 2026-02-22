@@ -1,13 +1,14 @@
 // Tests for ASR Whisper public API (Sink<AudioSample> + Stream<Transcription>)
 
-use audio::{AudioData, AudioSample};
-use base::Tensor as BaseTensor;
-use candle_core::{DType, Device};
-use candle_nn::VarBuilder;
-use futures_util::{SinkExt, StreamExt};
-use inference::asr::{Config, Transcription, WhisperModel};
-use inference::{Inference, Whisper};
-use std::path::Path;
+use {
+    audio::{AudioData, AudioSample},
+    base::Tensor as BaseTensor,
+    candle_core::{DType, Device},
+    candle_nn::VarBuilder,
+    futures_util::{SinkExt, StreamExt},
+    inference::{asr::{Config, Transcription, WhisperModel}, Inference, Whisper},
+    std::path::Path,
+};
 
 const SAMPLE_RATE: usize = 16000;
 

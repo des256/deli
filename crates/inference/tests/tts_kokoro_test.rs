@@ -1,11 +1,11 @@
-use audio::{AudioData, AudioSample};
-use futures_core::Stream;
-use futures_sink::Sink;
-use futures_util::{SinkExt, StreamExt};
-use inference::{Inference, Kokoro};
-use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use {
+    audio::{AudioData, AudioSample},
+    futures_core::Stream,
+    futures_sink::Sink,
+    futures_util::{SinkExt, StreamExt},
+    inference::{Inference, Kokoro},
+    std::{fs, io::Write, path::PathBuf},
+};
 
 fn model_path(relative: &str) -> PathBuf {
     // CARGO_MANIFEST_DIR points to the crate root (crates/deli-infer)

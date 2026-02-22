@@ -1,6 +1,4 @@
-use crate::*;
-use base::Vec2;
-use crates_image::ImageEncoder;
+use {crate::*, base::Vec2, crates_image::ImageEncoder};
 
 pub fn rgb_to_jpeg(size: Vec2<usize>, data: &[u8], quality: u8) -> Vec<u8> {
     let mut buffer = Vec::new();

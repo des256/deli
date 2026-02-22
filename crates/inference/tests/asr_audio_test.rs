@@ -1,5 +1,4 @@
-use inference::asr::config::N_SAMPLES;
-use inference::asr::{Config, load_mel_filters, pcm_to_mel};
+use inference::asr::{config::N_SAMPLES, Config, load_mel_filters, pcm_to_mel};
 
 #[test]
 fn test_load_mel_filters() {

@@ -1,9 +1,10 @@
-use crate::ComError;
-use codec::Codec;
-use futures_util::{SinkExt, StreamExt};
-use std::marker::PhantomData;
-use std::net::SocketAddr;
-use tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream};
+use {
+    crate::ComError,
+    codec::Codec,
+    futures_util::{SinkExt, StreamExt},
+    std::{marker::PhantomData, net::SocketAddr},
+    tokio_websockets::{ClientBuilder, MaybeTlsStream, Message, WebSocketStream},
+};
 
 pub struct WsClient<T> {
     stream: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,

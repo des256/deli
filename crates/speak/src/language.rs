@@ -1,5 +1,4 @@
-use codec::{Codec, Dart};
-use std::fmt;
+use {codec::{Codec, Dart}, std::fmt};
 
 #[derive(Debug, Clone, Copy, Codec, Dart)]
 pub enum Language {

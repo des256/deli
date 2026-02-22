@@ -1,7 +1,4 @@
-use std::fmt;
-use std::ops::{Add, Div, Mul, Neg, Sub};
-
-use crate::{Mat3, Vec3};
+use {crate::{Mat3, Vec3}, std::{fmt, ops::{Add, Div, Mul, Neg, Sub}}};
 
 #[derive(Clone, Copy, PartialEq)]
 pub struct Quat<T> {

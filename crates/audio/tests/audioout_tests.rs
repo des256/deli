@@ -1,5 +1,4 @@
-use audio::{AudioData, AudioOut, AudioOutConfig, AudioSample};
-use base::Tensor;
+use {audio::{AudioData, AudioOut, AudioOutConfig, AudioSample}, base::Tensor};
 
 #[tokio::test]
 async fn test_audioout_open() {

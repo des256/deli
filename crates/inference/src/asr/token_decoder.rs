@@ -1,10 +1,11 @@
 // Token decoder for Whisper ASR - greedy decoding loop
 // Ported from candle-examples/examples/whisper/main.rs (Apache-2.0/MIT)
 
-use crate::asr::{config::Config, model::Whisper};
-use crate::error::{InferError, Result};
-use candle_core::{Device, IndexOp, Tensor};
-use tokenizers::Tokenizer;
+use {
+    crate::{asr::{config::Config, model::Whisper}, error::{InferError, Result}},
+    candle_core::{Device, IndexOp, Tensor},
+    tokenizers::Tokenizer,
+};
 
 /// Result of decoding a single audio segment
 #[derive(Debug, Clone)]

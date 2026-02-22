@@ -1,9 +1,4 @@
-use audio::{AudioData, AudioSample};
-use base::{Tensor, log};
-use futures_util::{SinkExt, StreamExt};
-use inference::Inference;
-use inference::asr::Transcription;
-use std::path::PathBuf;
+use {audio::{AudioData, AudioSample}, base::*, futures_util::{SinkExt, StreamExt}, inference::{Inference, asr::Transcription}, std::path::PathBuf};
 use std::time::Instant;
 
 const WHISPER_SAMPLE_RATE: usize = 16000;
@@ -27,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Read WAV file
     let reader = hound::WavReader::open(wav_path)?;
     let spec = reader.spec();
-    log::info!(
+    log_info!(
         "WAV: {} Hz, {} ch, {} bit",
         spec.sample_rate,
         spec.channels,
@@ -64,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resample to 16kHz if needed
     let samples = if spec.sample_rate != WHISPER_SAMPLE_RATE as u32 {
-        log::info!(
+        log_info!(
             "Resampling from {} Hz to {} Hz",
             spec.sample_rate,
             WHISPER_SAMPLE_RATE
@@ -75,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let duration_secs = samples.len() as f64 / WHISPER_SAMPLE_RATE as f64;
-    log::info!("Audio: {:.1}s, {} samples", duration_secs, samples.len());
+    log_info!("Audio: {:.1}s, {} samples", duration_secs, samples.len());
 
     // Validate model directory
     let model_path = PathBuf::from(model_dir).join("model.safetensors");
@@ -92,15 +87,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Initialize CUDA and load model
-    log::info!("Initializing CUDA...");
+    log_info!("Initializing CUDA...");
     let inference = Inference::cuda(0)?;
-    log::info!("CUDA initialized");
+    log_info!("CUDA initialized");
 
     let num_samples = samples.len();
     let mut whisper = inference
         .use_whisper(&model_path, &tokenizer_path, &config_path)?
         .with_window_samples(num_samples); // Process entire file as one window
-    log::info!("Whisper model loaded");
+    log_info!("Whisper model loaded");
 
     // Send audio and close
     let tensor = Tensor::new(vec![num_samples], samples)?;
@@ -122,15 +117,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if !text.is_empty() {
                     println!("{}", text);
                 } else {
-                    log::info!("No speech detected");
+                    log_info!("No speech detected");
                 }
             }
-            _ => log::info!("No speech detected"),
+            _ => log_info!("No speech detected"),
         }
     }
 
     let elapsed = start.elapsed();
-    log::info!("Transcription took {:?}", elapsed);
+    log_info!("Transcription took {:?}", elapsed);
     Ok(())
 }
 

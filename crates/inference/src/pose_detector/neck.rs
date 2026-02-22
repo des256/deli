@@ -3,10 +3,7 @@
 // Source: https://github.com/huggingface/candle/tree/main/candle-wasm-examples/yolo
 // License: Apache-2.0 OR MIT
 
-use super::{C2f, ConvBlock, Upsample};
-use crate::pose_detector::Multiples;
-use candle_core::{Result, Tensor};
-use candle_nn::{Module, VarBuilder};
+use {super::{C2f, ConvBlock, Upsample}, crate::pose_detector::Multiples, candle_core::{Result, Tensor}, candle_nn::{Module, VarBuilder}};
 
 /// YOLOv8 neck with Feature Pyramid Network
 #[derive(Debug)]

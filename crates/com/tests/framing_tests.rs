@@ -1,5 +1,4 @@
-use com::{ComError, framing};
-use tokio::io::AsyncWriteExt;
+use {com::{ComError, framing}, tokio::io::AsyncWriteExt};
 
 #[tokio::test]
 async fn test_round_trip_u32() {

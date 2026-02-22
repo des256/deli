@@ -1,8 +1,4 @@
-use crate::InferError;
-use candle_core::Device;
-use ort::session::Session as OrtSession;
-use std::path::Path;
-use std::sync::OnceLock;
+use {crate::InferError, candle_core::Device, ort::session::Session as OrtSession, std::{path::Path, sync::OnceLock}};
 
 static ORT_INIT: OnceLock<()> = OnceLock::new();
 

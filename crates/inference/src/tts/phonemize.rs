@@ -1,6 +1,4 @@
-use std::ffi::{c_char, CStr, CString};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{ffi::{c_char, CStr, CString}, sync::{Mutex, atomic::{AtomicBool, Ordering}}};
 
 // Thread safety for espeak-ng global state
 static ESPEAK_MUTEX: Mutex<()> = Mutex::new(());
