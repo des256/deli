@@ -26,6 +26,7 @@ pub struct Inference {
 impl Inference {
     pub fn cpu() -> Self {
         ensure_onnx_init();
+        base::log_info!("Inference device: CPU");
         Self {
             device: Device::Cpu,
             onnx_device: OnnxDevice::Cpu,
@@ -36,6 +37,11 @@ impl Inference {
     pub fn cuda(ordinal: usize) -> Result<Self, InferError> {
         ensure_onnx_init();
         let device = Device::new_cuda(ordinal)?;
+        if device.is_cuda() {
+            base::log_info!("Inference device: CUDA (ordinal {})", ordinal);
+        } else {
+            base::log_warn!("Inference device: requested CUDA ordinal {} but device reports non-CUDA", ordinal);
+        }
         Ok(Self {
             device,
             onnx_device: OnnxDevice::Cuda(ordinal),
