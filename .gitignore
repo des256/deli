@@ -27,6 +27,5 @@ build/
 # Git worktrees for /spec isolation
 .worktrees/
 
-# YOLO pose model fixtures (large files, download via generate_pose_model.py)
-crates/deli-infer/tests/fixtures/yolo*.onnx
-crates/deli-infer/tests/fixtures/test_pose_image.jpg
+# test files
+test.wav

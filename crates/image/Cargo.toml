@@ -7,9 +7,4 @@ edition = "2024"
 base = { path = "../base" }
 crates_image = { package = "image", version = "0.25", default-features = false, features = [
     "jpeg",
-    "png",
-    "gif",
-    "bmp",
-    "tiff",
-    "webp",
 ] }
