@@ -1,0 +1,15 @@
+[package]
+name = "chat"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "chat"
+path = "src/main.rs"
+
+[dependencies]
+inference = { path = "../../crates/inference", features = ["cuda"] }
+audio = { path = "../../crates/audio" }
+base = { path = "../../crates/base" }
+futures-util = { version = "0.3", features = ["sink"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
