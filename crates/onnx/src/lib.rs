@@ -44,7 +44,7 @@ pub fn init() -> Result<()> {
             let api = get_api(ORT_API_VERSION);
             if api.is_null() {
                 return Mutex::new(Err(
-                    "ONNX Runtime doesn't support API version 17. Your runtime may be too old."
+                    "ONNX Runtime doesn't support API version 24. Requires onnxruntime >= 1.24."
                         .to_string(),
                 ));
             }

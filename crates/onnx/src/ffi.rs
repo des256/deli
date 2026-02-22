@@ -150,8 +150,8 @@ unsafe extern "C" {
     ) -> *mut OrtStatus;
 }
 
-// API version constant - we target version 17 (onnxruntime 1.17)
-pub const ORT_API_VERSION: u32 = 17;
+// API version constant - matches onnxruntime 1.24 on Jetson
+pub const ORT_API_VERSION: u32 = 24;
 
 // Function pointer types for the OrtApi vtable
 // These correspond to the function signatures in onnxruntime_c_api.h
@@ -282,7 +282,6 @@ mod tests {
 
     #[test]
     fn test_api_version() {
-        // We target API version 17
-        assert_eq!(ORT_API_VERSION, 17);
+        assert_eq!(ORT_API_VERSION, 24);
     }
 }
