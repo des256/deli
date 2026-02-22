@@ -32,7 +32,7 @@ pub struct Smollm2 {
 impl Smollm2 {
     /// Create a new SmolLM2 model from GGUF file and tokenizer.
     ///
-    /// Validates the tokenizer contains the required `</s>` EOS token at
+    /// Validates the tokenizer contains the required `<|endoftext|>` EOS token at
     /// construction time. The optional `<|im_end|>` end-of-turn token is looked up
     /// but not required.
     ///
@@ -50,7 +50,7 @@ impl Smollm2 {
     /// - Tokenizer file doesn't exist or can't be read
     /// - GGUF file is corrupted or has wrong format
     /// - Model loading fails
-    /// - Primary EOS token `</s>` not found in tokenizer vocab
+    /// - Primary EOS token `<|endoftext|>` not found in tokenizer vocab
     pub fn new(
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
@@ -61,9 +61,13 @@ impl Smollm2 {
             .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
 
         // Validate EOS token at construction time (fail-fast for wrong tokenizer)
-        let eos_token = *tokenizer.get_vocab(true).get("</s>").ok_or_else(|| {
-            InferError::TokenizerError("</s> token not found in vocab".to_string())
-        })?;
+        // SmolLM2 uses <|endoftext|> as EOS (not </s>)
+        let eos_token = *tokenizer
+            .get_vocab(true)
+            .get("<|endoftext|>")
+            .ok_or_else(|| {
+                InferError::TokenizerError("<|endoftext|> token not found in vocab".to_string())
+            })?;
 
         let end_token = tokenizer.get_vocab(true).get("<|im_end|>").copied();
 
@@ -90,7 +94,7 @@ impl Smollm2 {
 
     /// Generate text from a prompt using autoregressive sampling.
     ///
-    /// Generation stops at `</s>` (primary EOS token) or `<|im_end|>`
+    /// Generation stops at `<|endoftext|>` (primary EOS token) or `<|im_end|>`
     /// (end-of-turn token, if present in tokenizer). The end-of-turn token is optional
     /// and gracefully degrades if not found.
     ///

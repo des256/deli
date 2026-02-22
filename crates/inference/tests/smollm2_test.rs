@@ -51,7 +51,7 @@ async fn test_forward_empty_prompt_validation() {
     let tokenizer_path = Path::new("../../data/smollm2/tokenizer.json");
 
     if !model_path.exists() || !tokenizer_path.exists() {
-        println!("Skipping test - model files not found at data/smolm2/");
+        println!("Skipping test - model files not found at data/smollm2/");
         return;
     }
 
@@ -74,11 +74,11 @@ async fn test_cuda_device_propagation() {
 
 #[tokio::test]
 async fn test_forward_with_cuda() {
-    let model_path = Path::new("../../data/smolm2/model.gguf");
-    let tokenizer_path = Path::new("../../data/smolm2/tokenizer.json");
+    let model_path = Path::new("../../data/smollm2/smollm2-1.7b-instruct-q4_k_m.gguf");
+    let tokenizer_path = Path::new("../../data/smollm2/tokenizer.json");
 
     if !model_path.exists() || !tokenizer_path.exists() {
-        println!("Skipping test - model files not found at data/smolm2/");
+        println!("Skipping test - model files not found at data/smollm2/");
         return;
     }
 
