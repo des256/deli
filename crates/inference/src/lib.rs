@@ -9,6 +9,6 @@ pub use asr::Whisper;
 pub use error::{InferError, Result};
 pub use image::Image;
 pub use inference::Inference;
-pub use llm::Qwen3;
+pub use llm::{Llama, Phi3, Qwen3, Smollm2};
 pub use pose_detector::{CocoKeypoint, Keypoint, PoseDetection, PoseDetections, PoseDetector};
 pub use tts::Kokoro;

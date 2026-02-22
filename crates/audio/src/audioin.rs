@@ -16,7 +16,7 @@ use {
 };
 
 // capacity of the audio input channel
-const CHANNEL_CAPACITY: usize = 16;
+const CHANNEL_CAPACITY: usize = 8;
 
 // number of seconds to wait before reconnecting to PulseAudio
 const RECONNECT_SEC: u64 = 1;
@@ -147,11 +147,7 @@ impl AudioIn {
                                         Ok(()) => {}
 
                                         // if channel is full, silently drop the chunk
-                                        Err(mpsc::error::TrySendError::Full(_)) => {
-                                            log_debug!(
-                                                "Audio input chunk dropped: consumer too slow"
-                                            );
-                                        }
+                                        Err(mpsc::error::TrySendError::Full(_)) => {}
 
                                         // if channel is closed, exit everything
                                         Err(mpsc::error::TrySendError::Closed(_)) => {

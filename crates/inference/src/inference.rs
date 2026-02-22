@@ -1,4 +1,9 @@
-use {crate::InferError, candle_core::Device, onnx::Session, std::{path::Path, sync::OnceLock}};
+use {
+    crate::InferError,
+    candle_core::Device,
+    onnx::Session,
+    std::{path::Path, sync::OnceLock},
+};
 
 static ONNX_INIT: OnceLock<()> = OnceLock::new();
 
@@ -40,7 +45,10 @@ impl Inference {
         if device.is_cuda() {
             base::log_info!("Inference device: CUDA (ordinal {})", ordinal);
         } else {
-            base::log_warn!("Inference device: requested CUDA ordinal {} but device reports non-CUDA", ordinal);
+            base::log_warn!(
+                "Inference device: requested CUDA ordinal {} but device reports non-CUDA",
+                ordinal
+            );
         }
         Ok(Self {
             device,
@@ -52,7 +60,10 @@ impl Inference {
         &self.device
     }
 
-    pub fn use_pose_detector(&self, model_path: impl AsRef<Path>) -> Result<crate::PoseDetector, InferError> {
+    pub fn use_pose_detector(
+        &self,
+        model_path: impl AsRef<Path>,
+    ) -> Result<crate::PoseDetector, InferError> {
         crate::PoseDetector::new(model_path, self.device.clone())
     }
 
@@ -73,20 +84,38 @@ impl Inference {
         crate::Qwen3::new(model_path, tokenizer_path, self.device.clone())
     }
 
+    pub fn use_phi3(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+    ) -> Result<crate::Phi3, InferError> {
+        crate::Phi3::new(model_path, tokenizer_path, self.device.clone())
+    }
+
+    pub fn use_llama(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+    ) -> Result<crate::Llama, InferError> {
+        crate::Llama::new(model_path, tokenizer_path, self.device.clone())
+    }
+
+    pub fn use_smollm2(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+    ) -> Result<crate::Smollm2, InferError> {
+        crate::Smollm2::new(model_path, tokenizer_path, self.device.clone())
+    }
+
     pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<Session, InferError> {
         let path = model_path.as_ref();
         let session = match &self.onnx_device {
-            OnnxDevice::Cpu => {
-                onnx::session_builder()?
-                    .with_cpu()
-                    .commit_from_file(path)?
-            }
+            OnnxDevice::Cpu => onnx::session_builder()?.with_cpu().commit_from_file(path)?,
             #[cfg(feature = "cuda")]
-            OnnxDevice::Cuda(ordinal) => {
-                onnx::session_builder()?
-                    .with_cuda(*ordinal as i32)?
-                    .commit_from_file(path)?
-            }
+            OnnxDevice::Cuda(ordinal) => onnx::session_builder()?
+                .with_cuda(*ordinal as i32)?
+                .commit_from_file(path)?,
             #[cfg(not(feature = "cuda"))]
             OnnxDevice::Cuda(_) => {
                 return Err(InferError::Runtime("CUDA feature not enabled".to_string()));

@@ -1,6 +1,3 @@
-- some form of VAD, collecting sentences and streaming to ASR
-- experiment: audio in + vad + asr + llm + tts + audio out
-- monitor: add tab pages
-- monitor: overview page
-- monitor: audio/video page
-- monitor:
+- VAD from ASR to partial and final output sentences
+- add hard limit of 512 phonemes to kokoro implementation
+- cut up the LLM output into sentences and pipe them to TTS as soon as they become available

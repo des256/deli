@@ -4,7 +4,7 @@ use {
     com::WsServer,
     image::{PixelFormat, argb_to_jpeg, rgb_to_jpeg, srggb10p_to_jpeg, yu12_to_jpeg, yuyv_to_jpeg},
     inference::Inference,
-    std::sync::Arc,
+    std::{sync::Arc, time::Duration},
     testy::*,
     video::{VideoIn, VideoInConfig, realsense::RealsenseConfig},
 };
@@ -16,10 +16,10 @@ const WHISPER_TOKENIZER_PATH: &str = "data/whisper/tiny.en/tokenizer.json";
 const WHISPER_CONFIG_PATH: &str = "data/whisper/tiny.en/config.json";
 
 const KOKORO_MODEL_PATH: &str = "data/kokoro/kokoro-v1.0.onnx";
-const KOKORO_VOICE_PATH: &str = "data/kokoro/bf_emma.npy";
+const KOKORO_VOICE_PATH: &str = "data/kokoro/bf_nicole.npy";
 const KOKORO_ESPEAK_DATA_PATH: &str = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
 
-const QWEN3_MODEL_PATH: &str = "data/qwen3/qwen3-8b-q4_k_m.gguf";
+const QWEN3_MODEL_PATH: &str = "data/qwen3/qwen3-4b-q4_k_m.gguf";
 const QWEN3_TOKENIZER_PATH: &str = "data/qwen3/tokenizer.json";
 
 #[tokio::main]
@@ -95,6 +95,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     });
+
+    log_info!("sleeping for 10 seconds");
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     Ok(())
 }
