@@ -15,6 +15,8 @@ use std::{
     task::{Context, Poll},
 };
 
+use super::asrcore::AsrCore;
+
 const REQUIRED_SAMPLE_RATE: usize = 16000;
 const HOP_SIZE: usize = 160; // 10ms hop at 16kHz
 const WINDOW_SIZE: usize = 400; // 25ms window at 16kHz
@@ -30,7 +32,7 @@ const WINDOW_SIZE: usize = 400; // 25ms window at 16kHz
 ///
 /// Implements `Sink<AudioSample>` to accept audio input and
 /// `Stream<Item = Result<Transcription>>` to produce transcriptions.
-pub struct StreamingAsr {
+pub struct Sherpa {
     // Core state (shared with async tasks)
     core: Arc<Mutex<AsrCore>>,
 
@@ -44,61 +46,25 @@ pub struct StreamingAsr {
     stream_waker: Option<std::task::Waker>,
 }
 
-/// Core ASR state (sessions and decoding state)
-pub(super) struct AsrCore {
-    pub(super) encoder: Session,
-    pub(super) decoder: Session,
-    pub(super) joiner: Session,
-    pub(super) tokens: Vec<String>,
-    pub(super) context: Vec<i64>,
-    pub(super) encoder_states: Vec<onnx::Value>,
-    pub(super) encoder_state_names: Vec<String>,
-}
-
-impl StreamingAsr {
-    /// Create a new streaming ASR instance from model files.
+impl Sherpa {
+    /// Create a new streaming ASR instance from pre-built ONNX sessions.
     ///
     /// # Arguments
-    /// * `encoder_path` - Path to encoder.onnx
-    /// * `decoder_path` - Path to decoder.onnx
-    /// * `joiner_path` - Path to joiner.onnx
+    /// * `encoder` - Encoder ONNX session
+    /// * `decoder` - Decoder ONNX session
+    /// * `joiner` - Joiner ONNX session
     /// * `tokens_path` - Path to tokens.txt
     ///
     /// # Errors
-    /// Returns an error if any model fails to load or if token file is invalid.
+    /// Returns an error if the token file is invalid or model shapes are unexpected.
     pub fn new<P: AsRef<Path>>(
-        encoder_path: P,
-        decoder_path: P,
-        joiner_path: P,
+        encoder: Session,
+        decoder: Session,
+        joiner: Session,
         tokens_path: P,
     ) -> Result<Self> {
-        // Ensure ONNX Runtime is initialized
-        onnx::init().map_err(|e| InferError::Runtime(format!("ONNX init failed: {}", e)))?;
-
         // Load tokens
         let tokens = super::tokens::load_tokens(tokens_path)?;
-
-        // Load ONNX sessions
-        let encoder = onnx::session_builder()
-            .map_err(|e| InferError::Runtime(format!("Failed to create encoder session builder: {}", e)))?
-            .with_optimization_level(onnx::ffi::GraphOptimizationLevel::EnableAll)
-            .map_err(|e| InferError::Runtime(format!("Failed to set encoder optimization level: {}", e)))?
-            .commit_from_file(encoder_path)
-            .map_err(|e| InferError::Runtime(format!("Failed to load encoder model: {}", e)))?;
-
-        let decoder = onnx::session_builder()
-            .map_err(|e| InferError::Runtime(format!("Failed to create decoder session builder: {}", e)))?
-            .with_optimization_level(onnx::ffi::GraphOptimizationLevel::EnableAll)
-            .map_err(|e| InferError::Runtime(format!("Failed to set decoder optimization level: {}", e)))?
-            .commit_from_file(decoder_path)
-            .map_err(|e| InferError::Runtime(format!("Failed to load decoder model: {}", e)))?;
-
-        let joiner = onnx::session_builder()
-            .map_err(|e| InferError::Runtime(format!("Failed to create joiner session builder: {}", e)))?
-            .with_optimization_level(onnx::ffi::GraphOptimizationLevel::EnableAll)
-            .map_err(|e| InferError::Runtime(format!("Failed to set joiner optimization level: {}", e)))?
-            .commit_from_file(joiner_path)
-            .map_err(|e| InferError::Runtime(format!("Failed to load joiner model: {}", e)))?;
 
         // Discover encoder state input/output names
         let encoder_state_names = AsrCore::discover_encoder_states(&encoder)?;
@@ -107,7 +73,8 @@ impl StreamingAsr {
         let encoder_states = AsrCore::initialize_encoder_states(&encoder, &encoder_state_names)?;
 
         // Determine context_size from decoder's "y" input shape [batch, context_size]
-        let context_size = decoder.input_shape(0)
+        let context_size = decoder
+            .input_shape(0)
             .map_err(|e| InferError::Runtime(format!("Failed to get decoder input shape: {}", e)))
             .and_then(|shape| {
                 if shape.len() >= 2 && shape[1] > 0 {
@@ -118,13 +85,14 @@ impl StreamingAsr {
             })?;
 
         // Determine chunk size from encoder's "x" input shape [batch, num_frames, 80]
-        let x_shape = encoder.input_shape(0)
-            .map_err(|e| InferError::Runtime(format!("Failed to get encoder x input shape: {}", e)))?;
+        let x_shape = encoder.input_shape(0).map_err(|e| {
+            InferError::Runtime(format!("Failed to get encoder x input shape: {}", e))
+        })?;
         let required_frames = if x_shape.len() >= 2 && x_shape[1] > 0 {
             x_shape[1] as usize
         } else {
             return Err(InferError::Runtime(
-                "Encoder 'x' input has no fixed frame dimension".to_string()
+                "Encoder 'x' input has no fixed frame dimension".to_string(),
             ));
         };
         // Convert frames to samples: num_samples = (num_frames - 1) * hop + window
@@ -179,9 +147,9 @@ impl StreamingAsr {
                 let features = super::features::compute_features(&chunk, REQUIRED_SAMPLE_RATE)?;
 
                 // Decode chunk
-                let mut core_guard = core.lock().map_err(|e| {
-                    InferError::Runtime(format!("Core lock poisoned: {}", e))
-                })?;
+                let mut core_guard = core
+                    .lock()
+                    .map_err(|e| InferError::Runtime(format!("Core lock poisoned: {}", e)))?;
 
                 core_guard.decode_chunk(&features, num_frames)
             })
@@ -191,7 +159,10 @@ impl StreamingAsr {
     }
 
     /// Handle a completed decode result, returning the appropriate transcription.
-    fn handle_decode_result(&mut self, result: Result<String>) -> Poll<Option<Result<Transcription>>> {
+    fn handle_decode_result(
+        &mut self,
+        result: Result<String>,
+    ) -> Poll<Option<Result<Transcription>>> {
         match result {
             Ok(text) => {
                 // Append to cumulative text (SentencePiece tokens handle word boundaries)
@@ -217,7 +188,7 @@ impl StreamingAsr {
 
 // Decode logic is in decode.rs (impl AsrCore)
 
-impl Sink<AudioSample> for StreamingAsr {
+impl Sink<AudioSample> for Sherpa {
     type Error = InferError;
 
     fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
@@ -264,7 +235,7 @@ impl Sink<AudioSample> for StreamingAsr {
     fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
         let this = self.get_mut();
         this.closed = true;
-        
+
         // If there are remaining samples, zero-pad to chunk size and enqueue
         if !this.sample_buffer.is_empty() {
             let mut chunk: Vec<i16> = this.sample_buffer.drain(..).collect();
@@ -279,7 +250,7 @@ impl Sink<AudioSample> for StreamingAsr {
     }
 }
 
-impl Stream for StreamingAsr {
+impl Stream for Sherpa {
     type Item = Result<Transcription>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {

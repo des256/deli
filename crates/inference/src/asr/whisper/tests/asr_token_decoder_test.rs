@@ -1,6 +1,13 @@
 // Tests for ASR token decoder (greedy decoding loop)
 
-use {candle_core::{DType, Device, Tensor}, candle_nn::VarBuilder, inference::asr::{Config, TokenDecoder, WhisperModel}, tokenizers::Tokenizer};
+use {
+    candle_core::{DType, Device, Tensor},
+    candle_nn::VarBuilder,
+    inference::asr::whisper::{
+        config::Config, model::Whisper as WhisperModel, token_decoder::TokenDecoder,
+    },
+    tokenizers::Tokenizer,
+};
 
 fn cuda_device() -> Device {
     Device::new_cuda(0).expect("CUDA device required")
@@ -86,18 +93,21 @@ fn test_token_id_lookup() {
 
     let tokenizer: Tokenizer = serde_json::from_str(&tokenizer_json).expect("parse tokenizer");
 
-    let sot = inference::asr::token_id(&tokenizer, "<|startoftranscript|>").expect("SOT token");
+    let sot = inference::asr::whisper::token_decoder::token_id(&tokenizer, "<|startoftranscript|>")
+        .expect("SOT token");
     assert_eq!(sot, 50258);
 
-    let transcribe =
-        inference::asr::token_id(&tokenizer, "<|transcribe|>").expect("transcribe token");
+    let transcribe = inference::asr::whisper::token_decoder::token_id(&tokenizer, "<|transcribe|>")
+        .expect("transcribe token");
     assert_eq!(transcribe, 50359);
 
-    let eot = inference::asr::token_id(&tokenizer, "<|endoftext|>").expect("EOT token");
+    let eot = inference::asr::whisper::token_decoder::token_id(&tokenizer, "<|endoftext|>")
+        .expect("EOT token");
     assert_eq!(eot, 50257);
 
     let no_timestamps =
-        inference::asr::token_id(&tokenizer, "<|notimestamps|>").expect("no_timestamps token");
+        inference::asr::whisper::token_decoder::token_id(&tokenizer, "<|notimestamps|>")
+            .expect("no_timestamps token");
     assert_eq!(no_timestamps, 50363);
 }
 
@@ -120,7 +130,7 @@ fn test_token_id_missing_token() {
     }"#;
 
     let tokenizer: Tokenizer = serde_json::from_str(tokenizer_json).expect("parse tokenizer");
-    let result = inference::asr::token_id(&tokenizer, "<|missing|>");
+    let result = inference::asr::whisper::token_decoder::token_id(&tokenizer, "<|missing|>");
     assert!(result.is_err());
 }
 

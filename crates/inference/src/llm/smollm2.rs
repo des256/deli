@@ -1,5 +1,5 @@
 use {
-    crate::InferError,
+    crate::error::InferError,
     candle_core::{Device, Tensor},
     candle_transformers::{
         generation::{LogitsProcessor, Sampling},

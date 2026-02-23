@@ -2,7 +2,7 @@
 
 use {
     candle_core::Device,
-    inference::{Inference, Phi3},
+    inference::{Inference, llm::Phi3},
     std::path::Path,
 };
 
@@ -41,7 +41,7 @@ fn test_infer_error_importable() {
     // Verifies the InferError type is accessible for matching.
     // Actual empty-prompt validation is exercised in test_forward_empty_prompt_validation
     // (requires real model files).
-    use inference::InferError;
+    use inference::error::InferError;
     let _: Option<InferError> = None;
 }
 

@@ -1,4 +1,4 @@
-use inference::asr::Config;
+use inference::asr::whisper::config::Config;
 
 #[test]
 fn test_config_tiny_en() {
@@ -43,7 +43,7 @@ fn test_config_deserialize() {
 
 #[test]
 fn test_constants_match_whisper_spec() {
-    use inference::asr::config::*;
+    use inference::asr::whisper::config::*;
 
     assert_eq!(SAMPLE_RATE, 16000);
     assert_eq!(N_FFT, 400);

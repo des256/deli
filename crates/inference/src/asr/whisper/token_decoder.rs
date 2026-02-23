@@ -2,7 +2,10 @@
 // Ported from candle-examples/examples/whisper/main.rs (Apache-2.0/MIT)
 
 use {
-    crate::{asr::{config::Config, model::Whisper}, error::{InferError, Result}},
+    crate::{
+        asr::whisper::{config::Config, model::Whisper},
+        error::{InferError, Result},
+    },
     candle_core::{Device, IndexOp, Tensor},
     tokenizers::Tokenizer,
 };
@@ -90,7 +93,11 @@ impl TokenDecoder {
             .map_err(|e| InferError::TensorError(e.to_string()))?;
 
         // Initialize decoder tokens: [SOT, transcribe, no_timestamps]
-        let mut tokens = vec![self.sot_token, self.transcribe_token, self.no_timestamps_token];
+        let mut tokens = vec![
+            self.sot_token,
+            self.transcribe_token,
+            self.no_timestamps_token,
+        ];
 
         // Greedy decoding loop
         let mut truncated = false;
@@ -179,7 +186,9 @@ impl TokenDecoder {
         use super::config::NO_SPEECH_THRESHOLD;
         const N_FRAMES: usize = 3000; // 30 seconds of audio
 
-        let (_, _, total_frames) = mel.dims3().map_err(|e| InferError::TensorError(e.to_string()))?;
+        let (_, _, total_frames) = mel
+            .dims3()
+            .map_err(|e| InferError::TensorError(e.to_string()))?;
 
         let mut segments = Vec::new();
         let mut seek = 0;
@@ -196,8 +205,9 @@ impl TokenDecoder {
             // Pad to N_FRAMES if last segment is short
             let segment = if segment_frames < N_FRAMES {
                 let pad_size = N_FRAMES - segment_frames;
-                let zeros = Tensor::zeros((1, self.num_mel_bins, pad_size), mel.dtype(), mel.device())
-                    .map_err(|e| InferError::TensorError(e.to_string()))?;
+                let zeros =
+                    Tensor::zeros((1, self.num_mel_bins, pad_size), mel.dtype(), mel.device())
+                        .map_err(|e| InferError::TensorError(e.to_string()))?;
                 Tensor::cat(&[&segment, &zeros], 2)
                     .map_err(|e| InferError::TensorError(e.to_string()))?
             } else {
@@ -253,7 +263,7 @@ impl TokenDecoder {
 
 /// Look up token ID by string representation
 pub fn token_id(tokenizer: &Tokenizer, token: &str) -> Result<u32> {
-    tokenizer
-        .token_to_id(token)
-        .ok_or_else(|| InferError::TokenizerError(format!("Token '{}' not found in tokenizer", token)))
+    tokenizer.token_to_id(token).ok_or_else(|| {
+        InferError::TokenizerError(format!("Token '{}' not found in tokenizer", token))
+    })
 }

@@ -1,7 +1,16 @@
 use crate::error::{InferError, Result};
 use onnx::Session;
 
-use super::asr::AsrCore;
+/// Core ASR state (sessions and decoding state)
+pub(crate) struct AsrCore {
+    pub(super) encoder: Session,
+    pub(super) decoder: Session,
+    pub(super) joiner: Session,
+    pub(super) tokens: Vec<String>,
+    pub(super) context: Vec<i64>,
+    pub(super) encoder_states: Vec<onnx::Value>,
+    pub(super) encoder_state_names: Vec<String>,
+}
 
 impl AsrCore {
     /// Decode a chunk of log-mel features into text.
@@ -23,12 +32,16 @@ impl AsrCore {
     /// Run the encoder with state carry.
     fn run_encoder(&mut self, features: &[f32], num_frames: usize) -> Result<(Vec<f32>, usize)> {
         let x_shape = [1, num_frames, 80];
-        let x = onnx::Value::from_slice(&x_shape, features)
-            .map_err(|e| InferError::Runtime(format!("Failed to create encoder input tensor: {}", e)))?;
+        let x = onnx::Value::from_slice(&x_shape, features).map_err(|e| {
+            InferError::Runtime(format!("Failed to create encoder input tensor: {}", e))
+        })?;
 
         // State output names: "new_" prefix on each state input name
-        let state_output_names: Vec<String> = self.encoder_state_names.iter()
-            .map(|n| format!("new_{}", n)).collect();
+        let state_output_names: Vec<String> = self
+            .encoder_state_names
+            .iter()
+            .map(|n| format!("new_{}", n))
+            .collect();
 
         let mut inputs: Vec<(&str, &onnx::Value)> = vec![("x", &x)];
         for (i, state) in self.encoder_states.iter().enumerate() {
@@ -40,15 +53,19 @@ impl AsrCore {
             output_names.push(name);
         }
 
-        let outputs = self.encoder.run(&inputs, &output_names)
+        let outputs = self
+            .encoder
+            .run(&inputs, &output_names)
             .map_err(|e| InferError::Runtime(format!("Encoder inference failed: {}", e)))?;
 
         // Determine output frame count from tensor shape: [1, T, encoder_dim]
-        let encoder_out_shape = outputs[0].tensor_shape()
-            .map_err(|e| InferError::Runtime(format!("Failed to get encoder output shape: {}", e)))?;
+        let encoder_out_shape = outputs[0].tensor_shape().map_err(|e| {
+            InferError::Runtime(format!("Failed to get encoder output shape: {}", e))
+        })?;
         let encoder_out_len = encoder_out_shape[1] as usize;
 
-        let encoder_out_data = outputs[0].extract_tensor::<f32>()
+        let encoder_out_data = outputs[0]
+            .extract_tensor::<f32>()
             .map_err(|e| InferError::Runtime(format!("Failed to extract encoder output: {}", e)))?
             .to_vec();
 
@@ -89,14 +106,18 @@ impl AsrCore {
 
     fn run_decoder(&mut self) -> Result<Vec<f32>> {
         let y_shape = [1, self.context.len()];
-        let y = onnx::Value::from_slice(&y_shape, &self.context)
-            .map_err(|e| InferError::Runtime(format!("Failed to create decoder input tensor: {}", e)))?;
+        let y = onnx::Value::from_slice(&y_shape, &self.context).map_err(|e| {
+            InferError::Runtime(format!("Failed to create decoder input tensor: {}", e))
+        })?;
 
-        let mut outputs = self.decoder.run(&[("y", &y)], &["decoder_out"])
+        let mut outputs = self
+            .decoder
+            .run(&[("y", &y)], &["decoder_out"])
             .map_err(|e| InferError::Runtime(format!("Decoder inference failed: {}", e)))?;
 
         let value = outputs.remove(0);
-        let decoder_out = value.extract_tensor::<f32>()
+        let decoder_out = value
+            .extract_tensor::<f32>()
             .map_err(|e| InferError::Runtime(format!("Failed to extract decoder output: {}", e)))?
             .to_vec();
 
@@ -105,21 +126,31 @@ impl AsrCore {
 
     fn run_joiner(&mut self, encoder_frame: &[f32], decoder_out: &[f32]) -> Result<Vec<f32>> {
         let encoder_dim = encoder_frame.len();
-        let encoder_input = onnx::Value::from_slice(&[1, encoder_dim], encoder_frame)
-            .map_err(|e| InferError::Runtime(format!("Failed to create joiner encoder input: {}", e)))?;
+        let encoder_input =
+            onnx::Value::from_slice(&[1, encoder_dim], encoder_frame).map_err(|e| {
+                InferError::Runtime(format!("Failed to create joiner encoder input: {}", e))
+            })?;
 
         let decoder_dim = decoder_out.len();
-        let decoder_input = onnx::Value::from_slice(&[1, decoder_dim], decoder_out)
-            .map_err(|e| InferError::Runtime(format!("Failed to create joiner decoder input: {}", e)))?;
+        let decoder_input =
+            onnx::Value::from_slice(&[1, decoder_dim], decoder_out).map_err(|e| {
+                InferError::Runtime(format!("Failed to create joiner decoder input: {}", e))
+            })?;
 
-        let mut outputs = self.joiner.run(
-            &[("encoder_out", &encoder_input), ("decoder_out", &decoder_input)],
-            &["logit"]
-        )
-        .map_err(|e| InferError::Runtime(format!("Joiner inference failed: {}", e)))?;
+        let mut outputs = self
+            .joiner
+            .run(
+                &[
+                    ("encoder_out", &encoder_input),
+                    ("decoder_out", &decoder_input),
+                ],
+                &["logit"],
+            )
+            .map_err(|e| InferError::Runtime(format!("Joiner inference failed: {}", e)))?;
 
         let value = outputs.remove(0);
-        let logits = value.extract_tensor::<f32>()
+        let logits = value
+            .extract_tensor::<f32>()
             .map_err(|e| InferError::Runtime(format!("Failed to extract joiner logits: {}", e)))?
             .to_vec();
 
@@ -147,14 +178,16 @@ impl AsrCore {
     /// All inputs except `x` are treated as state tensors.
     /// Corresponding outputs use `new_` prefix (e.g., `cached_key_0` → `new_cached_key_0`).
     pub(super) fn discover_encoder_states(encoder: &Session) -> Result<Vec<String>> {
-        let input_count = encoder.input_count()
-            .map_err(|e| InferError::Runtime(format!("Failed to get encoder input count: {}", e)))?;
+        let input_count = encoder.input_count().map_err(|e| {
+            InferError::Runtime(format!("Failed to get encoder input count: {}", e))
+        })?;
 
         let mut state_names = Vec::new();
 
         for i in 0..input_count {
-            let name = encoder.input_name(i)
-                .map_err(|e| InferError::Runtime(format!("Failed to get encoder input name {}: {}", i, e)))?;
+            let name = encoder.input_name(i).map_err(|e| {
+                InferError::Runtime(format!("Failed to get encoder input name {}: {}", i, e))
+            })?;
 
             if name != "x" {
                 state_names.push(name);
@@ -163,7 +196,7 @@ impl AsrCore {
 
         if state_names.is_empty() {
             return Err(InferError::Runtime(
-                "Encoder model has no state inputs (expected inputs besides 'x')".to_string()
+                "Encoder model has no state inputs (expected inputs besides 'x')".to_string(),
             ));
         }
 
@@ -171,34 +204,51 @@ impl AsrCore {
     }
 
     /// Initialize encoder states with zero-filled tensors matching model metadata.
-    pub(super) fn initialize_encoder_states(encoder: &Session, state_names: &[String]) -> Result<Vec<onnx::Value>> {
-        let input_count = encoder.input_count()
-            .map_err(|e| InferError::Runtime(format!("Failed to get encoder input count: {}", e)))?;
+    pub(super) fn initialize_encoder_states(
+        encoder: &Session,
+        state_names: &[String],
+    ) -> Result<Vec<onnx::Value>> {
+        let input_count = encoder.input_count().map_err(|e| {
+            InferError::Runtime(format!("Failed to get encoder input count: {}", e))
+        })?;
 
         // Build name→index map
         let mut name_to_index = std::collections::HashMap::new();
         for i in 0..input_count {
-            let name = encoder.input_name(i)
-                .map_err(|e| InferError::Runtime(format!("Failed to get encoder input name: {}", e)))?;
+            let name = encoder.input_name(i).map_err(|e| {
+                InferError::Runtime(format!("Failed to get encoder input name: {}", e))
+            })?;
             name_to_index.insert(name, i);
         }
 
         let mut states = Vec::new();
 
         for state_name in state_names {
-            let index = *name_to_index.get(state_name)
-                .ok_or_else(|| InferError::Runtime(format!("State input '{}' not found in encoder", state_name)))?;
+            let index = *name_to_index.get(state_name).ok_or_else(|| {
+                InferError::Runtime(format!("State input '{}' not found in encoder", state_name))
+            })?;
 
-            let shape = encoder.input_shape(index)
-                .map_err(|e| InferError::Runtime(format!("Failed to get shape for {}: {}", state_name, e)))?;
+            let shape = encoder.input_shape(index).map_err(|e| {
+                InferError::Runtime(format!("Failed to get shape for {}: {}", state_name, e))
+            })?;
 
-            let elem_type = encoder.input_element_type(index)
-                .map_err(|e| InferError::Runtime(format!("Failed to get element type for {}: {}", state_name, e)))?;
+            let elem_type = encoder.input_element_type(index).map_err(|e| {
+                InferError::Runtime(format!(
+                    "Failed to get element type for {}: {}",
+                    state_name, e
+                ))
+            })?;
 
             let zero_tensor = match elem_type {
                 onnx::ffi::ONNXTensorElementDataType::Int64 => onnx::Value::zeros::<i64>(&shape),
                 _ => onnx::Value::zeros::<f32>(&shape),
-            }.map_err(|e| InferError::Runtime(format!("Failed to create zero tensor for {}: {}", state_name, e)))?;
+            }
+            .map_err(|e| {
+                InferError::Runtime(format!(
+                    "Failed to create zero tensor for {}: {}",
+                    state_name, e
+                ))
+            })?;
 
             states.push(zero_tensor);
         }

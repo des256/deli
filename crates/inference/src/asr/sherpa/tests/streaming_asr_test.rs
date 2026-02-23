@@ -1,10 +1,10 @@
 // Re-export the functions from the streaming module for testing
 // In production, users will access via inference::asr::streaming::*
 mod streaming_imports {
-    pub use inference::asr::streaming::{compute_features, load_tokens, StreamingAsr};
+    pub use inference::asr::sherpa::{Sherpa, tokens::compute_features, tokens::load_tokens};
 }
+use inference::error::InferError;
 use streaming_imports::*;
-use inference::InferError;
 
 #[test]
 fn test_load_tokens_valid_file() {
@@ -12,11 +12,7 @@ fn test_load_tokens_valid_file() {
 
     // Create a test tokens file
     std::fs::create_dir_all("tests/fixtures").unwrap();
-    std::fs::write(
-        tokens_path,
-        "<blk> 0\n<sos/eos> 1\n<unk> 2\nS 3\n▁THE 4\n",
-    )
-    .unwrap();
+    std::fs::write(tokens_path, "<blk> 0\n<sos/eos> 1\n<unk> 2\nS 3\n▁THE 4\n").unwrap();
 
     let result = load_tokens(tokens_path);
     assert!(result.is_ok());

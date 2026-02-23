@@ -1,4 +1,8 @@
-use {candle_core::{DType, Device, Tensor}, candle_nn::{VarBuilder, VarMap}, inference::asr::{Config, WhisperModel}};
+use {
+    candle_core::{DType, Device, Tensor},
+    candle_nn::{VarBuilder, VarMap},
+    inference::asr::whisper::{config::Config, model::Whisper as WhisperModel},
+};
 
 fn cuda_device() -> Device {
     Device::new_cuda(0).expect("CUDA device required")

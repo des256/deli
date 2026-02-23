@@ -1,6 +1,6 @@
 use {
-    super::{postprocess::postprocess, types::PoseDetections, Multiples, YoloV8Pose},
-    crate::InferError,
+    super::{Multiples, YoloV8Pose, postprocess::postprocess, types::PoseDetections},
+    crate::error::InferError,
     base::Tensor,
     candle_core::{DType, Device, Tensor as CanTensor},
     futures_core::Stream,

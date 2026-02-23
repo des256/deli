@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize inference and load Kokoro model
     log_info!("Initializing Kokoro TTS...");
-    let inference = Inference::cpu();
+    let inference = Inference::cpu()?;
     let mut kokoro = inference.use_kokoro(&model_path, &voice_path, Some(espeak_data_path))?;
     log_info!("Kokoro model loaded");
 

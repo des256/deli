@@ -1,4 +1,4 @@
-use inference::{InferError, Inference};
+use inference::{Inference, error::InferError};
 
 fn cuda() -> Inference {
     Inference::cuda(0).expect("CUDA device required")

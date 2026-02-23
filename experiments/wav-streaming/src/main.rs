@@ -2,7 +2,7 @@ use {
     audio::{AudioData, AudioSample},
     base::*,
     futures_util::{FutureExt, SinkExt, StreamExt},
-    inference::asr::Transcription,
+    inference::{Inference, asr::Transcription},
     std::{path::PathBuf, time::Instant},
 };
 
@@ -68,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_info!("Audio: {:.1}s, {} samples", duration_secs, samples.len());
 
     // Load streaming ASR
-    let mut asr = inference::StreamingAsr::new(
+    let inference = Inference::cpu()?;
+    let mut asr = inference.use_streaming_asr(
         dir.join("encoder-epoch-99-avg-1.int8.onnx"),
         dir.join("decoder-epoch-99-avg-1.int8.onnx"),
         dir.join("joiner-epoch-99-avg-1.int8.onnx"),

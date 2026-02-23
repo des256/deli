@@ -1,4 +1,4 @@
-use {audio::AudioIn, base::*, futures_util::{SinkExt, StreamExt}, inference::asr::Transcription, std::path::PathBuf};
+use {audio::AudioIn, base::*, futures_util::{SinkExt, StreamExt}, inference::{Inference, asr::Transcription}, std::path::PathBuf};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,7 +19,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_info!("Model directory: {}", model_dir);
 
     // Load streaming ASR model
-    let mut asr = inference::StreamingAsr::new(
+    let inference = Inference::cpu()?;
+    let mut asr = inference.use_streaming_asr(
         &encoder_path,
         &decoder_path,
         &joiner_path,

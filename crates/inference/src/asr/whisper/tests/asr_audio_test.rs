@@ -1,4 +1,7 @@
-use inference::asr::{config::N_SAMPLES, Config, load_mel_filters, pcm_to_mel};
+use inference::asr::whisper::{
+    audio::{load_mel_filters, pcm_to_mel},
+    config::{Config, N_SAMPLES},
+};
 
 #[test]
 fn test_load_mel_filters() {

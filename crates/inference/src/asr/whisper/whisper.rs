@@ -1,8 +1,11 @@
 use {
     crate::{
         asr::{
-            audio::pcm_to_mel, config::Config, model::Whisper as WhisperModel,
-            token_decoder::TokenDecoder, transcription::Transcription,
+            Transcription,
+            whisper::{
+                audio::pcm_to_mel, config::Config, model::Whisper as WhisperModel,
+                token_decoder::TokenDecoder,
+            },
         },
         error::{InferError, Result},
     },
@@ -11,7 +14,13 @@ use {
     candle_nn::VarBuilder,
     futures_core::Stream,
     futures_sink::Sink,
-    std::{future::Future, path::Path, pin::Pin, sync::Arc, task::{Context, Poll}},
+    std::{
+        future::Future,
+        path::Path,
+        pin::Pin,
+        sync::Arc,
+        task::{Context, Poll},
+    },
     tokenizers::Tokenizer,
 };
 

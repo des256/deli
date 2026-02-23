@@ -1,19 +1,4 @@
-use {
-    crate::InferError,
-    candle_core::Device,
-    onnx::Session,
-    std::{path::Path, sync::OnceLock},
-};
-
-static ONNX_INIT: OnceLock<()> = OnceLock::new();
-
-fn ensure_onnx_init() {
-    ONNX_INIT.get_or_init(|| {
-        if let Err(e) = onnx::init() {
-            base::log_error!("ONNX Runtime init failed: {}", e);
-        }
-    });
-}
+use {crate::error::InferError, candle_core::Device, onnx::Session, std::path::Path};
 
 #[derive(Debug)]
 enum OnnxDevice {
@@ -29,18 +14,18 @@ pub struct Inference {
 }
 
 impl Inference {
-    pub fn cpu() -> Self {
-        ensure_onnx_init();
+    pub fn cpu() -> Result<Self, InferError> {
+        onnx::init()?;
         base::log_info!("Inference device: CPU");
-        Self {
+        Ok(Self {
             device: Device::Cpu,
             onnx_device: OnnxDevice::Cpu,
-        }
+        })
     }
 
     #[cfg(feature = "cuda")]
     pub fn cuda(ordinal: usize) -> Result<Self, InferError> {
-        ensure_onnx_init();
+        onnx::init()?;
         let device = Device::new_cuda(ordinal)?;
         if device.is_cuda() {
             base::log_info!("Inference device: CUDA (ordinal {})", ordinal);
@@ -63,8 +48,8 @@ impl Inference {
     pub fn use_pose_detector(
         &self,
         model_path: impl AsRef<Path>,
-    ) -> Result<crate::PoseDetector, InferError> {
-        crate::PoseDetector::new(model_path, self.device.clone())
+    ) -> Result<crate::pose_detector::PoseDetector, InferError> {
+        crate::pose_detector::PoseDetector::new(model_path, self.device.clone())
     }
 
     pub fn use_whisper(
@@ -72,40 +57,40 @@ impl Inference {
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
         config_path: impl AsRef<Path>,
-    ) -> Result<crate::Whisper, InferError> {
-        crate::Whisper::new(model_path, tokenizer_path, config_path, self.device.clone())
+    ) -> Result<crate::asr::Whisper, InferError> {
+        crate::asr::Whisper::new(model_path, tokenizer_path, config_path, self.device.clone())
     }
 
     pub fn use_qwen3(
         &self,
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::Qwen3, InferError> {
-        crate::Qwen3::new(model_path, tokenizer_path, self.device.clone())
+    ) -> Result<crate::llm::Qwen3, InferError> {
+        crate::llm::Qwen3::new(model_path, tokenizer_path, self.device.clone())
     }
 
     pub fn use_phi3(
         &self,
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::Phi3, InferError> {
-        crate::Phi3::new(model_path, tokenizer_path, self.device.clone())
+    ) -> Result<crate::llm::Phi3, InferError> {
+        crate::llm::Phi3::new(model_path, tokenizer_path, self.device.clone())
     }
 
     pub fn use_llama(
         &self,
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::Llama, InferError> {
-        crate::Llama::new(model_path, tokenizer_path, self.device.clone())
+    ) -> Result<crate::llm::Llama, InferError> {
+        crate::llm::Llama::new(model_path, tokenizer_path, self.device.clone())
     }
 
     pub fn use_smollm2(
         &self,
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::Smollm2, InferError> {
-        crate::Smollm2::new(model_path, tokenizer_path, self.device.clone())
+    ) -> Result<crate::llm::Smollm2, InferError> {
+        crate::llm::Smollm2::new(model_path, tokenizer_path, self.device.clone())
     }
 
     pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<Session, InferError> {
@@ -140,11 +125,14 @@ impl Inference {
         decoder_path: P,
         joiner_path: P,
         tokens_path: P,
-    ) -> Result<crate::asr::streaming::StreamingAsr, InferError> {
-        crate::asr::streaming::StreamingAsr::new(
-            encoder_path,
-            decoder_path,
-            joiner_path,
+    ) -> Result<crate::asr::sherpa::Sherpa, InferError> {
+        let encoder_session = self.onnx_session(&encoder_path)?;
+        let decoder_session = self.onnx_session(&decoder_path)?;
+        let joiner_session = self.onnx_session(&joiner_path)?;
+        crate::asr::sherpa::Sherpa::new(
+            encoder_session,
+            decoder_session,
+            joiner_session,
             tokens_path,
         )
     }

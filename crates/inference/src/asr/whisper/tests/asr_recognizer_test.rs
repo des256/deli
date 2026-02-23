@@ -6,7 +6,13 @@ use {
     candle_core::{DType, Device},
     candle_nn::VarBuilder,
     futures_util::{SinkExt, StreamExt},
-    inference::{asr::{Config, Transcription, WhisperModel}, Inference, Whisper},
+    inference::{
+        Inference,
+        asr::{
+            Transcription, Whisper,
+            whisper::{config::Config, model::Whisper as WhisperModel},
+        },
+    },
     std::path::Path,
 };
 

@@ -1,8 +1,14 @@
 use {
-    crate::InferError,
+    crate::error::InferError,
     candle_core::{Device, Tensor},
-    candle_transformers::{generation::{LogitsProcessor, Sampling}, models::quantized_phi3::ModelWeights},
-    std::{path::Path, sync::{Arc, Mutex}},
+    candle_transformers::{
+        generation::{LogitsProcessor, Sampling},
+        models::quantized_phi3::ModelWeights,
+    },
+    std::{
+        path::Path,
+        sync::{Arc, Mutex},
+    },
     tokenizers::Tokenizer,
 };
 
@@ -51,15 +57,16 @@ impl Phi3 {
         device: Device,
     ) -> Result<Self, InferError> {
         // Load tokenizer
-        let tokenizer = Tokenizer::from_file(tokenizer_path).map_err(|e| {
-            InferError::Runtime(format!("Failed to load tokenizer: {}", e))
-        })?;
+        let tokenizer = Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
 
         // Validate EOS tokens at construction time (fail-fast for wrong tokenizer)
         let eos_token = *tokenizer
             .get_vocab(true)
             .get("<|endoftext|>")
-            .ok_or_else(|| InferError::TokenizerError("<|endoftext|> token not found in vocab".to_string()))?;
+            .ok_or_else(|| {
+                InferError::TokenizerError("<|endoftext|> token not found in vocab".to_string())
+            })?;
 
         let end_token = tokenizer.get_vocab(true).get("<|end|>").copied();
 
@@ -119,17 +126,20 @@ impl Phi3 {
 
         tokio::task::spawn_blocking(move || -> Result<String, InferError> {
             // Tokenize prompt
-            let tokens = tokenizer
-                .encode(prompt.as_str(), true)
-                .map_err(|e| InferError::TokenizerError(format!("Failed to encode prompt: {}", e)))?;
+            let tokens = tokenizer.encode(prompt.as_str(), true).map_err(|e| {
+                InferError::TokenizerError(format!("Failed to encode prompt: {}", e))
+            })?;
             let tokens = tokens.get_ids();
 
             if tokens.is_empty() {
-                return Err(InferError::Runtime("Tokenization produced no tokens".to_string()));
+                return Err(InferError::Runtime(
+                    "Tokenization produced no tokens".to_string(),
+                ));
             }
 
             // Lock the model for the entire generation
-            let mut model = model.lock()
+            let mut model = model
+                .lock()
                 .map_err(|e| InferError::Runtime(format!("Failed to lock model mutex: {}", e)))?;
 
             // Phi3's KV cache auto-resets when index_pos == 0, no explicit clear needed
@@ -139,18 +149,25 @@ impl Phi3 {
 
             // Forward all prompt tokens at once
             let input = Tensor::new(tokens, &device)
-                .map_err(|e| InferError::TensorError(format!("Failed to create prompt tensor: {}", e)))?
+                .map_err(|e| {
+                    InferError::TensorError(format!("Failed to create prompt tensor: {}", e))
+                })?
                 .unsqueeze(0)
-                .map_err(|e| InferError::TensorError(format!("Failed to unsqueeze tensor: {}", e)))?;
+                .map_err(|e| {
+                    InferError::TensorError(format!("Failed to unsqueeze tensor: {}", e))
+                })?;
 
-            let logits = model.forward(&input, 0)
+            let logits = model
+                .forward(&input, 0)
                 .map_err(|e| InferError::Runtime(format!("Model forward failed: {}", e)))?;
 
-            let logits = logits.squeeze(0)
+            let logits = logits
+                .squeeze(0)
                 .map_err(|e| InferError::TensorError(format!("Failed to squeeze logits: {}", e)))?;
 
             // Sample first token from prompt logits
-            let mut next_token = logits_processor.sample(&logits)
+            let mut next_token = logits_processor
+                .sample(&logits)
                 .map_err(|e| InferError::Runtime(format!("Sampling failed: {}", e)))?;
 
             // Check first token for EOS before adding to output
@@ -168,27 +185,34 @@ impl Phi3 {
 
                 // Forward single token
                 let input = Tensor::new(&[next_token], &device)
-                    .map_err(|e| InferError::TensorError(format!("Failed to create token tensor: {}", e)))?
+                    .map_err(|e| {
+                        InferError::TensorError(format!("Failed to create token tensor: {}", e))
+                    })?
                     .unsqueeze(0)
-                    .map_err(|e| InferError::TensorError(format!("Failed to unsqueeze token tensor: {}", e)))?;
+                    .map_err(|e| {
+                        InferError::TensorError(format!("Failed to unsqueeze token tensor: {}", e))
+                    })?;
 
-                let logits = model.forward(&input, tokens.len() + index)
-                    .map_err(|e| InferError::Runtime(format!("Model forward failed at token {}: {}", index, e)))?;
+                let logits = model.forward(&input, tokens.len() + index).map_err(|e| {
+                    InferError::Runtime(format!("Model forward failed at token {}: {}", index, e))
+                })?;
 
-                let logits = logits.squeeze(0)
-                    .map_err(|e| InferError::TensorError(format!("Failed to squeeze logits: {}", e)))?;
+                let logits = logits.squeeze(0).map_err(|e| {
+                    InferError::TensorError(format!("Failed to squeeze logits: {}", e))
+                })?;
 
                 // Sample next token
-                next_token = logits_processor.sample(&logits)
-                    .map_err(|e| InferError::Runtime(format!("Sampling failed at token {}: {}", index, e)))?;
+                next_token = logits_processor.sample(&logits).map_err(|e| {
+                    InferError::Runtime(format!("Sampling failed at token {}: {}", index, e))
+                })?;
 
                 generated_tokens.push(next_token);
             }
 
             // Decode generated tokens to text
-            let text = tokenizer
-                .decode(&generated_tokens, true)
-                .map_err(|e| InferError::TokenizerError(format!("Failed to decode tokens: {}", e)))?;
+            let text = tokenizer.decode(&generated_tokens, true).map_err(|e| {
+                InferError::TokenizerError(format!("Failed to decode tokens: {}", e))
+            })?;
 
             Ok(text)
         })
