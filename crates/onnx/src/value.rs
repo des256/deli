@@ -38,6 +38,13 @@ impl TensorElement for i32 {
     }
 }
 
+impl sealed::Sealed for bool {}
+impl TensorElement for bool {
+    fn element_type() -> ffi::ONNXTensorElementDataType {
+        ffi::ONNXTensorElementDataType::Bool
+    }
+}
+
 /// ONNX Runtime value (tensor)
 pub struct Value {
     value: *mut ffi::OrtValue,
@@ -168,6 +175,11 @@ impl Value {
                 ));
             }
 
+            // Handle empty tensors (elem_count = 0) - avoid null pointer in from_raw_parts
+            if elem_count == 0 {
+                return Ok(&[]);
+            }
+
             // Get mutable data pointer
             let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
             let get_data: ffi::GetTensorMutableDataFn =
@@ -213,6 +225,32 @@ impl Value {
 
             error::check_status(self.api, status, ())?;
             Ok(dims)
+        }
+    }
+
+    /// Get the tensor element type
+    ///
+    /// # Errors
+    /// Returns an error if the value is not a tensor or type extraction fails
+    pub fn tensor_element_type(&self) -> Result<ffi::ONNXTensorElementDataType> {
+        unsafe {
+            let mut type_info: *mut ffi::OrtTensorTypeAndShapeInfo = std::ptr::null_mut();
+            let get_type_shape: ffi::GetTensorTypeAndShapeFn =
+                (*self.api).get_fn(ffi::IDX_GET_TENSOR_TYPE_AND_SHAPE);
+            let status = get_type_shape(self.value, &mut type_info as *mut _);
+            error::check_status(self.api, status, ())?;
+
+            let mut element_type = ffi::ONNXTensorElementDataType::Undefined;
+            let get_element_type: ffi::GetTensorElementTypeFn =
+                (*self.api).get_fn(ffi::IDX_GET_TENSOR_ELEMENT_TYPE);
+            let status = get_element_type(type_info, &mut element_type as *mut _);
+
+            let release: ffi::ReleaseTensorTypeAndShapeInfoFn =
+                (*self.api).get_fn(ffi::IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO);
+            release(type_info);
+
+            error::check_status(self.api, status, ())?;
+            Ok(element_type)
         }
     }
 
@@ -265,5 +303,42 @@ mod tests {
         assert_eq!(f64::element_type(), ffi::ONNXTensorElementDataType::Double);
         assert_eq!(i64::element_type(), ffi::ONNXTensorElementDataType::Int64);
         assert_eq!(i32::element_type(), ffi::ONNXTensorElementDataType::Int32);
+        assert_eq!(bool::element_type(), ffi::ONNXTensorElementDataType::Bool);
+    }
+
+    #[test]
+    fn test_bool_from_slice() {
+        let _ = crate::init();
+        let val = Value::from_slice::<bool>(&[1], &[true]).unwrap();
+        let extracted = val.extract_tensor::<bool>().unwrap();
+        assert_eq!(extracted, &[true]);
+    }
+
+    #[test]
+    fn test_bool_zeros() {
+        let _ = crate::init();
+        let val = Value::zeros::<bool>(&[1]).unwrap();
+        let extracted = val.extract_tensor::<bool>().unwrap();
+        assert_eq!(extracted, &[false]);
+    }
+
+    #[test]
+    fn test_bool_zeros_multi_dim() {
+        let _ = crate::init();
+        let val = Value::zeros::<bool>(&[1, 10]).unwrap();
+        let extracted = val.extract_tensor::<bool>().unwrap();
+        assert_eq!(extracted.len(), 10);
+        assert!(extracted.iter().all(|&b| b == false));
+    }
+
+    #[test]
+    fn test_empty_tensor() {
+        let _ = crate::init();
+        // Test empty tensor with shape [0] - needed for flow_lm current_end states
+        let val = Value::from_slice::<f32>(&[0], &[]).unwrap();
+        let shape = val.tensor_shape().unwrap();
+        assert_eq!(shape, vec![0]);
+        let extracted = val.extract_tensor::<f32>().unwrap();
+        assert_eq!(extracted.len(), 0);
     }
 }

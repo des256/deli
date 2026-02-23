@@ -1,18 +1,15 @@
-// Re-export the functions from the streaming module for testing
-// In production, users will access via inference::asr::streaming::*
-mod streaming_imports {
-    pub use inference::asr::sherpa::{Sherpa, tokens::compute_features, tokens::load_tokens};
-}
-use inference::error::InferError;
-use streaming_imports::*;
+use crate::asr::sherpa::{features::compute_features, tokens::load_tokens, Sherpa};
+use crate::error::InferError;
 
 #[test]
 fn test_load_tokens_valid_file() {
-    let tokens_path = "tests/fixtures/test_tokens.txt";
+    let tokens_path = "/tmp/deli_test_tokens.txt";
 
-    // Create a test tokens file
-    std::fs::create_dir_all("tests/fixtures").unwrap();
-    std::fs::write(tokens_path, "<blk> 0\n<sos/eos> 1\n<unk> 2\nS 3\n▁THE 4\n").unwrap();
+    std::fs::write(
+        tokens_path,
+        "<blk> 0\n<sos/eos> 1\n<unk> 2\nS 3\n▁THE 4\n",
+    )
+    .unwrap();
 
     let result = load_tokens(tokens_path);
     assert!(result.is_ok());
@@ -25,7 +22,6 @@ fn test_load_tokens_valid_file() {
     assert_eq!(tokens[3], "S");
     assert_eq!(tokens[4], "▁THE");
 
-    // Clean up
     std::fs::remove_file(tokens_path).ok();
 }
 
@@ -37,9 +33,8 @@ fn test_load_tokens_missing_file() {
 
 #[test]
 fn test_load_tokens_malformed_file() {
-    let tokens_path = "tests/fixtures/malformed_tokens.txt";
+    let tokens_path = "/tmp/deli_test_malformed_tokens.txt";
 
-    std::fs::create_dir_all("tests/fixtures").unwrap();
     std::fs::write(tokens_path, "invalid line without ID\n").unwrap();
 
     let result = load_tokens(tokens_path);
@@ -60,7 +55,7 @@ fn test_compute_features_dimensions() {
     let features = result.unwrap();
 
     // num_frames = (num_samples - window_size) / hop_size + 1
-    // = (16000 - 400) / 160 + 1 = 98.5 rounded down = 98
+    // = (16000 - 400) / 160 + 1 = 98
     // Total length = num_frames * 80 bins
     let expected_num_frames = (pcm_data.len() - 400) / 160 + 1;
     assert_eq!(features.len(), expected_num_frames * 80);
@@ -84,11 +79,7 @@ fn test_compute_features_invalid_sample_rate() {
 }
 
 #[test]
-fn test_streaming_asr_is_send() {
-    // This test verifies that StreamingAsr can be sent across threads
+fn test_sherpa_is_send() {
     fn assert_send<T: Send>() {}
-    assert_send::<StreamingAsr>();
+    assert_send::<Sherpa>();
 }
-
-// Note: Full decode_chunk tests require actual ONNX model files
-// These will be added when the user provides the model files

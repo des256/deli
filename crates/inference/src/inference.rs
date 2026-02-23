@@ -119,6 +119,32 @@ impl Inference {
         crate::tts::Kokoro::new(session, voice_path, espeak_data_path)
     }
 
+    pub fn use_pocket_tts(
+        &self,
+        text_conditioner_path: impl AsRef<Path>,
+        flow_main_path: impl AsRef<Path>,
+        flow_step_path: impl AsRef<Path>,
+        mimi_encoder_path: impl AsRef<Path>,
+        mimi_decoder_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+        voice_audio_path: impl AsRef<Path>,
+    ) -> Result<crate::tts::pocket::PocketTts, InferError> {
+        let text_conditioner = self.onnx_session(text_conditioner_path)?;
+        let flow_main = self.onnx_session(flow_main_path)?;
+        let flow_step = self.onnx_session(flow_step_path)?;
+        let mimi_encoder = self.onnx_session(mimi_encoder_path)?;
+        let mimi_decoder = self.onnx_session(mimi_decoder_path)?;
+        crate::tts::pocket::PocketTts::new(
+            text_conditioner,
+            flow_main,
+            flow_step,
+            mimi_encoder,
+            mimi_decoder,
+            tokenizer_path,
+            voice_audio_path,
+        )
+    }
+
     pub fn use_streaming_asr<P: AsRef<Path>>(
         &self,
         encoder_path: P,

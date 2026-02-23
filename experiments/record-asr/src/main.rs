@@ -10,9 +10,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "data/sherpa".to_string());
 
     let dir = PathBuf::from(&model_dir);
-    let encoder_path = dir.join("encoder-epoch-99-avg-1.int8.onnx");
-    let decoder_path = dir.join("decoder-epoch-99-avg-1.int8.onnx");
-    let joiner_path = dir.join("joiner-epoch-99-avg-1.int8.onnx");
+    let encoder_path = dir.join("encoder-epoch-99-avg-1-chunk-16-left-128.onnx");
+    let decoder_path = dir.join("decoder-epoch-99-avg-1-chunk-16-left-128.onnx");
+    let joiner_path = dir.join("joiner-epoch-99-avg-1-chunk-16-left-128.onnx");
     let tokens_path = dir.join("tokens.txt");
 
     log_info!("Streaming ASR");

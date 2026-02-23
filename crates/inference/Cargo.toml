@@ -20,6 +20,9 @@ tokenizers = { version = "0.21", default-features = false, features = ["fancy-re
 tokio = { version = "1", features = ["rt"] }
 futures-core = "0.3"
 futures-sink = "0.3"
+rand = "0.8"
+rand_distr = "0.4"
+hound = "3.5"
 
 [features]
 cuda = [
