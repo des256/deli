@@ -1,4 +1,5 @@
 pub mod asr;
+pub mod diar;
 pub mod error;
 pub mod inference;
 pub mod llm;

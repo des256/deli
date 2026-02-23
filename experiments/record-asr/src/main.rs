@@ -1,4 +1,10 @@
-use {audio::AudioIn, base::*, futures_util::{SinkExt, StreamExt}, inference::{Inference, asr::Transcription}, std::path::PathBuf};
+use {
+    audio::AudioIn,
+    base::*,
+    inference::{Inference, asr::Transcription},
+    std::io::Write,
+    std::path::PathBuf,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -7,25 +13,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Parse CLI arguments
     let model_dir = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "data/sherpa".to_string());
+        .unwrap_or_else(|| "data/parakeet".to_string());
 
     let dir = PathBuf::from(&model_dir);
-    let encoder_path = dir.join("encoder-epoch-99-avg-1-chunk-16-left-128.onnx");
-    let decoder_path = dir.join("decoder-epoch-99-avg-1-chunk-16-left-128.onnx");
-    let joiner_path = dir.join("joiner-epoch-99-avg-1-chunk-16-left-128.onnx");
-    let tokens_path = dir.join("tokens.txt");
+    let encoder_path = dir.join("encoder.int8.onnx");
+    let decoder_joint_path = dir.join("decoder_joint.int8.onnx");
+    let vocab_path = dir.join("tokenizer.model");
 
-    log_info!("Streaming ASR");
+    log_info!("Streaming ASR (Parakeet)");
     log_info!("Model directory: {}", model_dir);
 
     // Load streaming ASR model
+    #[cfg(feature = "cuda")]
+    let inference = Inference::cuda(0)?;
+    #[cfg(not(feature = "cuda"))]
     let inference = Inference::cpu()?;
-    let mut asr = inference.use_streaming_asr(
-        &encoder_path,
-        &decoder_path,
-        &joiner_path,
-        &tokens_path,
-    )?;
+    let mut asr = inference.use_parakeet_asr(&encoder_path, &decoder_joint_path, &vocab_path)?;
     log_info!("Model loaded");
 
     // Create audio input
@@ -34,26 +37,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Track how much text we've already printed so we only print new words
     let mut printed_len = 0;
 
-    // Main loop
+    // Main loop — biased select ensures ASR results are always consumed first,
+    // preventing audio capture from starving the transcription output.
     loop {
         tokio::select! {
-            chunk = audioin.capture() => {
-                match chunk {
-                    Ok(sample) => {
-                        asr.send(sample).await?;
-                    }
-                    Err(error) => {
-                        log_error!("Audio capture error: {}", error);
-                        break;
-                    }
-                }
-            }
+            biased;
 
-            result = asr.next() => {
+            result = asr.recv() => {
                 match result {
                     Some(Ok(Transcription::Partial { ref text, .. })) => {
                         if text.len() > printed_len {
                             print!("{}", &text[printed_len..]);
+                            std::io::stdout().flush().ok();
                             printed_len = text.len();
                         }
                     }
@@ -75,16 +70,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
+            chunk = audioin.capture() => {
+                match chunk {
+                    Ok(sample) => {
+                        asr.send(sample).await?;
+                    }
+                    Err(error) => {
+                        log_error!("Audio capture error: {}", error);
+                        break;
+                    }
+                }
+            }
+
             _ = tokio::signal::ctrl_c() => {
                 log_info!("Shutting down...");
 
                 asr.close().await?;
 
-                while let Some(result) = asr.next().await {
+                while let Some(result) = asr.recv().await {
                     match result {
                         Ok(Transcription::Partial { ref text, .. }) => {
                             if text.len() > printed_len {
                                 print!("{}", &text[printed_len..]);
+                                std::io::stdout().flush().ok();
                                 printed_len = text.len();
                             }
                         }

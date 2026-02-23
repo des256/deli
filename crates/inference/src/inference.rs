@@ -164,11 +164,31 @@ impl Inference {
         )
     }
 
+    pub fn use_parakeet_asr<P: AsRef<Path>>(
+        &self,
+        encoder_path: P,
+        decoder_joint_path: P,
+        vocab_path: P,
+    ) -> Result<crate::asr::parakeet::Parakeet, InferError> {
+        let encoder_session = self.onnx_session(&encoder_path)?;
+        let decoder_joint_session = self.onnx_session(&decoder_joint_path)?;
+        crate::asr::parakeet::Parakeet::new(encoder_session, decoder_joint_session, vocab_path)
+    }
+
     pub fn use_silero_vad(
         &self,
         model_path: impl AsRef<Path>,
     ) -> Result<crate::vad::SileroVad, InferError> {
         let session = self.onnx_session(model_path)?;
         crate::vad::SileroVad::new(session)
+    }
+
+    pub fn use_parakeet_diar(
+        &self,
+        model_path: impl AsRef<Path>,
+    ) -> Result<crate::diar::parakeet::Sortformer, InferError> {
+        let session = self.onnx_session(model_path)?;
+        let config = crate::diar::parakeet::DiarizationConfig::default();
+        crate::diar::parakeet::Sortformer::new(session, config)
     }
 }

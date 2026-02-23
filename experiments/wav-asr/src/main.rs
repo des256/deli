@@ -1,7 +1,12 @@
-use {audio::{AudioData, AudioSample}, base::*, futures_util::{SinkExt, StreamExt}, inference::{Inference, asr::Transcription}, std::path::PathBuf};
-use std::time::Instant;
+use {
+    audio::{AudioData, AudioSample},
+    base::*,
+    inference::{Inference, asr::Transcription},
+    std::path::PathBuf,
+    std::time::Instant,
+};
 
-const WHISPER_SAMPLE_RATE: usize = 16000;
+const SAMPLE_RATE: usize = 16000;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_dir = args
         .get(2)
         .map(|s| s.as_str())
-        .unwrap_or("data/whisper/tiny.en");
+        .unwrap_or("data/parakeet");
 
     // Read WAV file
     let reader = hound::WavReader::open(wav_path)?;
@@ -58,74 +63,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Resample to 16kHz if needed
-    let samples = if spec.sample_rate != WHISPER_SAMPLE_RATE as u32 {
+    let samples = if spec.sample_rate != SAMPLE_RATE as u32 {
         log_info!(
             "Resampling from {} Hz to {} Hz",
             spec.sample_rate,
-            WHISPER_SAMPLE_RATE
+            SAMPLE_RATE
         );
-        resample(&mono_samples, spec.sample_rate, WHISPER_SAMPLE_RATE as u32)
+        resample(&mono_samples, spec.sample_rate, SAMPLE_RATE as u32)
     } else {
         mono_samples
     };
 
-    let duration_secs = samples.len() as f64 / WHISPER_SAMPLE_RATE as f64;
+    let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
     log_info!("Audio: {:.1}s, {} samples", duration_secs, samples.len());
 
     // Validate model directory
-    let model_path = PathBuf::from(model_dir).join("model.safetensors");
-    let tokenizer_path = PathBuf::from(model_dir).join("tokenizer.json");
-    let config_path = PathBuf::from(model_dir).join("config.json");
+    let dir = PathBuf::from(model_dir);
+    let encoder_path = dir.join("encoder.int8.onnx");
+    let decoder_joint_path = dir.join("decoder_joint.int8.onnx");
+    let vocab_path = dir.join("tokenizer.model");
 
-    if !model_path.exists() || !tokenizer_path.exists() || !config_path.exists() {
-        eprintln!("Model directory incomplete. Expected files:");
-        eprintln!("  - model.safetensors");
-        eprintln!("  - tokenizer.json");
-        eprintln!("  - config.json");
-        eprintln!("In directory: {}", model_dir);
-        std::process::exit(1);
+    for path in [&encoder_path, &decoder_joint_path, &vocab_path] {
+        if !path.exists() {
+            eprintln!("Missing model file: {}", path.display());
+            std::process::exit(1);
+        }
     }
 
-    // Initialize CUDA and load model
-    log_info!("Initializing CUDA...");
+    // Initialize inference and load model
+    #[cfg(feature = "cuda")]
     let inference = Inference::cuda(0)?;
-    log_info!("CUDA initialized");
+    #[cfg(not(feature = "cuda"))]
+    let inference = Inference::cpu()?;
 
+    let mut asr = inference.use_parakeet_asr(&encoder_path, &decoder_joint_path, &vocab_path)?;
+    log_info!("Parakeet model loaded");
+
+    // Send all audio and close
     let num_samples = samples.len();
-    let mut whisper = inference
-        .use_whisper(&model_path, &tokenizer_path, &config_path)?
-        .with_window_samples(num_samples); // Process entire file as one window
-    log_info!("Whisper model loaded");
-
-    // Send audio and close
     let tensor = Tensor::new(vec![num_samples], samples)?;
     let sample = AudioSample {
         data: AudioData::Pcm(tensor),
-        sample_rate: WHISPER_SAMPLE_RATE,
+        sample_rate: SAMPLE_RATE,
     };
 
     let start = Instant::now();
-    whisper.send(sample).await?;
-    whisper.close().await?;
+    asr.send(sample).await?;
+    asr.close().await?;
 
-    // Read transcription
-    if let Some(result) = whisper.next().await {
-        let transcription = result?;
-        match transcription {
-            Transcription::Final { text, .. } => {
-                let text = text.trim();
-                if !text.is_empty() {
-                    println!("{}", text);
-                } else {
-                    log_info!("No speech detected");
-                }
+    // Drain all transcriptions, keeping the last one
+    let mut final_text = String::new();
+    while let Some(result) = asr.recv().await {
+        match result? {
+            Transcription::Partial { text, .. } | Transcription::Final { text, .. } => {
+                final_text = text;
             }
-            _ => log_info!("No speech detected"),
+            Transcription::Cancelled => {}
         }
     }
 
     let elapsed = start.elapsed();
+    if !final_text.trim().is_empty() {
+        println!("{}", final_text.trim());
+    } else {
+        log_info!("No speech detected");
+    }
     log_info!("Transcription took {:?}", elapsed);
+
     Ok(())
 }
 

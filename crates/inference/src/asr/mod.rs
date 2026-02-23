@@ -9,3 +9,6 @@ pub use sherpa::Sherpa;
 
 pub mod whisper;
 pub use whisper::Whisper;
+
+pub mod parakeet;
+pub use parakeet::Parakeet;
