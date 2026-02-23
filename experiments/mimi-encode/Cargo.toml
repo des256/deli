@@ -1,0 +1,17 @@
+[package]
+name = "mimi-encode"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "mimi_encode"
+path = "src/main.rs"
+
+[features]
+cuda = ["inference/cuda"]
+
+[dependencies]
+inference = { path = "../../crates/inference" }
+base = { path = "../../crates/base" }
+onnx = { path = "../../crates/onnx" }
+hound = "3.5"

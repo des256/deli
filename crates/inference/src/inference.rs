@@ -124,24 +124,25 @@ impl Inference {
         text_conditioner_path: impl AsRef<Path>,
         flow_main_path: impl AsRef<Path>,
         flow_step_path: impl AsRef<Path>,
-        mimi_encoder_path: impl AsRef<Path>,
         mimi_decoder_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
-        voice_audio_path: impl AsRef<Path>,
+        voice_latents_path: impl AsRef<Path>,
     ) -> Result<crate::tts::pocket::PocketTts, InferError> {
         let text_conditioner = self.onnx_session(text_conditioner_path)?;
         let flow_main = self.onnx_session(flow_main_path)?;
         let flow_step = self.onnx_session(flow_step_path)?;
-        let mimi_encoder = self.onnx_session(mimi_encoder_path)?;
         let mimi_decoder = self.onnx_session(mimi_decoder_path)?;
+
+        let tokenizer = tokenizers::Tokenizer::from_file(tokenizer_path)
+            .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
+
         crate::tts::pocket::PocketTts::new(
             text_conditioner,
             flow_main,
             flow_step,
-            mimi_encoder,
             mimi_decoder,
-            tokenizer_path,
-            voice_audio_path,
+            tokenizer,
+            &voice_latents_path,
         )
     }
 
@@ -161,5 +162,13 @@ impl Inference {
             joiner_session,
             tokens_path,
         )
+    }
+
+    pub fn use_silero_vad(
+        &self,
+        model_path: impl AsRef<Path>,
+    ) -> Result<crate::vad::SileroVad, InferError> {
+        let session = self.onnx_session(model_path)?;
+        crate::vad::SileroVad::new(session)
     }
 }

@@ -34,69 +34,67 @@ fn test_pocket_tts_integration() -> Result<()> {
         "data/pocket/text_conditioner.onnx",
         "data/pocket/flow_lm_main_int8.onnx",
         "data/pocket/flow_lm_flow_int8.onnx",
-        "data/pocket/mimi_encoder.onnx",
         "data/pocket/mimi_decoder_int8.onnx",
         "data/pocket/tokenizer.json",
-        "data/pocket/voice.wav",
+        "data/pocket/voices/tricia.bin",
     )?;
 
-    // Generate audio
+    // Generate audio (streaming)
     use futures_util::SinkExt;
     use futures_util::StreamExt;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        // Send text (convert &str to String)
+        // Send text
         tts.send("Hello world".to_string()).await.unwrap();
         tts.close().await.unwrap();
 
-        // Receive audio
-        if let Some(result) = tts.next().await {
+        // Collect all streamed chunks
+        let mut all_data: Vec<i16> = Vec::new();
+        let mut chunk_count = 0usize;
+        while let Some(result) = tts.next().await {
             let sample = result.unwrap();
-
-            // Verify sample rate
             assert_eq!(sample.sample_rate, 24000);
-
-            // Verify audio has samples
             match sample.data {
                 AudioData::Pcm(tensor) => {
-                    let len = tensor.shape[0];
-                    assert!(len > 0, "Audio should have samples");
-                    println!("Generated {} samples", len);
-
-                    // Verify non-zero variance (not silence)
-                    let data = &tensor.data;
-                    let mean: f64 = data.iter().map(|&x| x as f64).sum::<f64>() / len as f64;
-                    let variance: f64 = data
-                        .iter()
-                        .map(|&x| {
-                            let diff = x as f64 - mean;
-                            diff * diff
-                        })
-                        .sum::<f64>()
-                        / len as f64;
-                    assert!(variance > 0.0, "Audio should not be silence");
-
-                    // Verify duration is reasonable (1-10s for "Hello world")
-                    let duration_sec = len as f32 / 24000.0;
-                    assert!(duration_sec >= 1.0 && duration_sec <= 10.0,
-                            "Duration {} s is unreasonable for 'Hello world'", duration_sec);
-
-                    // Write to file for manual verification
-                    std::fs::write("/tmp/pocket_tts_output.raw", unsafe {
-                        std::slice::from_raw_parts(
-                            data.as_ptr() as *const u8,
-                            data.len() * std::mem::size_of::<i16>(),
-                        )
-                    })
-                    .unwrap();
-                    println!("✓ Output written to /tmp/pocket_tts_output.raw");
+                    all_data.extend_from_slice(&tensor.data);
+                    chunk_count += 1;
                 }
-                _ => panic!("Expected PCM audio data"),
             }
-        } else {
-            panic!("Expected audio sample");
         }
+
+        // Verify audio has samples (last chunk is empty end-of-utterance marker)
+        assert!(!all_data.is_empty(), "Audio should have samples");
+        assert!(chunk_count > 1, "Should stream multiple chunks, got {}", chunk_count);
+        println!("Generated {} samples in {} chunks", all_data.len(), chunk_count);
+
+        // Verify non-zero variance (not silence)
+        let len = all_data.len();
+        let mean: f64 = all_data.iter().map(|&x| x as f64).sum::<f64>() / len as f64;
+        let variance: f64 = all_data
+            .iter()
+            .map(|&x| {
+                let diff = x as f64 - mean;
+                diff * diff
+            })
+            .sum::<f64>()
+            / len as f64;
+        assert!(variance > 0.0, "Audio should not be silence");
+
+        // Verify duration is reasonable (1-10s for "Hello world")
+        let duration_sec = len as f32 / 24000.0;
+        assert!(duration_sec >= 1.0 && duration_sec <= 10.0,
+                "Duration {} s is unreasonable for 'Hello world'", duration_sec);
+
+        // Write to file for manual verification
+        std::fs::write("/tmp/pocket_tts_output.raw", unsafe {
+            std::slice::from_raw_parts(
+                all_data.as_ptr() as *const u8,
+                all_data.len() * std::mem::size_of::<i16>(),
+            )
+        })
+        .unwrap();
+        println!("Output written to /tmp/pocket_tts_output.raw");
     });
 
     Ok(())
@@ -113,40 +111,45 @@ fn test_pocket_tts_multiple_utterances() -> Result<()> {
         "data/pocket/text_conditioner.onnx",
         "data/pocket/flow_lm_main_int8.onnx",
         "data/pocket/flow_lm_flow_int8.onnx",
-        "data/pocket/mimi_encoder.onnx",
         "data/pocket/mimi_decoder_int8.onnx",
         "data/pocket/tokenizer.json",
-        "data/pocket/voice.wav",
+        "data/pocket/voices/tricia.bin",
     )?;
 
-    // Generate multiple utterances
+    // Generate multiple utterances (streaming)
     use futures_util::SinkExt;
     use futures_util::StreamExt;
 
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        // Send multiple texts (convert &str to String)
+        // Send multiple texts
         tts.send("First utterance".to_string()).await.unwrap();
         tts.send("Second utterance".to_string()).await.unwrap();
         tts.send("Third utterance".to_string()).await.unwrap();
         tts.close().await.unwrap();
 
-        // Receive all three
-        let mut count = 0;
+        // Receive all streamed chunks; count utterances via empty markers
+        let mut utterance_count = 0;
+        let mut current_utterance_samples = 0;
         while let Some(result) = tts.next().await {
             let sample = result.unwrap();
             match sample.data {
                 AudioData::Pcm(tensor) => {
-                    let len = tensor.shape[0];
-                    assert!(len > 0, "Audio {} should have samples", count + 1);
-                    count += 1;
+                    if tensor.data.is_empty() {
+                        // End-of-utterance marker
+                        assert!(current_utterance_samples > 0,
+                                "Utterance {} should have samples", utterance_count + 1);
+                        utterance_count += 1;
+                        current_utterance_samples = 0;
+                    } else {
+                        current_utterance_samples += tensor.data.len();
+                    }
                 }
-                _ => panic!("Expected PCM audio data"),
             }
         }
 
-        assert_eq!(count, 3, "Should generate 3 audio samples");
-        println!("✓ Generated 3 utterances successfully");
+        assert_eq!(utterance_count, 3, "Should generate 3 utterances");
+        println!("Generated 3 utterances successfully (streaming)");
     });
 
     Ok(())

@@ -1245,7 +1245,6 @@ dependencies = [
  "futures-core",
  "futures-sink",
  "futures-util",
- "hound",
  "image 0.1.0",
  "inference",
  "memmap2",
@@ -1472,6 +1471,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "mimi-encode"
+version = "0.1.0"
+dependencies = [
+ "base",
+ "hound",
+ "inference",
+ "onnx",
 ]
 
 [[package]]
@@ -2257,6 +2266,16 @@ checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
  "errno",
  "libc",
+]
+
+[[package]]
+name = "silero"
+version = "0.1.0"
+dependencies = [
+ "audio",
+ "base",
+ "inference",
+ "tokio",
 ]
 
 [[package]]

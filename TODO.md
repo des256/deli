@@ -1,3 +1,4 @@
 - switch firmware on the respeaker
 - find better fit for sherpa english model
 - cut up the LLM output into sentences and pipe them to TTS as soon as they become available
+- kittenml

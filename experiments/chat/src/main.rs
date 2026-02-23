@@ -18,9 +18,12 @@ const LLAMA_MODEL_PATH: &str = "data/llama/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
 const LLAMA_TOKENIZER_PATH: &str = "data/llama/tokenizer.json";
 const SMOLLM2_MODEL_PATH: &str = "data/smollm2/smollm2-1.7b-instruct-q4_k_m.gguf";
 const SMOLLM2_TOKENIZER_PATH: &str = "data/smollm2/tokenizer.json";
-const KOKORO_MODEL_PATH: &str = "data/kokoro/kokoro-v1.0.onnx";
-const KOKORO_VOICE_PATH: &str = "data/kokoro/bf_emma.npy";
-const KOKORO_ESPEAK_DATA_PATH: &str = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
+const POCKET_TEXT_CONDITIONER: &str = "data/pocket/text_conditioner.onnx";
+const POCKET_FLOW_MAIN: &str = "data/pocket/flow_lm_main_int8.onnx";
+const POCKET_FLOW_STEP: &str = "data/pocket/flow_lm_flow_int8.onnx";
+const POCKET_MIMI_DECODER: &str = "data/pocket/mimi_decoder_int8.onnx";
+const POCKET_TOKENIZER: &str = "data/pocket/tokenizer.json";
+const POCKET_VOICE: &str = "data/pocket/voices/stephen.bin";
 const SAMPLE_RATE: usize = 24000;
 const SAMPLE_LEN: usize = 2048;
 const MAX_HISTORY_TURNS: usize = 10;
@@ -39,8 +42,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llama_tokenizer = PathBuf::from(LLAMA_TOKENIZER_PATH);
     let smollm2_model = PathBuf::from(SMOLLM2_MODEL_PATH);
     let smollm2_tokenizer = PathBuf::from(SMOLLM2_TOKENIZER_PATH);
-    let kokoro_model = PathBuf::from(KOKORO_MODEL_PATH);
-    let kokoro_voice = PathBuf::from(KOKORO_VOICE_PATH);
+    let pocket_paths = [
+        POCKET_TEXT_CONDITIONER,
+        POCKET_FLOW_MAIN,
+        POCKET_FLOW_STEP,
+        POCKET_MIMI_DECODER,
+        POCKET_TOKENIZER,
+        POCKET_VOICE,
+    ];
 
     if !qwen3_model.exists() || !qwen3_tokenizer.exists() {
         eprintln!("Qwen3 model files missing. Expected:");
@@ -70,18 +79,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    if !kokoro_model.exists() || !kokoro_voice.exists() {
-        eprintln!("Kokoro model files missing. Expected:");
-        eprintln!("  - {}", KOKORO_MODEL_PATH);
-        eprintln!("  - {}", KOKORO_VOICE_PATH);
-        std::process::exit(1);
+    for path in &pocket_paths {
+        if !PathBuf::from(path).exists() {
+            eprintln!("Pocket TTS model file missing: {}", path);
+            std::process::exit(1);
+        }
     }
 
     log_info!("Model files validated");
 
     // Initialize CUDA inference
-    log_info!("Initializing CUDA inference...");
-    let inference = Inference::cuda(0)?;
+    log_info!("Initializing CUDA and CPU inference...");
+    let cpu_inference = Inference::cpu()?;
+    let cuda_inference = Inference::cuda(0)?;
     log_info!("CUDA inference initialized");
 
     // Load LLM (uncomment one)
@@ -89,14 +99,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //let llm = inference.use_qwen3(&qwen3_model, &qwen3_tokenizer)?;
     //let llm = inference.use_phi3(&phi3_model, &phi3_tokenizer)?;
     //let llm = inference.use_llama(&llama_model, &llama_tokenizer)?;
-    let llm = inference.use_smollm2(&smollm2_model, &smollm2_tokenizer)?;
+    let llm = cuda_inference.use_smollm2(&smollm2_model, &smollm2_tokenizer)?;
     log_info!("LLM loaded");
 
-    // Load Kokoro TTS
-    log_info!("Loading Kokoro TTS...");
-    let mut kokoro =
-        inference.use_kokoro(&kokoro_model, &kokoro_voice, Some(KOKORO_ESPEAK_DATA_PATH))?;
-    log_info!("Kokoro TTS loaded");
+    // Load Pocket TTS
+    log_info!("Loading Pocket TTS...");
+    let mut tts = cpu_inference.use_pocket_tts(
+        POCKET_TEXT_CONDITIONER,
+        POCKET_FLOW_MAIN,
+        POCKET_FLOW_STEP,
+        POCKET_MIMI_DECODER,
+        POCKET_TOKENIZER,
+        POCKET_VOICE,
+    )?;
+    log_info!("Pocket TTS loaded");
 
     // Initialize AudioOut
     log_info!("Opening audio output...");
@@ -160,40 +176,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Add to history
         history.push((user_input.to_string(), response.clone()));
 
-        // Synthesize and play speech
+        // Synthesize and play speech (streaming — chunks play as they generate)
         log_info!("Synthesizing speech...");
-        if let Err(e) = kokoro.send(response).await {
+        if let Err(e) = tts.send(response).await {
             log_error!("TTS send failed: {}", e);
             eprintln!("Error sending to TTS: {}", e);
             continue;
         }
-        let sample = match kokoro.next().await {
-            Some(Ok(sample)) => sample,
-            Some(Err(e)) => {
-                log_error!("TTS synthesis failed: {}", e);
-                eprintln!("Error synthesizing speech: {}", e);
-                continue;
+
+        let mut total_samples = 0usize;
+        let mut tts_error = false;
+        while let Some(result) = tts.next().await {
+            match result {
+                Ok(sample) => {
+                    let n = match &sample.data {
+                        AudioData::Pcm(tensor) => tensor.data.len(),
+                    };
+                    if n == 0 {
+                        break; // End-of-utterance marker
+                    }
+                    total_samples += n;
+                    audioout.play(sample).await;
+                }
+                Err(e) => {
+                    log_error!("TTS synthesis failed: {}", e);
+                    eprintln!("Error synthesizing speech: {}", e);
+                    tts_error = true;
+                    break;
+                }
             }
-            None => {
-                log_error!("TTS stream ended without audio");
-                eprintln!("Error: no audio generated");
-                continue;
-            }
-        };
+        }
+        if tts_error {
+            continue;
+        }
+        log_info!("Streamed {} total audio samples", total_samples);
 
-        // Calculate playback duration before moving sample
-        let num_samples = match &sample.data {
-            AudioData::Pcm(tensor) => tensor.data.len(),
-        };
-        log_info!("Generated {} audio samples", num_samples);
-
-        // Play audio
-        audioout.play(sample).await;
-
-        // Wait for playback to complete
-        let duration_secs = num_samples as f64 / SAMPLE_RATE as f64;
-        let duration_ms = (duration_secs * 1000.0) as u64 + 500;
-        tokio::time::sleep(Duration::from_millis(duration_ms)).await;
+        // Brief wait for remaining audio to drain from the ring buffer.
+        // Most audio has already played during streaming generation.
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     log_info!("Chat session ended");

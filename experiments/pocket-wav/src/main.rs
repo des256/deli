@@ -6,7 +6,7 @@ use {
     std::path::PathBuf,
 };
 
-const SENTENCE: &str = "To be, or not to be, equals, minus one.";
+const SENTENCE: &str = "The key issue, with rookworst, is that it is a delicious deli meat, made of willing, pork volunteers, slaughtered with love, prepared with care. - Have you had your rookworst today?";
 const SAMPLE_RATE: u32 = 24000;
 
 #[tokio::main]
@@ -26,13 +26,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let text_conditioner = data.join("text_conditioner.onnx");
     let flow_main = data.join("flow_lm_main_int8.onnx");
     let flow_step = data.join("flow_lm_flow_int8.onnx");
-    let mimi_encoder = data.join("mimi_encoder.onnx");
     let mimi_decoder = data.join("mimi_decoder_int8.onnx");
     let tokenizer = data.join("tokenizer.json");
-    let voice = data.join("voice.wav");
+    let voice = data.join("voices/desmond.bin");
 
     // Validate model files exist
-    for path in [&text_conditioner, &flow_main, &flow_step, &mimi_encoder, &mimi_decoder, &tokenizer, &voice] {
+    for path in [
+        &text_conditioner,
+        &flow_main,
+        &flow_step,
+        &mimi_decoder,
+        &tokenizer,
+        &voice,
+    ] {
         if !path.exists() {
             eprintln!("Missing: {}", path.display());
             std::process::exit(1);
@@ -49,21 +55,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &text_conditioner,
         &flow_main,
         &flow_step,
-        &mimi_encoder,
         &mimi_decoder,
         &tokenizer,
         &voice,
     )?;
     log_info!("Pocket TTS loaded");
 
-    // Synthesize speech
+    // Synthesize speech (streaming — collect all chunks)
     log_info!("Synthesizing: \"{}\"", SENTENCE);
     tts.send(SENTENCE.to_string()).await?;
     tts.close().await?;
 
-    let sample = tts.next().await.expect("stream should yield audio")?;
-    let AudioData::Pcm(tensor) = sample.data;
-    log_info!("Generated {} samples", tensor.data.len());
+    let mut all_samples: Vec<i16> = Vec::new();
+    while let Some(result) = tts.next().await {
+        let sample = result?;
+        let AudioData::Pcm(tensor) = sample.data;
+        all_samples.extend_from_slice(&tensor.data);
+    }
+    log_info!("Generated {} samples", all_samples.len());
 
     // Write WAV file
     let spec = hound::WavSpec {
@@ -74,11 +83,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut writer = hound::WavWriter::create(output_path, spec)?;
-    for &s in &tensor.data {
+    for &s in &all_samples {
         writer.write_sample(s)?;
     }
     writer.finalize()?;
 
-    println!("Wrote {} samples to {}", tensor.data.len(), output_path);
+    println!("Wrote {} samples to {}", all_samples.len(), output_path);
     Ok(())
 }

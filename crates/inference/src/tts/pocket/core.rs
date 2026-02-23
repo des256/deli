@@ -1,6 +1,6 @@
 use {
-    crate::error::{InferError, Result},
     super::snapshot::{self, StateSnapshot},
+    crate::error::{InferError, Result},
     onnx::{Session, Value},
     rand_distr::{Distribution, Normal},
     std::collections::HashMap,
@@ -17,17 +17,18 @@ const CONDITIONING_DIM: usize = 1024;
 
 /// Core inference engine for Pocket TTS.
 ///
-/// Orchestrates 5 ONNX models:
+/// Orchestrates 4 ONNX models:
 /// - text_conditioner: token_ids → embeddings
 /// - flow_lm_main: stateful transformer (18 KV-cache states)
 /// - flow_lm_flow: stateless flow matching ODE solver
-/// - mimi_encoder: audio → latents for voice cloning
 /// - mimi_decoder: stateful neural codec (56 states)
+///
+/// Voice cloning uses pre-encoded latents (from the mimi encoder)
+/// rather than raw audio, avoiding the need for the encoder at runtime.
 pub(crate) struct PocketCore {
     text_conditioner: Session,
     flow_main: Session,
     flow_step: Session,
-    mimi_encoder: Session,
     mimi_decoder: Session,
 
     // State tensor names for flow_lm_main
@@ -52,12 +53,11 @@ pub(crate) struct PocketCore {
 impl PocketCore {
     /// Create a new PocketCore instance
     ///
-    /// Loads all 5 sessions and discovers state tensor names.
+    /// Loads all 4 sessions and discovers state tensor names.
     pub fn new(
         text_conditioner: Session,
         flow_main: Session,
         flow_step: Session,
-        mimi_encoder: Session,
         mimi_decoder: Session,
     ) -> Result<Self> {
         // Discover flow_lm_main state tensor names
@@ -82,7 +82,6 @@ impl PocketCore {
             text_conditioner,
             flow_main,
             flow_step,
-            mimi_encoder,
             mimi_decoder,
             flow_state_names,
             flow_state_output_names,
@@ -97,9 +96,9 @@ impl PocketCore {
 
     /// Discover state tensor names from a session, excluding main inputs
     fn discover_states(session: &Session, exclude: &[&str]) -> Result<Vec<String>> {
-        let input_count = session.input_count().map_err(|e| {
-            InferError::Runtime(format!("Failed to get input count: {}", e))
-        })?;
+        let input_count = session
+            .input_count()
+            .map_err(|e| InferError::Runtime(format!("Failed to get input count: {}", e)))?;
 
         let mut state_names = Vec::new();
 
@@ -126,16 +125,16 @@ impl PocketCore {
     /// ONNX Runtime propagates NaN through softmax (unlike PyTorch which treats
     /// it as -inf), so we use zeros for ONNX compatibility.
     fn initialize_states(session: &Session, state_names: &[String]) -> Result<Vec<Value>> {
-        let input_count = session.input_count().map_err(|e| {
-            InferError::Runtime(format!("Failed to get input count: {}", e))
-        })?;
+        let input_count = session
+            .input_count()
+            .map_err(|e| InferError::Runtime(format!("Failed to get input count: {}", e)))?;
 
         // Build name→index map
         let mut name_to_index = HashMap::new();
         for i in 0..input_count {
-            let name = session.input_name(i).map_err(|e| {
-                InferError::Runtime(format!("Failed to get input name: {}", e))
-            })?;
+            let name = session
+                .input_name(i)
+                .map_err(|e| InferError::Runtime(format!("Failed to get input name: {}", e)))?;
             name_to_index.insert(name, i);
         }
 
@@ -151,7 +150,10 @@ impl PocketCore {
             })?;
 
             let elem_type = session.input_element_type(index).map_err(|e| {
-                InferError::Runtime(format!("Failed to get element type for {}: {}", state_name, e))
+                InferError::Runtime(format!(
+                    "Failed to get element type for {}: {}",
+                    state_name, e
+                ))
             })?;
 
             // Handle empty tensors (shape [0]) separately
@@ -164,20 +166,26 @@ impl PocketCore {
                     // Bool states are StreamingConv1d "first" flags.
                     // Must be true initially so replicate-padding works on first frame.
                     onnx::ffi::ONNXTensorElementDataType::Bool => {
-                        let resolved: Vec<usize> = shape.iter()
+                        let resolved: Vec<usize> = shape
+                            .iter()
                             .map(|&d| if d < 0 { 1 } else { d as usize })
                             .collect();
                         let total: usize = resolved.iter().product();
                         let true_data = vec![true; total];
                         Value::from_slice::<bool>(&resolved, &true_data)
                     }
-                    _ => return Err(InferError::Runtime(format!(
-                        "Unsupported element type {:?} for state {}",
-                        elem_type, state_name
-                    ))),
+                    _ => {
+                        return Err(InferError::Runtime(format!(
+                            "Unsupported element type {:?} for state {}",
+                            elem_type, state_name
+                        )));
+                    }
                 }
                 .map_err(|e| {
-                    InferError::Runtime(format!("Failed to create initial tensor for {}: {}", state_name, e))
+                    InferError::Runtime(format!(
+                        "Failed to create initial tensor for {}: {}",
+                        state_name, e
+                    ))
                 })?
             };
 
@@ -192,34 +200,16 @@ impl PocketCore {
         let seq_len = token_ids.len();
         let tokens = Value::from_slice::<i64>(&[1, seq_len], token_ids)?;
 
-        let outputs = self.text_conditioner
+        let outputs = self
+            .text_conditioner
             .run(&[("token_ids", &tokens)], &["embeddings"])
             .map_err(|e| InferError::Onnx(e.to_string()))?;
 
-        let embeddings = outputs[0].extract_tensor::<f32>().map_err(|e| {
-            InferError::Runtime(format!("Failed to extract embeddings: {}", e))
-        })?;
+        let embeddings = outputs[0]
+            .extract_tensor::<f32>()
+            .map_err(|e| InferError::Runtime(format!("Failed to extract embeddings: {}", e)))?;
 
         Ok(embeddings.to_vec())
-    }
-
-    /// Encode voice audio to latents via mimi_encoder
-    ///
-    /// Input: audio samples (f32), sample_rate
-    /// Output: latent embeddings [1, T, 1024]
-    pub fn encode_voice(&mut self, audio: &[f32], _sample_rate: usize) -> Result<Vec<f32>> {
-        let audio_len = audio.len();
-        let audio_tensor = Value::from_slice::<f32>(&[1, 1, audio_len], audio)?;
-
-        let outputs = self.mimi_encoder
-            .run(&[("audio", &audio_tensor)], &["latents"])
-            .map_err(|e| InferError::Onnx(e.to_string()))?;
-
-        let latents = outputs[0].extract_tensor::<f32>().map_err(|e| {
-            InferError::Runtime(format!("Failed to extract latents: {}", e))
-        })?;
-
-        Ok(latents.to_vec())
     }
 
     /// Condition voice: feed voice latents into flow_main to update KV-cache.
@@ -228,15 +218,21 @@ impl PocketCore {
     /// Voice latents go into the text_embeddings input with an empty sequence.
     pub fn condition_voice(&mut self, voice_latents: &[f32], latent_frames: usize) -> Result<()> {
         let empty_seq = Value::from_slice::<f32>(&[1, 0, LATENT_DIM], &[])?;
-        let text_emb = Value::from_slice::<f32>(&[1, latent_frames, CONDITIONING_DIM], voice_latents)?;
+        let text_emb =
+            Value::from_slice::<f32>(&[1, latent_frames, CONDITIONING_DIM], voice_latents)?;
 
         let mut inputs = vec![("sequence", &empty_seq), ("text_embeddings", &text_emb)];
         for (i, state) in self.flow_states.iter().enumerate() {
             inputs.push((&self.flow_state_names[i], state));
         }
 
-        let output_names: Vec<&str> = self.flow_state_output_names.iter().map(|s| s.as_str()).collect();
-        let outputs = self.flow_main
+        let output_names: Vec<&str> = self
+            .flow_state_output_names
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let outputs = self
+            .flow_main
             .run(&inputs, &output_names)
             .map_err(|e| InferError::Onnx(e.to_string()))?;
 
@@ -256,8 +252,13 @@ impl PocketCore {
             inputs.push((&self.flow_state_names[i], state));
         }
 
-        let output_names: Vec<&str> = self.flow_state_output_names.iter().map(|s| s.as_str()).collect();
-        let outputs = self.flow_main
+        let output_names: Vec<&str> = self
+            .flow_state_output_names
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let outputs = self
+            .flow_main
             .run(&inputs, &output_names)
             .map_err(|e| InferError::Onnx(e.to_string()))?;
 
@@ -292,17 +293,19 @@ impl PocketCore {
         output_names.extend(self.flow_state_output_names.iter().map(|s| s.as_str()));
 
         // Run flow_main
-        let outputs = self.flow_main
+        let outputs = self
+            .flow_main
             .run(&inputs, &output_names)
             .map_err(|e| InferError::Onnx(e.to_string()))?;
 
         // Extract conditioning and eos_logit (clone to avoid borrow conflicts)
-        let conditioning = outputs[0].extract_tensor::<f32>().map_err(|e| {
-            InferError::Runtime(format!("Failed to extract conditioning: {}", e))
-        })?.to_vec();
-        let eos_logit_tensor = outputs[1].extract_tensor::<f32>().map_err(|e| {
-            InferError::Runtime(format!("Failed to extract eos_logit: {}", e))
-        })?;
+        let conditioning = outputs[0]
+            .extract_tensor::<f32>()
+            .map_err(|e| InferError::Runtime(format!("Failed to extract conditioning: {}", e)))?
+            .to_vec();
+        let eos_logit_tensor = outputs[1]
+            .extract_tensor::<f32>()
+            .map_err(|e| InferError::Runtime(format!("Failed to extract eos_logit: {}", e)))?;
         let eos_logit = eos_logit_tensor[0];
 
         // Update states (skip first 2 outputs: conditioning, eos_logit)
@@ -316,7 +319,7 @@ impl PocketCore {
 
         // Check EOS
         let is_eos = eos_logit > DEFAULT_EOS_THRESHOLD;
-        base::log_debug!("EOS logit: {}, threshold: {}, is_eos: {}", eos_logit, DEFAULT_EOS_THRESHOLD, is_eos);
+        //base::log_debug!("EOS logit: {}, threshold: {}, is_eos: {}", eos_logit, DEFAULT_EOS_THRESHOLD, is_eos);
 
         Ok((latent, is_eos))
     }
@@ -351,18 +354,22 @@ impl PocketCore {
             let x_tensor = Value::from_slice::<f32>(&[1, LATENT_DIM], &x)?;
 
             // Run flow_step
-            let outputs = self.flow_step
-                .run(&[
-                    ("c", &c_tensor),
-                    ("s", &s_tensor),
-                    ("t", &t_tensor),
-                    ("x", &x_tensor),
-                ], &["flow_dir"])
+            let outputs = self
+                .flow_step
+                .run(
+                    &[
+                        ("c", &c_tensor),
+                        ("s", &s_tensor),
+                        ("t", &t_tensor),
+                        ("x", &x_tensor),
+                    ],
+                    &["flow_dir"],
+                )
                 .map_err(|e| InferError::Onnx(e.to_string()))?;
 
-            let flow_dir = outputs[0].extract_tensor::<f32>().map_err(|e| {
-                InferError::Runtime(format!("Failed to extract flow_dir: {}", e))
-            })?;
+            let flow_dir = outputs[0]
+                .extract_tensor::<f32>()
+                .map_err(|e| InferError::Runtime(format!("Failed to extract flow_dir: {}", e)))?;
 
             // Update x: x += flow_dir / N
             for j in 0..LATENT_DIM {
@@ -391,14 +398,16 @@ impl PocketCore {
         output_names.extend(self.mimi_state_output_names.iter().map(|s| s.as_str()));
 
         // Run mimi_decoder
-        let outputs = self.mimi_decoder
+        let outputs = self
+            .mimi_decoder
             .run(&inputs, &output_names)
             .map_err(|e| InferError::Onnx(e.to_string()))?;
 
         // Extract audio (clone to avoid borrow conflicts)
-        let audio = outputs[0].extract_tensor::<f32>().map_err(|e| {
-            InferError::Runtime(format!("Failed to extract audio: {}", e))
-        })?.to_vec();
+        let audio = outputs[0]
+            .extract_tensor::<f32>()
+            .map_err(|e| InferError::Runtime(format!("Failed to extract audio: {}", e)))?
+            .to_vec();
 
         // Update states (skip first output: audio_frame)
         self.mimi_states = outputs.into_iter().skip(1).collect();
@@ -422,9 +431,10 @@ impl PocketCore {
 
     /// Restore state from voice-conditioned snapshot
     fn restore_snapshot(&mut self) -> Result<()> {
-        let snap = self.voice_snapshot.as_ref().ok_or_else(|| {
-            InferError::Runtime("No voice snapshot available".to_string())
-        })?;
+        let snap = self
+            .voice_snapshot
+            .as_ref()
+            .ok_or_else(|| InferError::Runtime("No voice snapshot available".to_string()))?;
         self.flow_states = snapshot::restore_values(&snap.flow_states)?;
         self.mimi_states = snapshot::restore_values(&snap.mimi_states)?;
         Ok(())
@@ -439,9 +449,10 @@ impl PocketCore {
     pub fn reset_for_utterance(&mut self) -> Result<()> {
         self.prev_latent = None;
         // Restore voice-conditioned flow states from snapshot
-        let snap = self.voice_snapshot.as_ref().ok_or_else(|| {
-            InferError::Runtime("No voice snapshot available".to_string())
-        })?;
+        let snap = self
+            .voice_snapshot
+            .as_ref()
+            .ok_or_else(|| InferError::Runtime("No voice snapshot available".to_string()))?;
         self.flow_states = snapshot::restore_values(&snap.flow_states)?;
         // Reinitialize mimi states fresh (not from snapshot)
         self.mimi_states = Self::initialize_states(&self.mimi_decoder, &self.mimi_state_names)?;

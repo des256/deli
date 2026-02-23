@@ -23,7 +23,7 @@ use {
 };
 
 // capacity of the audio output channel
-const CHANNEL_CAPACITY: usize = 16;
+const CHANNEL_CAPACITY: usize = 1024;
 
 // number of seconds to wait before reconnecting to PulseAudio
 const RECONNECT_SEC: u64 = 1;
@@ -153,19 +153,28 @@ impl AudioOut {
                                 }
                             }
 
-                            // if audio is available from the channel, add it to the ring buffer
-                            match receiver.try_recv() {
-                                Ok(sample) => match sample.data {
-                                    // NOTE: this assumes that the sample rate is the same as the configuration; should resample here (which is not trivial if the producer decides to do some sort of streaming...)
-                                    AudioData::Pcm(tensor) => {
-                                        ring_buffer.extend(tensor.data.iter())
+                            // drain all available samples from the channel into the ring buffer
+                            loop {
+                                match receiver.try_recv() {
+                                    Ok(sample) => match sample.data {
+                                        AudioData::Pcm(tensor) => {
+                                            ring_buffer.extend(tensor.data.iter())
+                                        }
+                                    },
+                                    Err(mpsc::error::TryRecvError::Empty) => break,
+                                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                                        log_error!("Audio output channel disconnected");
+                                        return;
                                     }
-                                },
-                                Err(mpsc::error::TryRecvError::Empty) => {}
-                                Err(mpsc::error::TryRecvError::Disconnected) => {
-                                    log_error!("Audio output channel disconnected");
-                                    return;
                                 }
+                            }
+
+                            // when ring buffer is empty, wait for data instead of
+                            // writing silence — avoids injecting zero-sample gaps
+                            // that sound like skipping during streaming playback
+                            if ring_buffer.is_empty() {
+                                std::thread::sleep(std::time::Duration::from_millis(1));
+                                continue;
                             }
 
                             // build chunk
@@ -218,6 +227,9 @@ impl AudioOut {
 
     // play an audio sample
     pub async fn play(&self, sample: AudioSample) {
+        if self.sender.capacity() == 0 {
+            log_debug!("AudioOut channel full (cap {})", CHANNEL_CAPACITY);
+        }
         if let Err(error) = self.sender.send(sample).await {
             log_error!("Failed to play audio sample: {}", error);
         }
