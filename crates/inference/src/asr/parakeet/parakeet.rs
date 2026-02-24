@@ -12,7 +12,7 @@ use std::{
 use tokio::sync::mpsc;
 
 use super::asrcore::AsrCore;
-use super::features::compute_features;
+use super::features::{compute_features, init_features};
 use super::tokens::load_tokens;
 
 const REQUIRED_SAMPLE_RATE: usize = 16000;
@@ -41,12 +41,17 @@ impl Parakeet {
         decoder_joint: Session,
         vocab_path: P,
     ) -> Result<Self> {
+        // Derive model directory from vocab path for loading feature extraction data
+        let vocab_ref = vocab_path.as_ref();
+        let model_dir = vocab_ref.parent().unwrap_or(Path::new("."));
+        init_features(model_dir)?;
+
         let tokens = load_tokens(vocab_path)?;
         let core = AsrCore::new(encoder, decoder_joint, tokens)?;
         let core = Arc::new(Mutex::new(core));
 
-        // Default chunk size: 1 second at 16kHz
-        let chunk_samples = REQUIRED_SAMPLE_RATE;
+        // Default chunk size: 250ms at 16kHz
+        let chunk_samples = 4000;
 
         // Unbounded channels avoid deadlock: the main task can always push audio
         // without blocking, even when the worker is slow to consume. Likewise the
@@ -136,7 +141,7 @@ impl Parakeet {
     }
 
     /// Spawn a blocking background task that reads audio chunks from `audio_rx`,
-    /// runs the model, and pushes transcription results to `text_tx`.
+    /// runs ASR, and pushes transcription results to `text_tx`.
     fn spawn_worker(
         core: Arc<Mutex<AsrCore>>,
         mut audio_rx: mpsc::UnboundedReceiver<Vec<i16>>,
@@ -149,10 +154,20 @@ impl Parakeet {
             while let Some(chunk) = audio_rx.blocking_recv() {
                 log_info!("got audio chunk ({} samples), processing...", chunk.len());
                 let result = (|| -> Result<String> {
+                    // Compute ASR mel features
                     let (features, num_frames) = compute_features(&chunk, REQUIRED_SAMPLE_RATE)?;
+                    let feat_min = features.iter().cloned().fold(f32::INFINITY, f32::min);
+                    let feat_max = features.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let feat_mean = features.iter().sum::<f32>() / features.len() as f32;
+                    log_info!(
+                        "mel features: frames={}, min={:.4}, max={:.4}, mean={:.4}",
+                        num_frames, feat_min, feat_max, feat_mean
+                    );
+
                     let mut core_guard = core
                         .lock()
                         .map_err(|e| InferError::Runtime(format!("Core lock poisoned: {}", e)))?;
+
                     core_guard.decode_chunk(&features, num_frames)
                 })();
 
@@ -161,7 +176,7 @@ impl Parakeet {
                     Ok(text) => {
                         decoded_text.push_str(&text);
                         let transcription = Transcription::Partial {
-                            text: decoded_text.clone(),
+                            text: decoded_text.trim_start().to_string(),
                             confidence: 1.0,
                         };
                         if text_tx.send(Ok(transcription)).is_err() {
@@ -177,13 +192,85 @@ impl Parakeet {
             }
 
             // All audio consumed — emit final transcription
-            if !decoded_text.is_empty() {
+            let final_text = decoded_text.trim().to_string();
+            if !final_text.is_empty() {
                 let _ = text_tx.send(Ok(Transcription::Final {
-                    text: decoded_text,
+                    text: final_text,
                     confidence: 1.0,
                 }));
             }
             // text_tx drops here, causing recv() to return None
         });
     }
+}
+
+/// Transcribe complete audio in batch mode (non-streaming).
+///
+/// Computes mel features for the entire audio, then splits into chunks and
+/// processes sequentially through the streaming encoder (caches still apply).
+///
+/// Use this for offline file transcription where all audio is available up-front.
+pub fn transcribe_batch<P: AsRef<Path>>(
+    encoder: Session,
+    decoder_joint: Session,
+    vocab_path: P,
+    pcm: &[i16],
+    sample_rate: usize,
+) -> Result<String> {
+    use base::log_info;
+
+    if sample_rate != REQUIRED_SAMPLE_RATE {
+        return Err(InferError::Runtime(format!(
+            "transcribe_batch requires {} Hz audio, got {} Hz",
+            REQUIRED_SAMPLE_RATE, sample_rate
+        )));
+    }
+
+    // Derive model directory from vocab path for loading feature extraction data
+    let vocab_ref = vocab_path.as_ref();
+    let model_dir = vocab_ref.parent().unwrap_or(Path::new("."));
+    init_features(model_dir)?;
+
+    let tokens = load_tokens(vocab_ref)?;
+    let mut core = AsrCore::new(encoder, decoder_joint, tokens)?;
+
+    let (all_features, total_frames) = compute_features(pcm, sample_rate)?;
+    log_info!(
+        "batch features: total_frames={}, feature_len={}",
+        total_frames,
+        all_features.len()
+    );
+
+    // Process in chunks with streaming cache propagation
+    let hop_size = 160; // 10ms at 16kHz
+    let frames_per_chunk = (REQUIRED_SAMPLE_RATE - 400) / hop_size + 1;
+
+    let mut decoded_text = String::new();
+    let mut frame_offset = 0;
+
+    while frame_offset < total_frames {
+        let frames_in_chunk = (total_frames - frame_offset).min(frames_per_chunk);
+
+        // Extract this chunk's features
+        let mut chunk_features = vec![0.0f32; 128 * frames_in_chunk];
+        for bin in 0..128 {
+            for f in 0..frames_in_chunk {
+                chunk_features[bin * frames_in_chunk + f] =
+                    all_features[bin * total_frames + frame_offset + f];
+            }
+        }
+
+        let text = core.decode_chunk(&chunk_features, frames_in_chunk)?;
+
+        log_info!(
+            "chunk frames={}, offset={}, text={:?}",
+            frames_in_chunk,
+            frame_offset,
+            text
+        );
+        decoded_text.push_str(&text);
+        frame_offset += frames_in_chunk;
+    }
+
+    Ok(decoded_text)
 }

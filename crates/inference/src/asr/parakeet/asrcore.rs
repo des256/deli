@@ -1,3 +1,4 @@
+use base::log_info;
 use crate::error::{InferError, Result};
 use onnx::Session;
 
@@ -66,6 +67,17 @@ impl AsrCore {
         })
     }
 
+    /// Reset decoder LSTM state only (preserves encoder caches).
+    ///
+    /// Use between chunks in batch mode to prevent decoder state corruption
+    /// from spreading across chunks.
+    pub fn reset_decoder(&mut self) -> Result<()> {
+        self.state1 = zeros_f32(&[2, 1, DECODER_STATE_DIM as i64])?;
+        self.state2 = zeros_f32(&[2, 1, DECODER_STATE_DIM as i64])?;
+        self.last_token = BLANK_ID;
+        Ok(())
+    }
+
     /// Reset all states for a new utterance
     pub fn reset(&mut self) -> Result<()> {
         self.state1 = zeros_f32(&[2, 1, DECODER_STATE_DIM as i64])?;
@@ -94,7 +106,11 @@ impl AsrCore {
     ///
     /// Features should be in channels-first layout: [128 * num_frames].
     /// Encoder caches and decoder states persist across chunks for streaming.
-    pub fn decode_chunk(&mut self, features: &[f32], num_frames: usize) -> Result<String> {
+    pub fn decode_chunk(
+        &mut self,
+        features: &[f32],
+        num_frames: usize,
+    ) -> Result<String> {
         if features.len() != num_frames * 128 {
             return Err(InferError::Runtime(format!(
                 "Features length {} does not match num_frames {} * 128",
@@ -106,48 +122,53 @@ impl AsrCore {
         // Run encoder (caches are updated internally)
         let (encoder_out, encoder_out_len) = self.run_encoder(features, num_frames)?;
 
+        log_info!(
+            "encoder: num_frames={}, encoder_out_len={}, encoder_out.len={}",
+            num_frames,
+            encoder_out_len,
+            encoder_out.len()
+        );
+
         // Greedy decode
         let token_ids = self.greedy_decode(&encoder_out, encoder_out_len)?;
+
+        log_info!("greedy_decode: {} tokens: {:?}", token_ids.len(), token_ids);
 
         // Convert to text
         let text = self.tokens_to_text(&token_ids);
         Ok(text)
     }
 
-    /// Run the streaming encoder with cache state
-    fn run_encoder(&mut self, features: &[f32], num_frames: usize) -> Result<(Vec<f32>, usize)> {
-        let processed_signal = onnx::Value::from_slice(&[1, 128, num_frames], features)
-            .map_err(|e| InferError::Runtime(format!("Failed to create processed_signal: {}", e)))?;
+    /// Run the streaming encoder with cache state.
+    fn run_encoder(
+        &mut self,
+        features: &[f32],
+        num_frames: usize,
+    ) -> Result<(Vec<f32>, usize)> {
+        let audio_signal = onnx::Value::from_slice(&[1, 128, num_frames], features)
+            .map_err(|e| InferError::Runtime(format!("Failed to create audio_signal: {}", e)))?;
 
-        let processed_signal_length = onnx::Value::from_slice(&[1], &[num_frames as i64])
+        let length = onnx::Value::from_slice(&[1], &[num_frames as i64])
             .map_err(|e| {
-                InferError::Runtime(format!("Failed to create processed_signal_length: {}", e))
+                InferError::Runtime(format!("Failed to create length: {}", e))
             })?;
-
-        // Single-speaker mode: pass zeros for speaker targets
-        let spk_targets = onnx::Value::zeros::<f32>(&[1, num_frames as i64])
-            .map_err(|e| InferError::Runtime(format!("Failed to create spk_targets: {e}")))?;
-        let bg_spk_targets = onnx::Value::zeros::<f32>(&[1, num_frames as i64])
-            .map_err(|e| InferError::Runtime(format!("Failed to create bg_spk_targets: {e}")))?;
 
         let mut outputs = self
             .encoder
             .run(
                 &[
-                    ("processed_signal", &processed_signal),
-                    ("processed_signal_length", &processed_signal_length),
+                    ("audio_signal", &audio_signal),
+                    ("length", &length),
                     ("cache_last_channel", &self.cache_last_channel),
                     ("cache_last_time", &self.cache_last_time),
                     ("cache_last_channel_len", &self.cache_last_channel_len),
-                    ("spk_targets", &spk_targets),
-                    ("bg_spk_targets", &bg_spk_targets),
                 ],
                 &[
-                    "encoded",
-                    "encoded_len",
+                    "outputs",
+                    "encoded_lengths",
                     "cache_last_channel_next",
                     "cache_last_time_next",
-                    "cache_last_channel_len_next",
+                    "cache_last_channel_next_len",
                 ],
             )
             .map_err(|e| InferError::Runtime(format!("Encoder inference failed: {}", e)))?;
@@ -156,12 +177,20 @@ impl AsrCore {
         let encoder_out_shape = outputs[0]
             .tensor_shape()
             .map_err(|e| InferError::Runtime(format!("Failed to get encoder output shape: {}", e)))?;
+        let encoder_out_elem_type = outputs[0]
+            .tensor_element_type()
+            .map_err(|e| InferError::Runtime(format!("Failed to get encoder elem type: {}", e)))?;
+        log_info!(
+            "encoder output: shape={:?}, elem_type={:?}",
+            encoder_out_shape,
+            encoder_out_elem_type
+        );
         let encoder_out_len = encoder_out_shape[2] as usize;
 
+        // Use extract_as_f32 to handle both f32 and f16 outputs
         let encoder_out_data = outputs[0]
-            .extract_tensor::<f32>()
-            .map_err(|e| InferError::Runtime(format!("Failed to extract encoder output: {}", e)))?
-            .to_vec();
+            .extract_as_f32()
+            .map_err(|e| InferError::Runtime(format!("Failed to extract encoder output: {}", e)))?;
 
         // Update encoder caches (take ownership from outputs vec)
         // outputs: [encoded, encoded_len, cache_channel, cache_time, cache_channel_len]
@@ -176,6 +205,14 @@ impl AsrCore {
     fn greedy_decode(&mut self, encoder_out: &[f32], num_frames: usize) -> Result<Vec<i64>> {
         let mut decoded_tokens = Vec::new();
 
+        // Log encoder output stats
+        if !encoder_out.is_empty() {
+            let min = encoder_out.iter().cloned().fold(f32::INFINITY, f32::min);
+            let max = encoder_out.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let mean = encoder_out.iter().sum::<f32>() / encoder_out.len() as f32;
+            log_info!("encoder_out stats: min={:.4}, max={:.4}, mean={:.6}", min, max, mean);
+        }
+
         let mut encoder_frame = vec![0.0f32; ENCODER_DIM];
 
         for frame_idx in 0..num_frames {
@@ -185,8 +222,8 @@ impl AsrCore {
                 encoder_frame[d] = encoder_out[d * num_frames + frame_idx];
             }
 
-            // Decoder-joint expects [B, T, D] — single frame is [1, 1, 1024]
-            let encoder_outputs = onnx::Value::from_slice(&[1, 1, ENCODER_DIM], &encoder_frame)
+            // Decoder-joint expects [B, D, T] — single frame is [1, 1024, 1]
+            let encoder_outputs = onnx::Value::from_slice(&[1, ENCODER_DIM, 1], &encoder_frame)
                 .map_err(|e| {
                     InferError::Runtime(format!("Failed to create encoder_outputs: {}", e))
                 })?;
@@ -207,6 +244,19 @@ impl AsrCore {
                 let logits = self.run_decoder_joint(&encoder_outputs)?;
 
                 let predicted = argmax_masked(&logits, VOCAB_SIZE);
+
+                if frame_idx == 0 && decoded_tokens.is_empty() {
+                    // Log first frame's logits for debugging
+                    let top5: Vec<(usize, f32)> = {
+                        let mut indexed: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
+                        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                        indexed.into_iter().take(5).collect()
+                    };
+                    log_info!(
+                        "frame0 logits: len={}, predicted={}, blank={}, top5={:?}",
+                        logits.len(), predicted, self.blank_id, top5
+                    );
+                }
 
                 if predicted == self.blank_id {
                     // Restore prediction network states on blank
@@ -233,9 +283,13 @@ impl AsrCore {
 
     /// Run decoder-joint with a single encoder frame and current state
     fn run_decoder_joint(&mut self, encoder_outputs: &onnx::Value) -> Result<Vec<f32>> {
-        // targets: [1, 1] int64
-        let targets = onnx::Value::from_slice(&[1, 1], &[self.last_token])
+        // targets: [1, 1] int32
+        let targets = onnx::Value::from_slice(&[1, 1], &[self.last_token as i32])
             .map_err(|e| InferError::Runtime(format!("Failed to create targets: {}", e)))?;
+
+        // target_length: [1] int32
+        let target_length = onnx::Value::from_slice(&[1], &[1i32])
+            .map_err(|e| InferError::Runtime(format!("Failed to create target_length: {}", e)))?;
 
         let mut outputs = self
             .decoder_joint
@@ -243,27 +297,31 @@ impl AsrCore {
                 &[
                     ("encoder_outputs", encoder_outputs),
                     ("targets", &targets),
+                    ("target_length", &target_length),
                     ("input_states_1", &self.state1),
                     ("input_states_2", &self.state2),
                 ],
-                &["outputs", "prednet_lengths", "states_1", "states_2"],
+                &["outputs", "prednet_lengths", "output_states_1", "output_states_2"],
             )
             .map_err(|e| InferError::Runtime(format!("Decoder-joint inference failed: {}", e)))?;
 
-        // Extract logits: [1, ?, 1, 1025]
+        // Extract logits
         let logits_data = outputs[0]
             .extract_tensor::<f32>()
             .map_err(|e| InferError::Runtime(format!("Failed to extract logits: {}", e)))?
             .to_vec();
 
         // Update decoder states
-        self.state1 = outputs.remove(2); // states_1
-        self.state2 = outputs.remove(2); // states_2 (was index 3, now 2)
+        self.state1 = outputs.remove(2); // output_states_1
+        self.state2 = outputs.remove(2); // output_states_2 (was index 3, now 2)
 
         Ok(logits_data)
     }
 
-    /// Convert token IDs to text (SentencePiece: ▁ = space)
+    /// Convert token IDs to text (SentencePiece: ▁ = word-start space).
+    ///
+    /// Preserves leading spaces from ▁ markers so that cross-chunk
+    /// concatenation produces correct word boundaries.
     fn tokens_to_text(&self, token_ids: &[i64]) -> String {
         token_ids
             .iter()
@@ -276,8 +334,6 @@ impl AsrCore {
                 }
             })
             .collect::<String>()
-            .trim_start()
-            .to_string()
     }
 }
 

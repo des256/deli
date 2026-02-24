@@ -301,16 +301,17 @@ impl Sortformer {
         self.spkcache_preds = Some(new_cache_preds);
     }
 
-    /// Diarize an audio chunk and return speaker segments.
+    /// Run diarization and return raw per-frame speaker predictions.
     ///
     /// # Arguments
     /// - `audio_16k_mono`: Audio samples in f32 format, normalized to [-1, 1] range, at 16kHz
     ///
     /// # Returns
-    /// Vec of SpeakerSegments with start/end times in seconds and speaker IDs
-    pub fn diarize_chunk(&mut self, audio_16k_mono: &[f32]) -> Result<Vec<SpeakerSegment>> {
+    /// (predictions, num_diar_frames) where predictions is [num_diar_frames, NUM_SPEAKERS] flattened.
+    /// Each diar frame covers SUBSAMPLING (8) mel feature frames.
+    pub fn diarize_chunk_preds(&mut self, audio_16k_mono: &[f32]) -> Result<(Vec<f32>, usize)> {
         if audio_16k_mono.is_empty() {
-            return Ok(vec![]);
+            return Ok((vec![], 0));
         }
 
         let (features, num_frames) = compute_mel_features(audio_16k_mono, 16000)?;
@@ -343,7 +344,23 @@ impl Sortformer {
             all_preds.extend_from_slice(&chunk_preds);
         }
 
-        let total_out_frames = all_preds.len() / NUM_SPEAKERS;
+        let num_diar_frames = all_preds.len() / NUM_SPEAKERS;
+        Ok((all_preds, num_diar_frames))
+    }
+
+    /// Diarize an audio chunk and return speaker segments.
+    ///
+    /// # Arguments
+    /// - `audio_16k_mono`: Audio samples in f32 format, normalized to [-1, 1] range, at 16kHz
+    ///
+    /// # Returns
+    /// Vec of SpeakerSegments with start/end times in seconds and speaker IDs
+    pub fn diarize_chunk(&mut self, audio_16k_mono: &[f32]) -> Result<Vec<SpeakerSegment>> {
+        let (all_preds, total_out_frames) = self.diarize_chunk_preds(audio_16k_mono)?;
+        if total_out_frames == 0 {
+            return Ok(vec![]);
+        }
+
         let smoothed = postprocess::median_filter(&all_preds, total_out_frames, 11);
         let segments = postprocess::binarize(&smoothed, total_out_frames, &self.config);
 

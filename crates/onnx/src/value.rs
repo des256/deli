@@ -122,6 +122,59 @@ impl Value {
         }
     }
 
+    /// Create an empty tensor with a specified element type.
+    ///
+    /// Useful for creating KV cache tensors where a dimension is 0 (no cached
+    /// keys/values yet) and the element type may not have a Rust equivalent
+    /// (e.g., float16).
+    ///
+    /// # Errors
+    /// Returns an error if tensor creation fails
+    pub fn empty_typed(shape: &[usize], element_type: ffi::ONNXTensorElementDataType) -> Result<Self> {
+        unsafe {
+            let api = get_api();
+
+            let buffer = vec![0u8; 0].into_boxed_slice();
+
+            let mut memory_info: *mut ffi::OrtMemoryInfo = std::ptr::null_mut();
+            let create_memory_info: ffi::CreateCpuMemoryInfoFn =
+                (*api).get_fn(ffi::IDX_CREATE_CPU_MEMORY_INFO);
+            let status = create_memory_info(
+                ffi::OrtAllocatorType::Device,
+                ffi::OrtMemType::CpuOutput,
+                &mut memory_info as *mut _,
+            );
+            error::check_status(api, status, ())?;
+
+            let shape_i64: Vec<i64> = shape.iter().map(|&s| s as i64).collect();
+
+            let mut value: *mut ffi::OrtValue = std::ptr::null_mut();
+            let create_tensor: ffi::CreateTensorWithDataAsOrtValueFn =
+                (*api).get_fn(ffi::IDX_CREATE_TENSOR_WITH_DATA_AS_ORT_VALUE);
+            let status = create_tensor(
+                memory_info,
+                buffer.as_ptr() as *mut std::ffi::c_void,
+                0,
+                shape_i64.as_ptr(),
+                shape_i64.len(),
+                element_type,
+                &mut value as *mut _,
+            );
+
+            let release_memory_info: ffi::ReleaseMemoryInfoFn =
+                (*api).get_fn(ffi::IDX_RELEASE_MEMORY_INFO);
+            release_memory_info(memory_info);
+
+            error::check_status(api, status, ())?;
+
+            Ok(Value {
+                value,
+                api,
+                _data: buffer,
+            })
+        }
+    }
+
     /// Create a zero-filled tensor with the given shape
     ///
     /// Dimensions of -1 (dynamic) are replaced with 1.
@@ -188,6 +241,58 @@ impl Value {
             error::check_status(self.api, status, ())?;
 
             Ok(std::slice::from_raw_parts(data_ptr as *const T, elem_count))
+        }
+    }
+
+    /// Extract tensor data as f32, converting from f16 if needed.
+    ///
+    /// Handles both f32 (zero-copy) and f16 (converted to f32) tensors.
+    /// Returns owned Vec for f16 data and a wrapper for f32 data.
+    ///
+    /// # Errors
+    /// Returns an error if the tensor is not f32 or f16, or data extraction fails
+    pub fn extract_as_f32(&self) -> Result<Vec<f32>> {
+        let elem_type = self.tensor_element_type()?;
+        match elem_type {
+            ffi::ONNXTensorElementDataType::Float => {
+                let data = self.extract_tensor::<f32>()?;
+                Ok(data.to_vec())
+            }
+            ffi::ONNXTensorElementDataType::Float16 => {
+                unsafe {
+                    let mut type_info: *mut ffi::OrtTensorTypeAndShapeInfo = std::ptr::null_mut();
+                    let get_type_shape: ffi::GetTensorTypeAndShapeFn =
+                        (*self.api).get_fn(ffi::IDX_GET_TENSOR_TYPE_AND_SHAPE);
+                    let status = get_type_shape(self.value, &mut type_info as *mut _);
+                    error::check_status(self.api, status, ())?;
+
+                    let mut elem_count: usize = 0;
+                    let get_count: ffi::GetTensorShapeElementCountFn =
+                        (*self.api).get_fn(ffi::IDX_GET_TENSOR_SHAPE_ELEMENT_COUNT);
+                    let status = get_count(type_info, &mut elem_count as *mut _);
+
+                    let release_type_info: ffi::ReleaseTensorTypeAndShapeInfoFn =
+                        (*self.api).get_fn(ffi::IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO);
+                    release_type_info(type_info);
+                    error::check_status(self.api, status, ())?;
+
+                    if elem_count == 0 {
+                        return Ok(Vec::new());
+                    }
+
+                    let mut data_ptr: *mut std::ffi::c_void = std::ptr::null_mut();
+                    let get_data: ffi::GetTensorMutableDataFn =
+                        (*self.api).get_fn(ffi::IDX_GET_TENSOR_MUTABLE_DATA);
+                    let status = get_data(self.value, &mut data_ptr as *mut _);
+                    error::check_status(self.api, status, ())?;
+
+                    let f16_data = std::slice::from_raw_parts(data_ptr as *const u16, elem_count);
+                    Ok(f16_data.iter().map(|&h| f16_to_f32(h)).collect())
+                }
+            }
+            other => Err(error::OnnxError::runtime_error(
+                &format!("extract_as_f32: unsupported element type {:?}", other),
+            )),
         }
     }
 
@@ -284,6 +389,38 @@ impl Drop for Value {
                 release_value(self.value);
             }
         }
+    }
+}
+
+/// Convert IEEE 754 half-precision (f16) to single-precision (f32).
+fn f16_to_f32(half: u16) -> f32 {
+    let sign = ((half >> 15) & 1) as u32;
+    let exponent = ((half >> 10) & 0x1f) as u32;
+    let mantissa = (half & 0x3ff) as u32;
+
+    if exponent == 0 {
+        if mantissa == 0 {
+            // ±0
+            f32::from_bits(sign << 31)
+        } else {
+            // Denormalized: shift mantissa until hidden bit appears
+            let mut e = 0i32;
+            let mut m = mantissa;
+            while (m & 0x400) == 0 {
+                m <<= 1;
+                e -= 1;
+            }
+            m &= 0x3ff;
+            let f32_exp = (127 - 15 + 1 + e) as u32;
+            f32::from_bits((sign << 31) | (f32_exp << 23) | (m << 13))
+        }
+    } else if exponent == 31 {
+        // Infinity or NaN
+        f32::from_bits((sign << 31) | (0xff << 23) | (mantissa << 13))
+    } else {
+        // Normalized
+        let f32_exp = (exponent as i32 - 15 + 127) as u32;
+        f32::from_bits((sign << 31) | (f32_exp << 23) | (mantissa << 13))
     }
 }
 

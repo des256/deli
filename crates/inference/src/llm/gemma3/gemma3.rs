@@ -6,19 +6,19 @@ use tokenizers::Tokenizer;
 
 use crate::llm::generate::{self, GenerateParams};
 
-const EOS_TOKEN_ID: u32 = 128012;
+const EOS_TOKEN_IDS: &[u32] = &[1, 106];
 const DEFAULT_MAX_TOKENS: usize = 512;
-const NUM_KV_HEADS: usize = 4;
-const HEAD_DIM: usize = 128;
+const NUM_KV_HEADS: usize = 1;
+const HEAD_DIM: usize = 256;
 
-/// SmolLM3 3B ONNX-based language model with KV cache
+/// Gemma 3 ONNX-based language model with KV cache
 ///
 /// Supports autoregressive text generation with streaming token output.
 /// The ONNX model uses grouped-query attention with KV caching for efficient generation.
-pub struct Smollm3 {
+pub struct Gemma3 {
     session: Arc<Mutex<Session>>,
     tokenizer: Arc<Tokenizer>,
-    eos_token_id: u32,
+    eos_token_ids: Vec<u32>,
     max_tokens: usize,
     num_layers: usize,
     num_kv_heads: usize,
@@ -29,8 +29,8 @@ pub struct Smollm3 {
     rx: Option<tokio::sync::mpsc::Receiver<Result<String>>>,
 }
 
-impl Smollm3 {
-    /// Create a new Smollm3 instance from an ONNX session and tokenizer
+impl Gemma3 {
+    /// Create a new Gemma3 instance from an ONNX session and tokenizer
     ///
     /// Loads the tokenizer, discovers all model I/O names dynamically,
     /// derives num_layers from the KV cache input count, and wraps the
@@ -63,7 +63,6 @@ impl Smollm3 {
         }
         let num_layers = kv_key_count;
 
-        // Detect KV cache element type from first KV cache input
         let first_kv_idx = input_names.iter().position(|n| n.contains(".key") || n.contains(".value"))
             .ok_or_else(|| InferError::Runtime("No KV cache inputs found".to_string()))?;
         let kv_dtype = session.input_element_type(first_kv_idx)?;
@@ -73,7 +72,7 @@ impl Smollm3 {
         Ok(Self {
             session,
             tokenizer,
-            eos_token_id: EOS_TOKEN_ID,
+            eos_token_ids: EOS_TOKEN_IDS.to_vec(),
             max_tokens: DEFAULT_MAX_TOKENS,
             num_layers,
             num_kv_heads: NUM_KV_HEADS,
@@ -112,7 +111,7 @@ impl Smollm3 {
         let params = GenerateParams {
             session: Arc::clone(&self.session),
             tokenizer: Arc::clone(&self.tokenizer),
-            eos_token_ids: vec![self.eos_token_id],
+            eos_token_ids: self.eos_token_ids.clone(),
             max_tokens: self.max_tokens,
             input_names: self.input_names.clone(),
             output_names: self.output_names.clone(),

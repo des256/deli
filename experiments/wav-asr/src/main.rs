@@ -79,8 +79,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Validate model directory
     let dir = PathBuf::from(model_dir);
-    let encoder_path = dir.join("encoder.int8.onnx");
-    let decoder_joint_path = dir.join("decoder_joint.int8.onnx");
+    let encoder_path = dir.join("encoder.onnx");
+    let decoder_joint_path = dir.join("decoder_joint.onnx");
     let vocab_path = dir.join("tokenizer.model");
 
     for path in [&encoder_path, &decoder_joint_path, &vocab_path] {
@@ -90,35 +90,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Initialize inference and load model
+    // Initialize inference
     #[cfg(feature = "cuda")]
     let inference = Inference::cuda(0)?;
     #[cfg(not(feature = "cuda"))]
     let inference = Inference::cpu()?;
 
-    let mut asr = inference.use_parakeet_asr(&encoder_path, &decoder_joint_path, &vocab_path)?;
-    log_info!("Parakeet model loaded");
+    log_info!("Loading Parakeet models...");
 
-    // Send all audio and close
-    let num_samples = samples.len();
-    let tensor = Tensor::new(vec![num_samples], samples)?;
-    let sample = AudioSample {
-        data: AudioData::Pcm(tensor),
-        sample_rate: SAMPLE_RATE,
-    };
+    let mut asr = inference.use_parakeet_asr(
+        &encoder_path,
+        &decoder_joint_path,
+        &vocab_path,
+    )?;
 
+    // Feed audio in chunks via the streaming API
     let start = Instant::now();
-    asr.send(sample).await?;
+    let chunk_size = SAMPLE_RATE; // 1 second chunks
+    for chunk in samples.chunks(chunk_size) {
+        let sample = AudioSample {
+            data: AudioData::Pcm(base::Tensor {
+                shape: vec![chunk.len()],
+                data: chunk.to_vec(),
+            }),
+            sample_rate: SAMPLE_RATE,
+        };
+        asr.send(sample).await?;
+    }
     asr.close().await?;
 
-    // Drain all transcriptions, keeping the last one
+    // Collect transcription results
     let mut final_text = String::new();
     while let Some(result) = asr.recv().await {
-        match result? {
-            Transcription::Partial { text, .. } | Transcription::Final { text, .. } => {
-                final_text = text;
+        match result {
+            Ok(Transcription::Partial { ref text, .. }) => {
+                log_info!("partial: {}", text);
             }
-            Transcription::Cancelled => {}
+            Ok(Transcription::Final { ref text, .. }) => {
+                final_text = text.clone();
+            }
+            Ok(Transcription::Cancelled) => {}
+            Err(e) => {
+                eprintln!("Transcription error: {}", e);
+            }
         }
     }
 

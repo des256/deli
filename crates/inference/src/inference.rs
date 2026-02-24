@@ -70,6 +70,33 @@ impl Inference {
         crate::llm::Smollm3::new(session, tokenizer_path)
     }
 
+    pub fn use_llama32(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+    ) -> Result<crate::llm::Llama32, InferError> {
+        let session = self.onnx_session(model_path)?;
+        crate::llm::Llama32::new(session, tokenizer_path)
+    }
+
+    pub fn use_gemma3(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+    ) -> Result<crate::llm::Gemma3, InferError> {
+        let session = self.onnx_session(model_path)?;
+        crate::llm::Gemma3::new(session, tokenizer_path)
+    }
+
+    pub fn use_phi3(
+        &self,
+        model_path: impl AsRef<Path>,
+        tokenizer_path: impl AsRef<Path>,
+    ) -> Result<crate::llm::Phi3, InferError> {
+        let session = self.onnx_session(model_path)?;
+        crate::llm::Phi3::new(session, tokenizer_path)
+    }
+
     pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<Session, InferError> {
         let path = model_path.as_ref();
         let session = match &self.onnx_device {
@@ -150,6 +177,25 @@ impl Inference {
         let encoder_session = self.onnx_session(&encoder_path)?;
         let decoder_joint_session = self.onnx_session(&decoder_joint_path)?;
         crate::asr::parakeet::Parakeet::new(encoder_session, decoder_joint_session, vocab_path)
+    }
+
+    pub fn transcribe_parakeet_batch<P: AsRef<Path>>(
+        &self,
+        encoder_path: P,
+        decoder_joint_path: P,
+        vocab_path: P,
+        pcm: &[i16],
+        sample_rate: usize,
+    ) -> Result<String, InferError> {
+        let encoder_session = self.onnx_session(&encoder_path)?;
+        let decoder_joint_session = self.onnx_session(&decoder_joint_path)?;
+        crate::asr::parakeet::transcribe_batch(
+            encoder_session,
+            decoder_joint_session,
+            vocab_path,
+            pcm,
+            sample_rate,
+        )
     }
 
     pub fn use_silero_vad(

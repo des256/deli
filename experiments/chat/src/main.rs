@@ -10,6 +10,12 @@ use {
     },
 };
 
+const GEMMA3_MODEL_PATH: &str = "data/gemma3/model_int8.onnx";
+const GEMMA3_TOKENIZER_PATH: &str = "data/gemma3/tokenizer.json";
+const LLAMA32_MODEL_PATH: &str = "data/llama32/model_int8.onnx";
+const LLAMA32_TOKENIZER_PATH: &str = "data/llama32/tokenizer.json";
+const PHI3_MODEL_PATH: &str = "data/phi3/phi3-mini-4k-instruct-cuda-int4-rtn-block-32.onnx";
+const PHI3_TOKENIZER_PATH: &str = "data/phi3/tokenizer.json";
 const SMOLLM3_MODEL_PATH: &str = "data/smollm3/model_int8.onnx";
 const SMOLLM3_TOKENIZER_PATH: &str = "data/smollm3/tokenizer.json";
 const POCKET_TEXT_CONDITIONER: &str = "data/pocket/text_conditioner.onnx";
@@ -28,6 +34,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Validate model files exist
     log_info!("Validating model files...");
+    let gemma3_model = PathBuf::from(GEMMA3_MODEL_PATH);
+    let gemma3_tokenizer = PathBuf::from(GEMMA3_TOKENIZER_PATH);
+    let llama32_model = PathBuf::from(LLAMA32_MODEL_PATH);
+    let llama32_tokenizer = PathBuf::from(LLAMA32_TOKENIZER_PATH);
+    let phi3_model = PathBuf::from(PHI3_MODEL_PATH);
+    let phi3_tokenizer = PathBuf::from(PHI3_TOKENIZER_PATH);
     let smollm3_model = PathBuf::from(SMOLLM3_MODEL_PATH);
     let smollm3_tokenizer = PathBuf::from(SMOLLM3_TOKENIZER_PATH);
     let pocket_paths = [
@@ -39,11 +51,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         POCKET_VOICE,
     ];
 
-    if !smollm3_model.exists() || !smollm3_tokenizer.exists() {
-        eprintln!("SmolLM3 model files missing. Expected:");
-        eprintln!("  - {}", SMOLLM3_MODEL_PATH);
-        eprintln!("  - {}", SMOLLM3_TOKENIZER_PATH);
-        std::process::exit(1);
+    let model_paths = [
+        &gemma3_model,
+        &gemma3_tokenizer,
+        &llama32_model,
+        &llama32_tokenizer,
+        &phi3_model,
+        &phi3_tokenizer,
+        &smollm3_model,
+        &smollm3_tokenizer,
+    ];
+
+    for path in &model_paths {
+        if !path.exists() {
+            eprintln!("Model file missing: {}", path.display());
+            std::process::exit(1);
+        }
     }
 
     for path in &pocket_paths {
@@ -56,26 +79,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_info!("Model files validated");
 
     // Initialize inference
-    let cpu_inference = Inference::cpu()?;
+    #[cfg(feature = "cuda")]
+    let inference = Inference::cuda(0)?;
+    #[cfg(feature = "cuda")]
+    log_info!("CUDA inference initialized");
+    #[cfg(not(feature = "cuda"))]
+    let inference = Inference::cpu()?;
+    #[cfg(not(feature = "cuda"))]
     log_info!("CPU inference initialized");
 
-    // also use CUDA if available
-    #[cfg(feature = "cuda")]
-    let cuda_inference = Inference::cuda(0)?;
-    #[cfg(not(feature = "cuda"))]
-    let cuda_inference = Inference::cpu()?;
-    log_info!("CUDA inference initialized (if available)");
-
     // Load LLM
-    log_info!("Loading SmolLM3...");
-    let mut llm = cuda_inference
-        .use_smollm3(&smollm3_model, &smollm3_tokenizer)?
+    log_info!("Loading LLM...");
+    //let mut llm = inference.use_gemma3(&gemma3_model, &gemma3_tokenizer)?.with_max_tokens(MAX_TOKENS);
+    //let chat_format = ChatFormat::Gemma;
+    //let mut llm = inference.use_llama32(&llama32_model, &llama32_tokenizer)?.with_max_tokens(MAX_TOKENS);
+    //let chat_format = ChatFormat::Llama3;
+    let mut llm = inference
+        .use_phi3(&phi3_model, &phi3_tokenizer)?
         .with_max_tokens(MAX_TOKENS);
-    log_info!("SmolLM3 loaded");
+    let chat_format = ChatFormat::Phi3;
+    //let mut llm = inference.use_smollm3(&smollm3_model, &smollm3_tokenizer)?.with_max_tokens(MAX_TOKENS);
+    //let chat_format = ChatFormat::ChatML;
+    log_info!("LLM loaded");
 
     // Load Pocket TTS
-    log_info!("Loading Pocket TTS...");
-    let mut tts = cpu_inference.use_pocket_tts(
+    log_info!("Loading TTS...");
+    let mut tts = inference.use_pocket_tts(
         POCKET_TEXT_CONDITIONER,
         POCKET_FLOW_MAIN,
         POCKET_FLOW_STEP,
@@ -128,7 +157,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // Build prompt with chat template
-        let prompt = build_prompt(&history, user_input);
+        let prompt = build_prompt(chat_format, &history, user_input);
 
         // Generate LLM response (streaming) and pipeline sentences to TTS
         log_info!("Generating response...");
@@ -161,7 +190,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let sentence = sentence_buf.trim().to_string();
                         sentence_buf.clear();
                         if !sentence.is_empty() {
-                            log_info!("Sending sentence to TTS: {:?}", sentence);
+                            eprint!("\n[sent.]\n");
                             if let Err(e) = tts.send(sentence).await {
                                 log_error!("TTS send failed: {}", e);
                                 tts_error = true;
@@ -192,7 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Flush any remaining text that didn't end with punctuation
         let remaining = sentence_buf.trim().to_string();
         if !remaining.is_empty() && !tts_error {
-            log_info!("Sending remaining text to TTS: {:?}", remaining);
+            eprint!("\nsent.");
             if let Err(e) = tts.send(remaining).await {
                 log_error!("TTS send failed: {}", e);
                 tts_error = true;
@@ -282,14 +311,31 @@ async fn drain_ready_audio(
     completed
 }
 
-/// Build ChatML prompt with system message, history, and current user input
-fn build_prompt(history: &[(String, String)], user_input: &str) -> String {
+#[derive(Clone, Copy)]
+enum ChatFormat {
+    /// ChatML: <|im_start|>role\n...<|im_end|> (SmolLM3)
+    ChatML,
+    /// Llama 3: <|start_header_id|>role<|end_header_id|>\n\n...<|eot_id|>
+    Llama3,
+    /// Gemma: <start_of_turn>role\n...<end_of_turn>
+    Gemma,
+    /// Phi3: <|system|>\n...<|end|>\n<|user|>\n...<|end|>\n<|assistant|>\n
+    Phi3,
+}
+
+fn build_prompt(fmt: ChatFormat, history: &[(String, String)], user_input: &str) -> String {
+    match fmt {
+        ChatFormat::ChatML => build_chatml_prompt(history, user_input),
+        ChatFormat::Llama3 => build_llama3_prompt(history, user_input),
+        ChatFormat::Gemma => build_gemma_prompt(history, user_input),
+        ChatFormat::Phi3 => build_phi3_prompt(history, user_input),
+    }
+}
+
+/// ChatML format (SmolLM3, Phi3)
+fn build_chatml_prompt(history: &[(String, String)], user_input: &str) -> String {
     let mut prompt = String::new();
-
-    // System message
     prompt.push_str("<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n");
-
-    // Add conversation history
     for (user_msg, assistant_msg) in history {
         prompt.push_str(&format!("<|im_start|>user\n{}<|im_end|>\n", user_msg));
         prompt.push_str(&format!(
@@ -297,10 +343,77 @@ fn build_prompt(history: &[(String, String)], user_input: &str) -> String {
             assistant_msg
         ));
     }
-
-    // Add current user message and prompt for assistant
     prompt.push_str(&format!("<|im_start|>user\n{}<|im_end|>\n", user_input));
     prompt.push_str("<|im_start|>assistant\n");
+    prompt
+}
+
+/// Llama 3 format
+fn build_llama3_prompt(history: &[(String, String)], user_input: &str) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("<|begin_of_text|>");
+    prompt.push_str(
+        "<|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant.<|eot_id|>",
+    );
+    for (user_msg, assistant_msg) in history {
+        prompt.push_str(&format!(
+            "<|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|>",
+            user_msg
+        ));
+        prompt.push_str(&format!(
+            "<|start_header_id|>assistant<|end_header_id|>\n\n{}<|eot_id|>",
+            assistant_msg
+        ));
+    }
+    prompt.push_str(&format!(
+        "<|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|>",
+        user_input
+    ));
+    prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
+    prompt
+}
+
+/// Phi3 format: <|system|>\n...<|end|>\n<|user|>\n...<|end|>\n<|assistant|>\n
+fn build_phi3_prompt(history: &[(String, String)], user_input: &str) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("<|system|>\nYou are a helpful assistant.<|end|>\n");
+    for (user_msg, assistant_msg) in history {
+        prompt.push_str(&format!("<|user|>\n{}<|end|>\n", user_msg));
+        prompt.push_str(&format!("<|assistant|>\n{}<|end|>\n", assistant_msg));
+    }
+    prompt.push_str(&format!("<|user|>\n{}<|end|>\n", user_input));
+    prompt.push_str("<|assistant|>\n");
+    prompt
+}
+
+/// Gemma format (system message prepended to first user turn)
+fn build_gemma_prompt(history: &[(String, String)], user_input: &str) -> String {
+    let system_msg = "You are a helpful assistant.";
+    let mut prompt = String::new();
+    prompt.push_str("<bos>");
+
+    if history.is_empty() {
+        prompt.push_str(&format!(
+            "<start_of_turn>user\n{}\n\n{}<end_of_turn>\n<start_of_turn>model\n",
+            system_msg, user_input
+        ));
+    } else {
+        let (first_user, first_assistant) = &history[0];
+        prompt.push_str(&format!(
+            "<start_of_turn>user\n{}\n\n{}<end_of_turn>\n<start_of_turn>model\n{}<end_of_turn>\n",
+            system_msg, first_user, first_assistant
+        ));
+        for (user_msg, assistant_msg) in &history[1..] {
+            prompt.push_str(&format!(
+                "<start_of_turn>user\n{}<end_of_turn>\n<start_of_turn>model\n{}<end_of_turn>\n",
+                user_msg, assistant_msg
+            ));
+        }
+        prompt.push_str(&format!(
+            "<start_of_turn>user\n{}<end_of_turn>\n<start_of_turn>model\n",
+            user_input
+        ));
+    }
 
     prompt
 }

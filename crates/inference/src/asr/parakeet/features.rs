@@ -1,31 +1,81 @@
 use crate::error::{InferError, Result};
 use std::f32::consts::PI;
+use std::path::Path;
+use std::sync::OnceLock;
 
 const REQUIRED_SAMPLE_RATE: usize = 16000;
-const WINDOW_SIZE_MS: usize = 25;
-const HOP_SIZE_MS: usize = 10;
+const WINDOW_SIZE: usize = 400; // 25ms at 16kHz
+const HOP_SIZE: usize = 160; // 10ms at 16kHz
 const NUM_MEL_BINS: usize = 128;
 const PRE_EMPHASIS: f32 = 0.97;
 const FFT_SIZE: usize = 512;
+const SPECTRUM_BINS: usize = FFT_SIZE / 2 + 1; // 257
 
-// Mel scale conversion (HTK formula)
-fn hz_to_mel(hz: f32) -> f32 {
-    2595.0 * (1.0 + hz / 700.0).log10()
-}
+/// NeMo's log zero guard value (2^-24, smallest normal float16).
+const LOG_ZERO_GUARD: f32 = 5.960_464_5e-08;
 
-fn mel_to_hz(mel: f32) -> f32 {
-    700.0 * (10.0_f32.powf(mel / 2595.0) - 1.0)
+/// Pre-computed mel filterbank from NeMo's preprocessor [128 x 257].
+/// Loaded once from `mel_filterbank.bin` (exported from the .nemo checkpoint).
+static MEL_FILTERBANK: OnceLock<Vec<f32>> = OnceLock::new();
+
+/// Pre-computed symmetric Hann window from NeMo's preprocessor [400].
+/// Loaded once from `hann_window.bin`.
+static HANN_WINDOW: OnceLock<Vec<f32>> = OnceLock::new();
+
+/// Initialize feature extraction by loading the mel filterbank and window
+/// from binary files exported from the NeMo model's preprocessor.
+///
+/// Must be called before `compute_features`. Pass the directory containing
+/// `mel_filterbank.bin` and `hann_window.bin`.
+pub fn init_features(model_dir: &Path) -> Result<()> {
+    if MEL_FILTERBANK.get().is_some() {
+        return Ok(());
+    }
+
+    let fb_path = model_dir.join("mel_filterbank.bin");
+    let fb_data = std::fs::read(&fb_path).map_err(|e| {
+        InferError::Runtime(format!("Failed to read {}: {}", fb_path.display(), e))
+    })?;
+    let expected_fb_bytes = NUM_MEL_BINS * SPECTRUM_BINS * 4;
+    if fb_data.len() != expected_fb_bytes {
+        return Err(InferError::Runtime(format!(
+            "mel_filterbank.bin: expected {} bytes, got {}",
+            expected_fb_bytes,
+            fb_data.len()
+        )));
+    }
+    let fb: Vec<f32> = fb_data
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let _ = MEL_FILTERBANK.set(fb);
+
+    let win_path = model_dir.join("hann_window.bin");
+    let win_data = std::fs::read(&win_path).map_err(|e| {
+        InferError::Runtime(format!("Failed to read {}: {}", win_path.display(), e))
+    })?;
+    let expected_win_bytes = WINDOW_SIZE * 4;
+    if win_data.len() != expected_win_bytes {
+        return Err(InferError::Runtime(format!(
+            "hann_window.bin: expected {} bytes, got {}",
+            expected_win_bytes,
+            win_data.len()
+        )));
+    }
+    let win: Vec<f32> = win_data
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let _ = HANN_WINDOW.set(win);
+
+    Ok(())
 }
 
 /// Compute 128-dimensional log-mel filterbank features from 16kHz PCM audio.
 ///
-/// Follows NeMo FastConformer preprocessing:
-/// - 25ms window (400 samples at 16kHz)
-/// - 10ms hop (160 samples)
-/// - Pre-emphasis 0.97
-/// - Hann window
-/// - 128 mel bins
-/// - Per-feature normalization (subtract mean, divide by std across time axis)
+/// Uses NeMo's exact preprocessor parameters (filterbank + window loaded from
+/// binary files via `init_features`). Falls back to computed parameters if
+/// `init_features` was not called.
 ///
 /// Returns (features, num_frames) where features is channels-first [128, num_frames] flattened.
 pub fn compute_features(pcm: &[i16], sample_rate: usize) -> Result<(Vec<f32>, usize)> {
@@ -36,16 +86,23 @@ pub fn compute_features(pcm: &[i16], sample_rate: usize) -> Result<(Vec<f32>, us
         )));
     }
 
-    let window_size = (WINDOW_SIZE_MS * sample_rate) / 1000;
-    let hop_size = (HOP_SIZE_MS * sample_rate) / 1000;
-
-    if pcm.len() < window_size {
+    if pcm.len() < WINDOW_SIZE {
         return Err(InferError::Runtime(format!(
             "Audio too short: {} samples, need at least {}",
             pcm.len(),
-            window_size
+            WINDOW_SIZE
         )));
     }
+
+    // Get pre-loaded filterbank and window, or fall back to computed versions
+    let (fb, hann) = match (MEL_FILTERBANK.get(), HANN_WINDOW.get()) {
+        (Some(fb), Some(win)) => (fb.as_slice(), win.as_slice()),
+        _ => {
+            return Err(InferError::Runtime(
+                "Features not initialized. Call init_features() first.".to_string(),
+            ));
+        }
+    };
 
     // Convert to f32 and apply pre-emphasis
     let mut signal: Vec<f32> = vec![0.0; pcm.len()];
@@ -54,72 +111,35 @@ pub fn compute_features(pcm: &[i16], sample_rate: usize) -> Result<(Vec<f32>, us
         signal[i] = (pcm[i] as f32 / 32768.0) - PRE_EMPHASIS * (pcm[i - 1] as f32 / 32768.0);
     }
 
-    // Generate Hann window
-    let hann: Vec<f32> = (0..window_size)
-        .map(|i| 0.5 - 0.5 * ((2.0 * PI * i as f32) / (window_size - 1) as f32).cos())
-        .collect();
+    let num_frames = (signal.len() - WINDOW_SIZE) / HOP_SIZE + 1;
 
-    // Generate mel filterbank (NO Slaney normalization)
-    let mel_filters = create_mel_filterbank(sample_rate, FFT_SIZE, NUM_MEL_BINS);
-
-    // Frame the signal and compute features
-    let num_frames = (signal.len() - window_size) / hop_size + 1;
-
-    // Compute log-mel features in [num_frames, 128] layout first
-    let mut features_time_first = Vec::with_capacity(num_frames * NUM_MEL_BINS);
+    // Compute log-mel features in channels-first layout [128, num_frames]
+    let mut features = vec![0.0f32; NUM_MEL_BINS * num_frames];
 
     for frame_idx in 0..num_frames {
-        let start = frame_idx * hop_size;
-        let end = start + window_size;
+        let start = frame_idx * HOP_SIZE;
 
-        // Apply window
-        let mut windowed: Vec<f32> = signal[start..end]
-            .iter()
-            .zip(hann.iter())
-            .map(|(s, w)| s * w)
-            .collect();
-
-        // Zero-pad to FFT size
-        windowed.resize(FFT_SIZE, 0.0);
+        // Apply window and zero-pad to FFT size
+        let mut windowed = vec![0.0f32; FFT_SIZE];
+        for i in 0..WINDOW_SIZE {
+            windowed[i] = signal[start + i] * hann[i];
+        }
 
         // Compute power spectrum
         let power_spectrum = compute_power_spectrum(&windowed);
 
-        // Apply mel filterbank
-        for filter in &mel_filters {
+        // Apply mel filterbank (dense matrix multiply) and log
+        for bin_idx in 0..NUM_MEL_BINS {
+            let fb_offset = bin_idx * SPECTRUM_BINS;
             let mut mel_energy = 0.0_f32;
-            for &(freq_bin, weight) in filter {
-                mel_energy += power_spectrum[freq_bin] * weight;
+            for k in 0..SPECTRUM_BINS {
+                mel_energy += fb[fb_offset + k] * power_spectrum[k];
             }
-
-            // Log mel energy
-            features_time_first.push((mel_energy + 1e-10_f32).ln());
+            features[bin_idx * num_frames + frame_idx] = (mel_energy + LOG_ZERO_GUARD).ln();
         }
     }
 
-    // Per-feature normalization: for each mel bin, subtract mean and divide by std across time
-    let mut features_channels_first = vec![0.0_f32; NUM_MEL_BINS * num_frames];
-
-    for bin_idx in 0..NUM_MEL_BINS {
-        // Extract values for this mel bin across all frames
-        let mut bin_values = Vec::with_capacity(num_frames);
-        for frame_idx in 0..num_frames {
-            bin_values.push(features_time_first[frame_idx * NUM_MEL_BINS + bin_idx]);
-        }
-
-        // Compute mean and std
-        let mean: f32 = bin_values.iter().sum::<f32>() / num_frames as f32;
-        let variance: f32 = bin_values.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / num_frames as f32;
-        let std = variance.sqrt().max(1e-5); // Clamp std to minimum 1e-5
-
-        // Normalize and store in channels-first layout
-        for frame_idx in 0..num_frames {
-            let normalized = (bin_values[frame_idx] - mean) / std;
-            features_channels_first[bin_idx * num_frames + frame_idx] = normalized;
-        }
-    }
-
-    Ok((features_channels_first, num_frames))
+    Ok((features, num_frames))
 }
 
 /// Compute power spectrum from windowed signal using DFT
@@ -143,75 +163,9 @@ fn compute_power_spectrum(signal: &[f32]) -> Vec<f32> {
     power
 }
 
-/// Create mel filterbank (triangular filters, NO Slaney normalization)
-fn create_mel_filterbank(
-    sample_rate: usize,
-    fft_size: usize,
-    num_bins: usize,
-) -> Vec<Vec<(usize, f32)>> {
-    let nyquist = sample_rate as f32 / 2.0;
-    let mel_low = hz_to_mel(0.0);
-    let mel_high = hz_to_mel(nyquist);
-
-    // Create mel-spaced center frequencies
-    let mel_points: Vec<f32> = (0..=num_bins + 1)
-        .map(|i| mel_low + (mel_high - mel_low) * i as f32 / (num_bins + 1) as f32)
-        .map(mel_to_hz)
-        .collect();
-
-    // Convert to FFT bin indices
-    let bin_points: Vec<usize> = mel_points
-        .iter()
-        .map(|&freq| ((freq * fft_size as f32 / sample_rate as f32) + 0.5).floor() as usize)
-        .collect();
-
-    // Build triangular filters (sparse representation)
-    let mut filters = Vec::with_capacity(num_bins);
-
-    for i in 0..num_bins {
-        let left = bin_points[i];
-        let center = bin_points[i + 1];
-        let right = bin_points[i + 2];
-
-        let mut filter = Vec::new();
-
-        // Rising edge
-        if center > left {
-            for bin in left..center {
-                let weight = (bin - left) as f32 / (center - left) as f32;
-                if weight > 0.0 {
-                    filter.push((bin, weight));
-                }
-            }
-        }
-
-        // Falling edge
-        if right > center {
-            for bin in center..right {
-                let weight = (right - bin) as f32 / (right - center) as f32;
-                if weight > 0.0 {
-                    filter.push((bin, weight));
-                }
-            }
-        }
-
-        filters.push(filter);
-    }
-
-    filters
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_mel_conversion() {
-        let hz = 1000.0;
-        let mel = hz_to_mel(hz);
-        let hz_back = mel_to_hz(mel);
-        assert!((hz - hz_back).abs() < 0.01);
-    }
 
     #[test]
     fn test_power_spectrum_dc() {
@@ -219,7 +173,6 @@ mod tests {
         let signal = vec![1.0; 512];
         let power = compute_power_spectrum(&signal);
         assert!(power[0] > 0.0);
-        // Other bins should be near zero
         for p in &power[1..10] {
             assert!(*p < 1.0);
         }

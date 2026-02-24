@@ -1,12 +1,13 @@
-use crate::asr::parakeet::features::compute_features;
+use crate::asr::parakeet::features::{compute_features, init_features};
 use crate::asr::parakeet::tokens::load_tokens;
+
+fn model_dir() -> String {
+    format!("{}/../../data/parakeet", env!("CARGO_MANIFEST_DIR"))
+}
 
 #[test]
 fn test_load_tokens_from_sentencepiece_model() {
-    let model_path = format!(
-        "{}/../../data/parakeet/tokenizer.model",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let model_path = format!("{}/tokenizer.model", model_dir());
     if !std::path::Path::new(&model_path).exists() {
         eprintln!("Skipping: tokenizer.model not found at {}", model_path);
         return;
@@ -25,13 +26,15 @@ fn test_load_tokens_missing_file() {
 
 #[test]
 fn test_compute_features_dimensions() {
+    let dir = model_dir();
+    if !std::path::Path::new(&format!("{}/mel_filterbank.bin", dir)).exists() {
+        eprintln!("Skipping: mel_filterbank.bin not found");
+        return;
+    }
+    init_features(std::path::Path::new(&dir)).expect("Failed to init features");
+
     let pcm_data: Vec<i16> = vec![0; 16000];
-    let sample_rate = 16000;
-
-    let result = compute_features(&pcm_data, sample_rate);
-    assert!(result.is_ok());
-
-    let (features, num_frames) = result.unwrap();
+    let (features, num_frames) = compute_features(&pcm_data, 16000).expect("compute_features failed");
     let expected_num_frames = (pcm_data.len() - 400) / 160 + 1;
     assert_eq!(num_frames, expected_num_frames);
     assert_eq!(features.len(), 128 * expected_num_frames);
@@ -52,7 +55,14 @@ fn test_compute_features_too_short() {
 }
 
 #[test]
-fn test_compute_features_normalization() {
+fn test_compute_features_log_mel_range() {
+    let dir = model_dir();
+    if !std::path::Path::new(&format!("{}/mel_filterbank.bin", dir)).exists() {
+        eprintln!("Skipping: mel_filterbank.bin not found");
+        return;
+    }
+    init_features(std::path::Path::new(&dir)).expect("Failed to init features");
+
     let mut pcm_data: Vec<i16> = Vec::with_capacity(16000);
     for i in 0..16000 {
         let sample =
@@ -60,20 +70,16 @@ fn test_compute_features_normalization() {
         pcm_data.push(sample);
     }
 
-    let (features, num_frames) = compute_features(&pcm_data, 16000).unwrap();
+    let (features, num_frames) = compute_features(&pcm_data, 16000).expect("compute_features failed");
 
-    for bin_idx in [0, 32, 64, 96, 127] {
-        let mut bin_values = Vec::new();
-        for frame_idx in 0..num_frames {
-            bin_values.push(features[bin_idx * num_frames + frame_idx]);
-        }
-        let mean: f32 = bin_values.iter().sum::<f32>() / bin_values.len() as f32;
-        let variance: f32 =
-            bin_values.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / bin_values.len() as f32;
-        let std = variance.sqrt();
-        assert!(mean.abs() < 1e-4, "Bin {} mean {} should be ~0", bin_idx, mean);
-        assert!((std - 1.0).abs() < 1e-4, "Bin {} std {} should be ~1", bin_idx, std);
-    }
+    // Log-mel features should be finite and in a reasonable range
+    assert!(features.iter().all(|&v| v.is_finite()), "All features should be finite");
+    let min = features.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max = features.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    // NeMo-style log-mel features typically range from about -17 to +2
+    assert!(min > -30.0, "Features min {} should be > -30", min);
+    assert!(max < 20.0, "Features max {} should be < 20", max);
+    assert_eq!(features.len(), 128 * num_frames);
 }
 
 #[test]
