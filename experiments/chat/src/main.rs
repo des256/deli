@@ -10,14 +10,8 @@ use {
     },
 };
 
-const QWEN3_MODEL_PATH: &str = "data/qwen3/qwen3-4b-q4_k_m.gguf";
-const QWEN3_TOKENIZER_PATH: &str = "data/qwen3/tokenizer.json";
-const PHI3_MODEL_PATH: &str = "data/phi3/Phi-3-mini-4k-instruct-q4.gguf";
-const PHI3_TOKENIZER_PATH: &str = "data/phi3/tokenizer.json";
-const LLAMA_MODEL_PATH: &str = "data/llama/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf";
-const LLAMA_TOKENIZER_PATH: &str = "data/llama/tokenizer.json";
-const SMOLLM2_MODEL_PATH: &str = "data/smollm2/smollm2-1.7b-instruct-q4_k_m.gguf";
-const SMOLLM2_TOKENIZER_PATH: &str = "data/smollm2/tokenizer.json";
+const SMOLLM3_MODEL_PATH: &str = "data/smollm3/model_int8.onnx";
+const SMOLLM3_TOKENIZER_PATH: &str = "data/smollm3/tokenizer.json";
 const POCKET_TEXT_CONDITIONER: &str = "data/pocket/text_conditioner.onnx";
 const POCKET_FLOW_MAIN: &str = "data/pocket/flow_lm_main_int8.onnx";
 const POCKET_FLOW_STEP: &str = "data/pocket/flow_lm_flow_int8.onnx";
@@ -25,7 +19,7 @@ const POCKET_MIMI_DECODER: &str = "data/pocket/mimi_decoder_int8.onnx";
 const POCKET_TOKENIZER: &str = "data/pocket/tokenizer.json";
 const POCKET_VOICE: &str = "data/pocket/voices/stephen.bin";
 const SAMPLE_RATE: usize = 24000;
-const SAMPLE_LEN: usize = 2048;
+const MAX_TOKENS: usize = 2048;
 const MAX_HISTORY_TURNS: usize = 10;
 
 #[tokio::main]
@@ -34,14 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Validate model files exist
     log_info!("Validating model files...");
-    let qwen3_model = PathBuf::from(QWEN3_MODEL_PATH);
-    let qwen3_tokenizer = PathBuf::from(QWEN3_TOKENIZER_PATH);
-    let phi3_model = PathBuf::from(PHI3_MODEL_PATH);
-    let phi3_tokenizer = PathBuf::from(PHI3_TOKENIZER_PATH);
-    let llama_model = PathBuf::from(LLAMA_MODEL_PATH);
-    let llama_tokenizer = PathBuf::from(LLAMA_TOKENIZER_PATH);
-    let smollm2_model = PathBuf::from(SMOLLM2_MODEL_PATH);
-    let smollm2_tokenizer = PathBuf::from(SMOLLM2_TOKENIZER_PATH);
+    let smollm3_model = PathBuf::from(SMOLLM3_MODEL_PATH);
+    let smollm3_tokenizer = PathBuf::from(SMOLLM3_TOKENIZER_PATH);
     let pocket_paths = [
         POCKET_TEXT_CONDITIONER,
         POCKET_FLOW_MAIN,
@@ -51,31 +39,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         POCKET_VOICE,
     ];
 
-    if !qwen3_model.exists() || !qwen3_tokenizer.exists() {
-        eprintln!("Qwen3 model files missing. Expected:");
-        eprintln!("  - {}", QWEN3_MODEL_PATH);
-        eprintln!("  - {}", QWEN3_TOKENIZER_PATH);
-        std::process::exit(1);
-    }
-
-    if !phi3_model.exists() || !phi3_tokenizer.exists() {
-        eprintln!("Phi3 model files missing. Expected:");
-        eprintln!("  - {}", PHI3_MODEL_PATH);
-        eprintln!("  - {}", PHI3_TOKENIZER_PATH);
-        std::process::exit(1);
-    }
-
-    if !llama_model.exists() || !llama_tokenizer.exists() {
-        eprintln!("Llama model files missing. Expected:");
-        eprintln!("  - {}", LLAMA_MODEL_PATH);
-        eprintln!("  - {}", LLAMA_TOKENIZER_PATH);
-        std::process::exit(1);
-    }
-
-    if !smollm2_model.exists() || !smollm2_tokenizer.exists() {
-        eprintln!("SmolLM2 model files missing. Expected:");
-        eprintln!("  - {}", SMOLLM2_MODEL_PATH);
-        eprintln!("  - {}", SMOLLM2_TOKENIZER_PATH);
+    if !smollm3_model.exists() || !smollm3_tokenizer.exists() {
+        eprintln!("SmolLM3 model files missing. Expected:");
+        eprintln!("  - {}", SMOLLM3_MODEL_PATH);
+        eprintln!("  - {}", SMOLLM3_TOKENIZER_PATH);
         std::process::exit(1);
     }
 
@@ -88,19 +55,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log_info!("Model files validated");
 
-    // Initialize CUDA inference
-    log_info!("Initializing CUDA and CPU inference...");
+    // Initialize inference
     let cpu_inference = Inference::cpu()?;
-    let cuda_inference = Inference::cuda(0)?;
-    log_info!("CUDA inference initialized");
+    log_info!("CPU inference initialized");
 
-    // Load LLM (uncomment one)
-    log_info!("Loading LLM...");
-    //let llm = inference.use_qwen3(&qwen3_model, &qwen3_tokenizer)?;
-    //let llm = inference.use_phi3(&phi3_model, &phi3_tokenizer)?;
-    //let llm = inference.use_llama(&llama_model, &llama_tokenizer)?;
-    let llm = cuda_inference.use_smollm2(&smollm2_model, &smollm2_tokenizer)?;
-    log_info!("LLM loaded");
+    // also use CUDA if available
+    #[cfg(feature = "cuda")]
+    let cuda_inference = Inference::cuda(0)?;
+    #[cfg(not(feature = "cuda"))]
+    let cuda_inference = Inference::cpu()?;
+    log_info!("CUDA inference initialized (if available)");
+
+    // Load LLM
+    log_info!("Loading SmolLM3...");
+    let mut llm = cuda_inference
+        .use_smollm3(&smollm3_model, &smollm3_tokenizer)?
+        .with_max_tokens(MAX_TOKENS);
+    log_info!("SmolLM3 loaded");
 
     // Load Pocket TTS
     log_info!("Loading Pocket TTS...");
@@ -159,60 +130,107 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Build prompt with chat template
         let prompt = build_prompt(&history, user_input);
 
-        // Generate LLM response
+        // Generate LLM response (streaming) and pipeline sentences to TTS
         log_info!("Generating response...");
-        let response = match llm.forward(&prompt, SAMPLE_LEN).await {
-            Ok(text) => text,
-            Err(e) => {
-                log_error!("LLM inference failed: {}", e);
-                eprintln!("Error generating response: {}", e);
-                continue;
-            }
-        };
-
-        // Print response
-        println!("\n{}\n", response);
-
-        // Add to history
-        history.push((user_input.to_string(), response.clone()));
-
-        // Synthesize and play speech (streaming — chunks play as they generate)
-        log_info!("Synthesizing speech...");
-        if let Err(e) = tts.send(response).await {
-            log_error!("TTS send failed: {}", e);
-            eprintln!("Error sending to TTS: {}", e);
+        if let Err(e) = llm.forward(&prompt) {
+            log_error!("LLM forward failed: {}", e);
+            eprintln!("Error starting generation: {}", e);
             continue;
         }
 
-        let mut total_samples = 0usize;
+        // Stream tokens from LLM, split into sentences, and feed each to TTS
+        // as soon as it's complete. TTS processes sentences in parallel with
+        // ongoing LLM generation.
+        let mut response = String::new();
+        let mut sentence_buf = String::new();
         let mut tts_error = false;
-        while let Some(result) = tts.next().await {
-            match result {
-                Ok(sample) => {
+        let mut total_samples = 0usize;
+        let mut sentences_sent = 0usize;
+        let mut sentences_done = 0usize;
+
+        loop {
+            match llm.recv().await {
+                Some(Ok(token)) => {
+                    print!("{}", token);
+                    io::stdout().flush().ok();
+                    response.push_str(&token);
+                    sentence_buf.push_str(&token);
+
+                    // Check if the buffer ends with sentence-ending punctuation
+                    if ends_with_sentence_boundary(&sentence_buf) {
+                        let sentence = sentence_buf.trim().to_string();
+                        sentence_buf.clear();
+                        if !sentence.is_empty() {
+                            log_info!("Sending sentence to TTS: {:?}", sentence);
+                            if let Err(e) = tts.send(sentence).await {
+                                log_error!("TTS send failed: {}", e);
+                                tts_error = true;
+                            } else {
+                                sentences_sent += 1;
+                            }
+                        }
+                    }
+
+                    // Drain any ready TTS audio without blocking
+                    sentences_done +=
+                        drain_ready_audio(&mut tts, &mut audioout, &mut total_samples).await;
+                }
+                Some(Err(e)) => {
+                    log_error!("LLM generation error: {}", e);
+                    eprintln!("\nError during generation: {}", e);
+                    break;
+                }
+                None => break,
+            }
+        }
+        println!(); // Newline after streamed output
+
+        if response.is_empty() {
+            continue;
+        }
+
+        // Flush any remaining text that didn't end with punctuation
+        let remaining = sentence_buf.trim().to_string();
+        if !remaining.is_empty() && !tts_error {
+            log_info!("Sending remaining text to TTS: {:?}", remaining);
+            if let Err(e) = tts.send(remaining).await {
+                log_error!("TTS send failed: {}", e);
+                tts_error = true;
+            } else {
+                sentences_sent += 1;
+            }
+        }
+
+        // Drain all remaining TTS audio until every sentence has been synthesized.
+        // Each sentence produces an end-of-utterance marker (empty PCM) when done.
+        while sentences_done < sentences_sent && !tts_error {
+            match tts.next().await {
+                Some(Ok(sample)) => {
                     let n = match &sample.data {
                         AudioData::Pcm(tensor) => tensor.data.len(),
                     };
                     if n == 0 {
-                        break; // End-of-utterance marker
+                        sentences_done += 1;
+                        continue;
                     }
                     total_samples += n;
                     audioout.play(sample).await;
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     log_error!("TTS synthesis failed: {}", e);
                     eprintln!("Error synthesizing speech: {}", e);
                     tts_error = true;
-                    break;
                 }
+                None => break,
             }
         }
-        if tts_error {
-            continue;
-        }
+
+        // Add to history
+        history.push((user_input.to_string(), response.clone()));
+
         log_info!("Streamed {} total audio samples", total_samples);
 
         // Brief wait for remaining audio to drain from the ring buffer.
-        // Most audio has already played during streaming generation.
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
@@ -220,7 +238,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Build Qwen3 ChatML prompt with system message, history, and current user input
+/// Check if the buffer ends at a sentence boundary.
+/// Matches common sentence-ending punctuation: . ! ? and also : ;
+fn ends_with_sentence_boundary(text: &str) -> bool {
+    let trimmed = text.trim_end();
+    matches!(
+        trimmed.as_bytes().last(),
+        Some(b'.' | b'!' | b'?' | b':' | b';')
+    )
+}
+
+/// Drain any TTS audio chunks that are immediately ready, without blocking.
+/// Returns the number of end-of-utterance markers received (completed sentences).
+async fn drain_ready_audio(
+    tts: &mut inference::tts::pocket::PocketTts,
+    audioout: &mut AudioOut,
+    total_samples: &mut usize,
+) -> usize {
+    use futures_util::FutureExt;
+    let mut completed = 0;
+    loop {
+        // Poll tts.next() without waiting — return immediately if nothing ready
+        let maybe = tts.next().now_or_never();
+        match maybe {
+            Some(Some(Ok(sample))) => {
+                let n = match &sample.data {
+                    AudioData::Pcm(tensor) => tensor.data.len(),
+                };
+                if n == 0 {
+                    completed += 1;
+                    continue;
+                }
+                *total_samples += n;
+                audioout.play(sample).await;
+            }
+            Some(Some(Err(e))) => {
+                base::log_error!("TTS drain error: {}", e);
+                break;
+            }
+            _ => break, // Nothing ready or stream ended
+        }
+    }
+    completed
+}
+
+/// Build ChatML prompt with system message, history, and current user input
 fn build_prompt(history: &[(String, String)], user_input: &str) -> String {
     let mut prompt = String::new();
 

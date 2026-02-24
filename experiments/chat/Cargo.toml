@@ -8,8 +8,16 @@ name = "chat"
 path = "src/main.rs"
 
 [dependencies]
-inference = { path = "../../crates/inference", features = ["cuda"] }
+inference = { path = "../../crates/inference" }
 audio = { path = "../../crates/audio" }
 base = { path = "../../crates/base" }
 futures-util = { version = "0.3", features = ["sink"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "time",
+] }
+
+[features]
+cuda = ["inference/cuda"]

@@ -61,36 +61,13 @@ impl Inference {
         crate::asr::Whisper::new(model_path, tokenizer_path, config_path, self.device.clone())
     }
 
-    pub fn use_qwen3(
+    pub fn use_smollm3(
         &self,
         model_path: impl AsRef<Path>,
         tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::llm::Qwen3, InferError> {
-        crate::llm::Qwen3::new(model_path, tokenizer_path, self.device.clone())
-    }
-
-    pub fn use_phi3(
-        &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::llm::Phi3, InferError> {
-        crate::llm::Phi3::new(model_path, tokenizer_path, self.device.clone())
-    }
-
-    pub fn use_llama(
-        &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::llm::Llama, InferError> {
-        crate::llm::Llama::new(model_path, tokenizer_path, self.device.clone())
-    }
-
-    pub fn use_smollm2(
-        &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::llm::Smollm2, InferError> {
-        crate::llm::Smollm2::new(model_path, tokenizer_path, self.device.clone())
+    ) -> Result<crate::llm::Smollm3, InferError> {
+        let session = self.onnx_session(model_path)?;
+        crate::llm::Smollm3::new(session, tokenizer_path)
     }
 
     pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<Session, InferError> {
