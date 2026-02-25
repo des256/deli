@@ -44,7 +44,7 @@ impl Default for AudioInConfig {
         Self {
             device_name: None,
             sample_rate: 16000,
-            chunk_size: 1600,
+            chunk_size: 8000,
         }
     }
 }
