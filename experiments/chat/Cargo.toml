@@ -11,6 +11,7 @@ path = "src/main.rs"
 inference = { path = "../../crates/inference" }
 audio = { path = "../../crates/audio" }
 base = { path = "../../crates/base" }
+onnx = { path = "../../crates/onnx" }
 futures-util = { version = "0.3", features = ["sink"] }
 tokio = { version = "1", features = [
     "rt",
@@ -20,4 +21,4 @@ tokio = { version = "1", features = [
 ] }
 
 [features]
-cuda = ["inference/cuda"]
+cuda = ["inference/cuda", "onnx/cuda"]

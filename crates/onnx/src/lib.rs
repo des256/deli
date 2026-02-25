@@ -6,7 +6,7 @@ pub use onnx::*;
 mod session;
 pub use session::*;
 
-mod ffi;
+pub mod ffi; // myeah, do we really want to expose this?
 
 mod value;
 pub use value::*;
@@ -52,18 +52,6 @@ impl OnnxError {
 impl fmt::Display for OnnxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "ONNX error ({:?}): {}", self.code, self.message)
-    }
-}
-
-pub(crate) fn check_status<T>(
-    api: *const ffi::OrtApi,
-    status: *mut ffi::OrtStatus,
-    value: T,
-) -> Result<T, OnnxError> {
-    if status.is_null() {
-        Ok(value)
-    } else {
-        Err(OnnxError::from_status(api, status))
     }
 }
 

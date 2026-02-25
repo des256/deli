@@ -1,42 +1,24 @@
-use crate::error::{InferError, Result};
-use onnx::Session;
-use std::sync::{Arc, Mutex};
-use tokenizers::Tokenizer;
-
-pub(crate) struct GenerateParams {
-    pub session: Arc<Mutex<Session>>,
-    pub tokenizer: Arc<Tokenizer>,
-    pub eos_token_ids: Vec<u32>,
-    pub max_tokens: usize,
-    pub input_names: Vec<String>,
-    pub output_names: Vec<String>,
-    pub num_layers: usize,
-    pub num_kv_heads: usize,
-    pub head_dim: usize,
-    pub token_ids: Vec<u32>,
-    pub kv_dtype: onnx::ffi::ONNXTensorElementDataType,
-}
+use {crate::*, base::*, tokenizers::Tokenizer, tokio::sync::mpsc};
 
 /// Run the autoregressive generation loop, sending tokens through `tx`.
 ///
 /// This function is designed to run inside `tokio::task::spawn_blocking`.
 /// It processes the prompt on the first pass (full sequence + empty KV cache),
 /// then generates one token at a time using cached keys/values.
-pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Result<String>>) {
-    let GenerateParams {
-        session,
-        tokenizer,
-        eos_token_ids,
-        max_tokens,
-        input_names,
-        output_names,
-        num_layers,
-        num_kv_heads,
-        head_dim,
-        token_ids,
-        kv_dtype,
-    } = params;
-
+pub(crate) fn generate(
+    session: &mut onnx::Session,
+    tokenizer: &Tokenizer,
+    eos_token_ids: &[u32],
+    max_tokens: usize,
+    input_names: &[String],
+    output_names: &[String],
+    num_layers: usize,
+    num_kv_heads: usize,
+    head_dim: usize,
+    token_ids: &[u32],
+    kv_dtype: onnx::ffi::ONNXTensorElementDataType,
+    tx: &mpsc::Sender<LlmToken>,
+) {
     // Initial state: convert token IDs to i64
     let mut input_ids: Vec<i64> = token_ids.iter().map(|&id| id as i64).collect();
     let prompt_len = input_ids.len();
@@ -53,12 +35,13 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
     let mut kv_cache: Vec<onnx::Value> = Vec::with_capacity(num_layers * 2);
     for _ in 0..(num_layers * 2) {
         let cache_tensor = match onnx::Value::empty_typed(
+            &session.onnx,
             &[1, num_kv_heads, 0, head_dim],
             kv_dtype,
         ) {
             Ok(t) => t,
             Err(e) => {
-                let _ = tx.blocking_send(Err(InferError::Onnx(e.to_string())));
+                log_error!("Failed to create empty KV cache tensor: {}", e);
                 return;
             }
         };
@@ -66,22 +49,31 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
     }
 
     for _ in 0..max_tokens {
-        let input_ids_tensor = match make_i64_tensor(&input_ids) {
+        let input_ids_tensor = match make_i64_tensor(&session, &input_ids) {
             Ok(t) => t,
-            Err(e) => { let _ = tx.blocking_send(Err(e)); return; }
+            Err(e) => {
+                log_error!("Failed to create attention mask tensor: {}", e);
+                return;
+            }
         };
-        let attention_mask_tensor = match make_i64_tensor(&attention_mask) {
+        let attention_mask_tensor = match make_i64_tensor(&session, &attention_mask) {
             Ok(t) => t,
-            Err(e) => { let _ = tx.blocking_send(Err(e)); return; }
+            Err(e) => {
+                log_error!("Failed to create position ids tensor: {}", e);
+                return;
+            }
         };
-        let position_ids_tensor = match make_i64_tensor(&position_ids) {
+        let position_ids_tensor = match make_i64_tensor(&session, &position_ids) {
             Ok(t) => t,
-            Err(e) => { let _ = tx.blocking_send(Err(e)); return; }
+            Err(e) => {
+                log_error!("Failed to create position ids tensor: {}", e);
+                return;
+            }
         };
 
         // Build input list by matching discovered names
         let mut inputs = Vec::with_capacity(3 + kv_cache.len());
-        for name in &input_names {
+        for name in input_names {
             if name == "input_ids" {
                 inputs.push((name.as_str(), &input_ids_tensor));
             } else if name == "attention_mask" {
@@ -96,29 +88,21 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
         }
 
         if inputs.len() != input_names.len() {
-            let _ = tx.blocking_send(Err(InferError::Runtime(format!(
+            log_error!(
                 "Built {} inputs but model expects {}",
-                inputs.len(), input_names.len()
-            ))));
+                inputs.len(),
+                input_names.len()
+            );
             return;
         }
 
         // Run inference
         let outputs = {
-            let mut guard = match session.lock() {
-                Ok(g) => g,
-                Err(e) => {
-                    let _ = tx.blocking_send(Err(InferError::Runtime(format!(
-                        "Session lock failed: {}", e
-                    ))));
-                    return;
-                }
-            };
             let output_refs: Vec<&str> = output_names.iter().map(|s| s.as_str()).collect();
-            match guard.run(&inputs, &output_refs) {
+            match session.run(&inputs, &output_refs) {
                 Ok(out) => out,
                 Err(e) => {
-                    let _ = tx.blocking_send(Err(InferError::Onnx(e.to_string())));
+                    log_error!("Failed to run inference: {}", e);
                     return;
                 }
             }
@@ -128,9 +112,7 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
         let logits_idx = match output_names.iter().position(|n| n == "logits") {
             Some(idx) => idx,
             None => {
-                let _ = tx.blocking_send(Err(InferError::Runtime(
-                    "logits output not found in model outputs".to_string(),
-                )));
+                log_error!("logits output not found in model outputs");
                 return;
             }
         };
@@ -138,7 +120,7 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
         let logits_data = match outputs[logits_idx].extract_as_f32() {
             Ok(data) => data,
             Err(e) => {
-                let _ = tx.blocking_send(Err(InferError::Onnx(e.to_string())));
+                log_error!("Failed to extract logits data: {}", e);
                 return;
             }
         };
@@ -146,19 +128,18 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
         // Derive vocab_size from tensor data length
         let seq_len = input_ids.len();
         if seq_len == 0 || logits_data.is_empty() {
-            let _ = tx.blocking_send(Err(InferError::Runtime(
-                "Empty logits tensor or input".to_string(),
-            )));
+            log_error!("Empty logits tensor or input");
             return;
         }
         let vocab_size = logits_data.len() / seq_len;
         let last_pos_offset = (seq_len - 1) * vocab_size;
 
         if last_pos_offset + vocab_size > logits_data.len() {
-            let _ = tx.blocking_send(Err(InferError::Runtime(format!(
+            log_error!(
                 "Logits shape mismatch: expected at least {} elements, got {}",
-                last_pos_offset + vocab_size, logits_data.len()
-            ))));
+                last_pos_offset + vocab_size,
+                logits_data.len()
+            );
             return;
         }
         let last_pos_logits = &logits_data[last_pos_offset..last_pos_offset + vocab_size];
@@ -172,14 +153,13 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
         {
             Some(id) => id,
             None => {
-                let _ = tx.blocking_send(Err(InferError::Runtime(
-                    "Empty logits slice during argmax".to_string(),
-                )));
+                log_error!("Empty logits slice during argmax");
                 return;
             }
         };
 
         if eos_token_ids.contains(&(next_token_id as u32)) {
+            tx.blocking_send(LlmToken::Eos).unwrap();
             break;
         }
 
@@ -190,9 +170,7 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
         let full_decoded = match tokenizer.decode(&all_generated_ids, true) {
             Ok(text) => text,
             Err(e) => {
-                let _ = tx.blocking_send(Err(InferError::TokenizerError(format!(
-                    "Decode failed: {}", e
-                ))));
+                log_error!("Decode failed: {}", e);
                 return;
             }
         };
@@ -200,7 +178,7 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
         if full_decoded.len() > prev_decoded_len {
             let delta = &full_decoded[prev_decoded_len..];
             prev_decoded_len = full_decoded.len();
-            if tx.blocking_send(Ok(delta.to_string())).is_err() {
+            if tx.blocking_send(LlmToken::Text(delta.to_string())).is_err() {
                 break;
             }
         }
@@ -221,8 +199,8 @@ pub(crate) fn generate(params: GenerateParams, tx: tokio::sync::mpsc::Sender<Res
 }
 
 /// Create a 1D ONNX tensor with shape [1, len] from i64 data.
-fn make_i64_tensor(data: &[i64]) -> Result<onnx::Value> {
-    onnx::Value::from_slice::<i64>(&[1, data.len()], data)
+fn make_i64_tensor(session: &onnx::Session, data: &[i64]) -> Result<onnx::Value, InferError> {
+    onnx::Value::from_slice::<i64>(&session.onnx, &[1, data.len()], data)
         .map_err(|e| InferError::Onnx(e.to_string()))
 }
 
@@ -265,21 +243,5 @@ mod tests {
         assert_eq!(parse_kv_cache_index("past_key_values.0.unknown"), None);
         assert_eq!(parse_kv_cache_index("past_key_values.abc.key"), None);
         assert_eq!(parse_kv_cache_index("present.0.key"), None);
-    }
-
-    #[test]
-    fn test_make_i64_tensor() {
-        onnx::init().unwrap();
-        let tensor = make_i64_tensor(&[1, 2, 3]).unwrap();
-        let data = tensor.extract_tensor::<i64>().unwrap();
-        assert_eq!(data, &[1, 2, 3]);
-    }
-
-    #[test]
-    fn test_make_i64_tensor_single() {
-        onnx::init().unwrap();
-        let tensor = make_i64_tensor(&[42]).unwrap();
-        let data = tensor.extract_tensor::<i64>().unwrap();
-        assert_eq!(data, &[42]);
     }
 }

@@ -3,17 +3,17 @@ use std::fmt;
 mod asr;
 pub use asr::*;
 
+mod tts;
+pub use tts::*;
+
 //mod diar;
 //pub use diar::*;
 
 mod inference;
 pub use inference::*;
 
-//mod llm;
-//pub use llm::*;
-
-//mod tts;
-//pub use tts::*;
+mod llm;
+pub use llm::*;
 
 //mod vad;
 //pub use vad::*;

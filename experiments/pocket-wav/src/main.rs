@@ -1,10 +1,4 @@
-use {
-    audio::AudioData,
-    base::*,
-    futures_util::{SinkExt, StreamExt},
-    inference::Inference,
-    std::path::PathBuf,
-};
+use {base::*, inference::*, std::time::Duration};
 
 const SENTENCE: &str = "The key issue, with rookworst, is that it is a delicious deli meat, made of willing, pork volunteers, slaughtered with love, prepared with care. - Have you had your rookworst today?";
 const SAMPLE_RATE: u32 = 24000;
@@ -12,7 +6,7 @@ const SAMPLE_RATE: u32 = 24000;
 const POCKET_VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), InferError> {
     base::init_stdout_logger();
 
     let args: Vec<String> = std::env::args().collect();
@@ -20,69 +14,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Usage: {} <output.wav>", args[0]);
         std::process::exit(1);
     }
-
     let output_path = &args[1];
 
-    // Model paths
-    let data = PathBuf::from("data/pocket");
-    let text_conditioner = data.join("text_conditioner.onnx");
-    let flow_main = data.join("flow_lm_main_int8.onnx");
-    let flow_step = data.join("flow_lm_flow_int8.onnx");
-    let mimi_decoder = data.join("mimi_decoder_int8.onnx");
-    let tokenizer = data.join("tokenizer.json");
-    let voice = data.join("voices/desmond.bin");
+    let inference = Inference::new()?;
 
-    // Validate model files exist
-    for path in [
-        &text_conditioner,
-        &flow_main,
-        &flow_step,
-        &mimi_decoder,
-        &tokenizer,
-        &voice,
-    ] {
-        if !path.exists() {
-            eprintln!("Missing: {}", path.display());
-            std::process::exit(1);
-        }
-    }
+    let mut tts = inference.use_pocket(&onnx::Executor::Cpu, &POCKET_VOICE_PATH)?;
 
-    // Initialize inference and load Pocket TTS
-    log_info!("Initializing Pocket TTS...");
-    #[cfg(feature = "cuda")]
-    let inference = Inference::cuda(0)?;
-    #[cfg(not(feature = "cuda"))]
-    let inference = Inference::cpu()?;
-    let mut tts = inference.use_pocket_tts(&POCKET_VOICE_PATH)?;
-    log_info!("Pocket TTS loaded");
-
-    // Synthesize speech (streaming — collect all chunks)
-    log_info!("Synthesizing: \"{}\"", SENTENCE);
     tts.send(SENTENCE.to_string()).await?;
-    tts.close().await?;
 
-    let mut all_samples: Vec<i16> = Vec::new();
-    while let Some(result) = tts.next().await {
-        let sample = result?;
-        let AudioData::Pcm(tensor) = sample.data;
-        all_samples.extend_from_slice(&tensor.data);
+    let mut samples: Vec<i16> = Vec::new();
+    while let Ok(Some(sample)) = tokio::time::timeout(Duration::from_secs(1), tts.recv()).await {
+        log_info!("adding {} samples", sample.len());
+        samples.extend_from_slice(&sample);
     }
-    log_info!("Generated {} samples", all_samples.len());
 
-    // Write WAV file
     let spec = hound::WavSpec {
         channels: 1,
         sample_rate: SAMPLE_RATE,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-
-    let mut writer = hound::WavWriter::create(output_path, spec)?;
-    for &s in &all_samples {
-        writer.write_sample(s)?;
+    let mut writer = match hound::WavWriter::create(output_path, spec) {
+        Ok(writer) => writer,
+        Err(e) => return Err(InferError::Runtime(e.to_string())),
+    };
+    for &s in &samples {
+        writer
+            .write_sample(s)
+            .map_err(|e| InferError::Runtime(e.to_string()))?;
     }
-    writer.finalize()?;
-
-    println!("Wrote {} samples to {}", all_samples.len(), output_path);
+    writer
+        .finalize()
+        .map_err(|e| InferError::Runtime(e.to_string()))?;
+    println!("Wrote {} samples to {}", samples.len(), output_path);
     Ok(())
 }

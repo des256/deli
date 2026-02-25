@@ -1,4 +1,7 @@
-use {crate::*, std::sync::Arc};
+use {
+    crate::*,
+    std::{path::Path, sync::Arc},
+};
 
 const ONNX_VERSION: usize = 24;
 
@@ -23,6 +26,18 @@ impl Inference {
         crate::asr::parakeet::Parakeet::new(&self.onnx, &executor)
     }
 
+    pub fn use_pocket(
+        &self,
+        executor: &onnx::Executor,
+        voice_path: impl AsRef<Path>,
+    ) -> Result<crate::tts::pocket::Pocket, InferError> {
+        crate::tts::pocket::Pocket::new(&self.onnx, &executor, voice_path.as_ref())
+    }
+
+    pub fn use_phi3(&self, executor: &onnx::Executor) -> Result<crate::llm::Phi3, InferError> {
+        crate::llm::Phi3::new(&self.onnx, executor)
+    }
+
     /*
     pub fn use_smollm3(
         &self,
@@ -42,24 +57,12 @@ impl Inference {
         crate::llm::Gemma3::new(&self.onnx, executor)
     }
 
-    pub fn use_phi3(&self, executor: &onnx::Executor) -> Result<crate::llm::Phi3, InferError> {
-        crate::llm::Phi3::new(&self.onnx, executor)
-    }
-
     pub fn use_kokoro(
         &self,
         executor: &onnx::Executor,
         voice_path: impl AsRef<Path>,
     ) -> Result<crate::tts::Kokoro, InferError> {
         crate::tts::Kokoro::new(&self.onnx, &executor, voice_path)
-    }
-
-    pub fn use_pocket_tts(
-        &self,
-        executor: &onnx::Executor,
-        voice_path: impl AsRef<Path>,
-    ) -> Result<crate::tts::pocket::PocketTts, InferError> {
-        crate::tts::pocket::PocketTts::new(&self.onnx, &executor, voice_path)
     }
 
     pub fn use_sherpa(

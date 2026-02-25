@@ -1,46 +1,25 @@
 use {
-    crate::{
-        error::{InferError, Result},
-        tts::pocket::core::PocketCore,
-    },
-    audio::{AudioData, AudioSample},
-    base::Tensor,
-    futures_core::Stream,
-    futures_sink::Sink,
-    onnx::Session,
-    std::{
-        collections::VecDeque,
-        path::Path,
-        pin::Pin,
-        sync::{Arc, Mutex},
-        task::{Context, Poll},
-    },
-    tokenizers::Tokenizer,
+    crate::*,
+    base::*,
+    rand_distr::{Distribution, Normal},
+    std::{collections::HashMap, io::Read, path::Path, sync::Arc},
     tokio::sync::mpsc,
 };
 
-const POCKET_TEXT_CONDITIONER_PATH: &str = "data/pocket/text_conditioner.onnx";
-const POCKET_FLOW_MAIN_PATH: &str = "data/pocket/flow_lm_main_int8.onnx";
-const POCKET_FLOW_STEP_PATH: &str = "data/pocket/flow_lm_flow_int8.onnx";
-const POCKET_MIMI_DECODER_PATH: &str = "data/pocket/mimi_decoder_int8.onnx";
-const POCKET_TOKENIZER_PATH: &str = "data/pocket/tokenizer.json";
+const CONDITIONER_PATH: &str = "data/pocket/text_conditioner.onnx";
+const FLOW_MAIN_PATH: &str = "data/pocket/flow_lm_main_int8.onnx";
+const FLOW_STEP_PATH: &str = "data/pocket/flow_lm_flow_int8.onnx";
+const DECODER_PATH: &str = "data/pocket/mimi_decoder_int8.onnx";
+const TOKENIZER_PATH: &str = "data/pocket/tokenizer.json";
 
-const SAMPLE_RATE: usize = 24000;
+const MAX_TOKENS: usize = 1000;
+const LATENT_DIM: usize = 32;
+const CONDITIONING_DIM: usize = 1024;
+const DEFAULT_TEMPERATURE: f32 = 0.7;
+const DEFAULT_LSD_STEPS: usize = 1;
+const DEFAULT_EOS_THRESHOLD: f32 = -4.0;
 
-/// Channel capacity for streaming audio chunks between the synthesis
-/// thread and the async stream. Each chunk is ~480 samples (~20ms at
-/// 24kHz), so 8 chunks ≈ 160ms of audio lookahead.
-const CHUNK_CHANNEL_CAPACITY: usize = 64;
-
-/// Load pre-encoded voice latents from a binary file.
-///
-/// File format (little-endian):
-///   4 bytes  - number of dimensions (u32)
-///   N×8 bytes - each dimension (u64)
-///   remainder - raw f32 data
-fn load_voice_latents(path: impl AsRef<Path>) -> Result<Vec<f32>> {
-    use std::io::Read;
-
+fn load_voice(path: impl AsRef<Path>) -> Result<Vec<f32>, InferError> {
     let path = path.as_ref();
     let mut file = std::fs::File::open(path).map_err(|e| {
         InferError::Runtime(format!(
@@ -50,13 +29,11 @@ fn load_voice_latents(path: impl AsRef<Path>) -> Result<Vec<f32>> {
         ))
     })?;
 
-    // Read number of dimensions
     let mut buf4 = [0u8; 4];
     file.read_exact(&mut buf4)
         .map_err(|e| InferError::Runtime(format!("Failed to read latents header: {}", e)))?;
     let ndims = u32::from_le_bytes(buf4) as usize;
 
-    // Read dimensions
     let mut total_elements: usize = 1;
     for _ in 0..ndims {
         let mut buf8 = [0u8; 8];
@@ -69,7 +46,6 @@ fn load_voice_latents(path: impl AsRef<Path>) -> Result<Vec<f32>> {
             .ok_or_else(|| InferError::Runtime("Voice latents shape overflow".to_string()))?;
     }
 
-    // Read f32 data
     let mut data = vec![0f32; total_elements];
     let byte_slice = unsafe {
         std::slice::from_raw_parts_mut(
@@ -80,431 +56,442 @@ fn load_voice_latents(path: impl AsRef<Path>) -> Result<Vec<f32>> {
     file.read_exact(byte_slice)
         .map_err(|e| InferError::Runtime(format!("Failed to read latents data: {}", e)))?;
 
-    // Handle endianness: file is little-endian, convert if needed
-    #[cfg(target_endian = "big")]
-    for val in &mut data {
-        *val = f32::from_le_bytes(val.to_ne_bytes());
-    }
-
     Ok(data)
 }
 
-/// Pocket TTS model for text-to-speech synthesis.
-///
-/// Implements `Sink<String>` to accept text input and
-/// `Stream<Item = Result<AudioSample>>` to produce synthesized audio.
-///
-/// Audio is streamed incrementally: each AR generation step produces
-/// a small audio chunk (~20ms) that is yielded immediately. After all
-/// chunks for a text are yielded, an empty `AudioSample` (0 samples)
-/// signals end-of-utterance. Closing the sink signals no more input;
-/// the stream ends once all pending texts are synthesized.
-pub struct PocketTts {
-    core: Arc<Mutex<PocketCore>>,
-    tokenizer: Arc<Tokenizer>,
-    pending: VecDeque<String>,
-    closed: bool,
-    chunk_rx: Option<mpsc::Receiver<Result<AudioSample>>>,
-    stream_waker: Option<std::task::Waker>,
+fn get_names(
+    session: &onnx::Session,
+    exclude: &[&str],
+) -> Result<(Vec<String>, Vec<String>), InferError> {
+    let mut input_names: Vec<String> = Vec::new();
+    let input_count = session
+        .input_count()
+        .map_err(|error| InferError::Runtime(format!("Failed to get input count: {}", error)))?;
+    for i in 0..input_count {
+        let name = session
+            .input_name(i)
+            .map_err(|error| InferError::Runtime(format!("Failed to get input name: {}", error)))?;
+        if !exclude.contains(&name.as_str()) {
+            input_names.push(name);
+        }
+    }
+    let output_names = input_names
+        .iter()
+        .map(|name| format!("out_{}", name))
+        .collect();
+    Ok((input_names, output_names))
 }
 
-impl PocketTts {
-    /// Create a new PocketTts instance
-    ///
-    /// # Arguments
-    /// * `text_conditioner` - Text conditioner ONNX session
-    /// * `flow_main` - Flow LM main ONNX session
-    /// * `flow_step` - Flow LM step ONNX session
-    /// * `mimi_decoder` - Mimi decoder ONNX session
-    /// * `tokenizer` - Loaded tokenizer
-    /// * `voice_latents` - Pre-encoded voice latents from the mimi encoder (flat f32 slice,
-    ///   shape [1, T, 1024] where T = voice_latents.len() / 1024)
+fn initialize_cache(
+    session: &onnx::Session,
+    names: &[String],
+) -> Result<Vec<onnx::Value>, InferError> {
+    let input_count = session
+        .input_count()
+        .map_err(|e| InferError::Runtime(format!("Failed to get input count: {}", e)))?;
+    let mut name_to_index = HashMap::new();
+    for i in 0..input_count {
+        let name = session
+            .input_name(i)
+            .map_err(|e| InferError::Runtime(format!("Failed to get input name: {}", e)))?;
+        name_to_index.insert(name, i);
+    }
+    let mut cache = Vec::new();
+    for name in names {
+        let index = *name_to_index
+            .get(name)
+            .ok_or_else(|| InferError::Runtime(format!("State input '{}' not found", name)))?;
+        let shape = session
+            .input_shape(index)
+            .map_err(|e| InferError::Runtime(format!("Failed to get shape for {}: {}", name, e)))?;
+        let elem_type = session.input_element_type(index).map_err(|e| {
+            InferError::Runtime(format!("Failed to get element type for {}: {}", name, e))
+        })?;
+        let tensor = if shape == [0] {
+            onnx::Value::from_slice::<f32>(&session.onnx, &[0], &[]).map_err(|e| {
+                InferError::Runtime(format!(
+                    "Failed to create initial tensor for {}: {}",
+                    name, e
+                ))
+            })?
+        } else {
+            match elem_type {
+                onnx::ffi::ONNXTensorElementDataType::Float => {
+                    onnx::Value::zeros::<f32>(&session.onnx, &shape)
+                }
+                onnx::ffi::ONNXTensorElementDataType::Int64 => {
+                    onnx::Value::zeros::<i64>(&session.onnx, &shape)
+                }
+                onnx::ffi::ONNXTensorElementDataType::Bool => {
+                    let resolved: Vec<usize> = shape
+                        .iter()
+                        .map(|&d| if d < 0 { 1 } else { d as usize })
+                        .collect();
+                    let total: usize = resolved.iter().product();
+                    let true_data = vec![true; total];
+                    onnx::Value::from_slice::<bool>(&session.onnx, &resolved, &true_data)
+                }
+                _ => {
+                    return Err(InferError::Runtime(format!(
+                        "Unsupported element type {:?} for state {}",
+                        elem_type, name
+                    )));
+                }
+            }
+            .map_err(|e| {
+                InferError::Runtime(format!(
+                    "Failed to create initial tensor for {}: {}",
+                    name, e
+                ))
+            })?
+        };
+        cache.push(tensor);
+    }
+    Ok(cache)
+}
+
+fn prepare(text: &str) -> (String, usize) {
+    let mut prepared = text.trim().replace('\n', " ");
+    let words = prepared.split_whitespace().count();
+    let frames_after = if words <= 4 { 3 } else { 1 } + 2;
+    if words < 5 {
+        prepared = format!("        {}", prepared);
+    }
+    let prepared = format!("\u{2581}{}", prepared.replace(' ', "\u{2581}"));
+    (prepared, frames_after)
+}
+
+fn tokenize(tokenizer: &tokenizers::Tokenizer, text: &str) -> Result<Vec<i64>, InferError> {
+    let encoding = tokenizer
+        .encode(text, false)
+        .map_err(|error| InferError::Runtime(format!("Tokenization failed: {}", error)))?;
+    Ok(encoding.get_ids().iter().map(|&id| id as i64).collect())
+}
+
+fn condition(
+    conditioner: &mut onnx::Session,
+    flow_main: &mut onnx::Session,
+    token_ids: &[i64],
+    cache_flow_state: &mut Vec<onnx::Value>,
+    flow_main_input_names: &[String],
+    flow_main_output_names: &[String],
+) -> Result<(), InferError> {
+    let seq_len = token_ids.len();
+    let tokens = onnx::Value::from_slice::<i64>(&conditioner.onnx, &[1, seq_len], token_ids)
+        .map_err(|e| InferError::Runtime(format!("Failed to create tokens tensor: {}", e)))?;
+    let outputs = conditioner
+        .run(&[("token_ids", &tokens)], &["embeddings"])
+        .map_err(|error| InferError::Runtime(format!("Conditioning failed: {}", error)))?;
+    let embeddings = outputs[0]
+        .extract_tensor::<f32>()
+        .map_err(|error| InferError::Runtime(format!("Failed to extract embeddings: {}", error)))?;
+    let sequence = onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 0, LATENT_DIM], &[])
+        .map_err(|e| InferError::Runtime(format!("Failed to create sequence tensor: {}", e)))?;
+    let text_embeddings = onnx::Value::from_slice::<f32>(
+        &flow_main.onnx,
+        &[1, seq_len, CONDITIONING_DIM],
+        embeddings,
+    )
+    .map_err(|e| InferError::Runtime(format!("Failed to create text embeddings tensor: {}", e)))?;
+    let mut inputs = vec![
+        ("sequence", &sequence),
+        ("text_embeddings", &text_embeddings),
+    ];
+    for (i, state) in cache_flow_state.iter().enumerate() {
+        inputs.push((&flow_main_input_names[i], state));
+    }
+    let output_names: Vec<&str> = flow_main_output_names.iter().map(|s| s.as_str()).collect();
+    let outputs = flow_main
+        .run(&inputs, &output_names)
+        .map_err(|error| InferError::Runtime(format!("Flow main failed: {}", error)))?;
+    *cache_flow_state = outputs.into_iter().collect();
+    Ok(())
+}
+
+fn step(
+    flow_main: &mut onnx::Session,
+    flow_step: &mut onnx::Session,
+    cache_flow_state: &mut Vec<onnx::Value>,
+    cache_latent: &mut Vec<f32>,
+    flow_main_input_names: &[String],
+    flow_main_output_names: &[String],
+) -> Result<(Vec<f32>, bool), InferError> {
+    let sequence_data: Vec<f32> = cache_latent.clone();
+    let sequence =
+        onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 1, LATENT_DIM], &sequence_data)
+            .map_err(|e| InferError::Runtime(format!("Failed to create sequence tensor: {}", e)))?;
+    let text_embeddings =
+        onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 0, CONDITIONING_DIM], &[]).map_err(
+            |e| InferError::Runtime(format!("Failed to create text embeddings tensor: {}", e)),
+        )?;
+    let mut inputs = vec![
+        ("sequence", &sequence),
+        ("text_embeddings", &text_embeddings),
+    ];
+    for (i, state) in cache_flow_state.iter().enumerate() {
+        inputs.push((&flow_main_input_names[i], state));
+    }
+    let mut output_names = vec!["conditioning", "eos_logit"];
+    output_names.extend(flow_main_output_names.iter().map(|s| s.as_str()));
+    let outputs = flow_main
+        .run(&inputs, &output_names)
+        .map_err(|error| InferError::Runtime(format!("Flow main failed: {}", error)))?;
+    let conditioning = outputs[0]
+        .extract_tensor::<f32>()
+        .map_err(|error| InferError::Runtime(format!("Failed to extract conditioning: {}", error)))?
+        .to_vec();
+    let eos_logit_tensor = outputs[1]
+        .extract_tensor::<f32>()
+        .map_err(|error| InferError::Runtime(format!("Failed to extract eos_logit: {}", error)))?
+        .to_vec();
+    let eos_logit = eos_logit_tensor[0];
+    *cache_flow_state = outputs.into_iter().skip(2).collect();
+    let num_steps = DEFAULT_LSD_STEPS;
+    let temperature = DEFAULT_TEMPERATURE;
+    let mut rng = rand::thread_rng();
+    let std = (temperature as f64).sqrt();
+    let normal = Normal::new(0.0, std).map_err(|error| {
+        InferError::Runtime(format!("Failed to create normal distribution: {}", error))
+    })?;
+    let mut latent: Vec<f32> = (0..LATENT_DIM)
+        .map(|_| normal.sample(&mut rng) as f32)
+        .collect();
+    for i in 0..num_steps {
+        let s = i as f32 / num_steps as f32;
+        let t = (i + 1) as f32 / num_steps as f32;
+        let c_tensor =
+            onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, CONDITIONING_DIM], &conditioning)
+                .map_err(|e| InferError::Runtime(format!("Failed to create c tensor: {}", e)))?;
+        let s_tensor = onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, 1], &[s])
+            .map_err(|e| InferError::Runtime(format!("Failed to create s tensor: {}", e)))?;
+        let t_tensor = onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, 1], &[t])
+            .map_err(|e| InferError::Runtime(format!("Failed to create t tensor: {}", e)))?;
+        let x_tensor =
+            onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, LATENT_DIM], &latent)
+                .map_err(|e| InferError::Runtime(format!("Failed to create x tensor: {}", e)))?;
+        let outputs = flow_step
+            .run(
+                &[
+                    ("c", &c_tensor),
+                    ("s", &s_tensor),
+                    ("t", &t_tensor),
+                    ("x", &x_tensor),
+                ],
+                &["flow_dir"],
+            )
+            .map_err(|error| InferError::Runtime(format!("Flow step failed: {}", error)))?;
+        let flow_dir = outputs[0].extract_tensor::<f32>().map_err(|error| {
+            InferError::Runtime(format!("Failed to extract flow_dir: {}", error))
+        })?;
+        for j in 0..LATENT_DIM {
+            latent[j] += flow_dir[j] / num_steps as f32;
+        }
+    }
+    *cache_latent = latent.clone();
+    let is_eos = eos_logit > DEFAULT_EOS_THRESHOLD;
+    Ok((latent, is_eos))
+}
+
+fn decode_audio(
+    decoder: &mut onnx::Session,
+    latent: &[f32],
+    cache_decoder_state: &mut Vec<onnx::Value>,
+    decoder_input_names: &[String],
+    decoder_output_names: &[String],
+) -> Result<Vec<i16>, InferError> {
+    let latent_tensor = onnx::Value::from_slice::<f32>(&decoder.onnx, &[1, 1, LATENT_DIM], latent)
+        .map_err(|e| InferError::Runtime(format!("Failed to create latent tensor: {}", e)))?;
+    let mut inputs = vec![("latent", &latent_tensor)];
+    for (i, state) in cache_decoder_state.iter().enumerate() {
+        inputs.push((&decoder_input_names[i], state));
+    }
+    let mut output_names = vec!["audio_frame"];
+    output_names.extend(decoder_output_names.iter().map(|s| s.as_str()));
+    let outputs = decoder
+        .run(&inputs, &output_names)
+        .map_err(|error| InferError::Runtime(format!("Decoder failed: {}", error)))?;
+    let audio = outputs[0]
+        .extract_tensor::<f32>()
+        .map_err(|error| InferError::Runtime(format!("Failed to extract audio: {}", error)))?
+        .to_vec();
+    *cache_decoder_state = outputs.into_iter().skip(1).collect();
+    Ok(audio
+        .iter()
+        .map(|&f| (f * 32768.0).clamp(-32768.0, 32767.0) as i16)
+        .collect())
+}
+
+pub struct Pocket {
+    text_tx: mpsc::Sender<String>,
+    audio_rx: mpsc::Receiver<Vec<i16>>,
+}
+
+impl Pocket {
     pub fn new(
         onnx: &Arc<onnx::Onnx>,
         executor: &onnx::Executor,
-        voice_path: impl AsRef<Path>,
-    ) -> Result<Self> {
-        let text_conditioner = onnx.create_session(&executor, POCKET_TEXT_CONDITIONER_PATH)?;
-        let flow_main = onnx.create_session(&executor, POCKET_FLOW_MAIN_PATH)?;
-        let flow_step = onnx.create_session(&executor, POCKET_FLOW_STEP_PATH)?;
-        let mimi_decoder = onnx.create_session(&executor, POCKET_MIMI_DECODER_PATH)?;
-        let tokenizer = tokenizers::Tokenizer::from_file(POCKET_TOKENIZER_PATH)
-            .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
+        voice_path: &Path,
+    ) -> Result<Self, InferError> {
+        // load the things
+        let mut conditioner = onnx
+            .create_session(executor, CONDITIONER_PATH)
+            .map_err(|e| {
+                InferError::Runtime(format!("Failed to create conditioner session: {}", e))
+            })?;
+        let mut flow_main = onnx.create_session(executor, FLOW_MAIN_PATH).map_err(|e| {
+            InferError::Runtime(format!("Failed to create flow main session: {}", e))
+        })?;
+        let mut flow_step = onnx.create_session(executor, FLOW_STEP_PATH).map_err(|e| {
+            InferError::Runtime(format!("Failed to create flow step session: {}", e))
+        })?;
+        let mut decoder = onnx
+            .create_session(executor, DECODER_PATH)
+            .map_err(|e| InferError::Runtime(format!("Failed to create decoder session: {}", e)))?;
+        let tokenizer = tokenizers::Tokenizer::from_file(TOKENIZER_PATH)
+            .map_err(|e| InferError::Runtime(format!("Failed to create tokenizer: {}", e)))?;
+        let voice = load_voice(voice_path)?;
 
-        let voice_latents = load_voice_latents(voice_path)?;
+        // obtain input and output names
+        let (flow_main_input_names, flow_main_output_names) =
+            get_names(&flow_main, &["sequence", "text_embeddings"])?;
+        let (decoder_input_names, decoder_output_names) = get_names(&decoder, &["latent"])?;
 
-        // Create PocketCore
-        let mut core = PocketCore::new(text_conditioner, flow_main, flow_step, mimi_decoder)?;
+        // initialize caches
+        let mut reset_flow_state = initialize_cache(&flow_main, &flow_main_input_names)?;
+        let mut cache_decoder_state = initialize_cache(&decoder, &decoder_input_names)?;
 
-        // Condition voice (voice first per reference)
-        let latent_frames = voice_latents.len() / 1024; // 1024 = conditioning dim
-        core.condition_voice(&voice_latents, latent_frames)?;
-
-        // Snapshot the voice-conditioned state
-        core.snapshot_state()?;
-
-        Ok(PocketTts {
-            core: Arc::new(Mutex::new(core)),
-            tokenizer: Arc::new(tokenizer),
-            pending: VecDeque::new(),
-            closed: false,
-            chunk_rx: None,
-            stream_waker: None,
-        })
-    }
-
-    /// Prepare text for synthesis following Pocket TTS conventions.
-    ///
-    /// Returns (prepared_text, frames_after_eos).
-    fn prepare_text(text: &str) -> (String, usize) {
-        // Strip whitespace, replace newlines with spaces
-        let mut prepared = text.trim().replace('\n', " ");
-
-        // Capitalize first character
-        if let Some(first_char) = prepared.chars().next() {
-            if first_char.is_lowercase() {
-                prepared = first_char.to_uppercase().collect::<String>()
-                    + &prepared[first_char.len_utf8()..];
-            }
+        // condition voice
+        let latent_frames = voice.len() / 1024;
+        let sequence = onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 0, LATENT_DIM], &[])
+            .map_err(|e| InferError::Runtime(format!("Failed to create sequence tensor: {}", e)))?;
+        let text_embeddings = onnx::Value::from_slice::<f32>(
+            &flow_main.onnx,
+            &[1, latent_frames, CONDITIONING_DIM],
+            &voice,
+        )
+        .map_err(|e| {
+            InferError::Runtime(format!("Failed to create text embeddings tensor: {}", e))
+        })?;
+        let mut inputs = vec![
+            ("sequence", &sequence),
+            ("text_embeddings", &text_embeddings),
+        ];
+        for (i, state) in reset_flow_state.iter().enumerate() {
+            inputs.push((&flow_main_input_names[i], state));
         }
+        let output_names: Vec<&str> = flow_main_output_names.iter().map(|s| s.as_str()).collect();
+        let outputs = flow_main
+            .run(&inputs, &output_names)
+            .map_err(|error| InferError::Runtime(format!("Flow main failed: {}", error)))?;
+        reset_flow_state = outputs;
 
-        // Add period if text ends with alphanumeric
-        if let Some(last_char) = prepared.chars().last() {
-            if last_char.is_alphanumeric() {
-                prepared.push('.');
-            }
-        }
+        // create channels
+        let (text_tx, mut text_rx) = mpsc::channel::<String>(32);
+        let (audio_tx, audio_rx) = mpsc::channel::<Vec<i16>>(32);
 
-        // Determine frames_after_eos based on word count
-        let word_count = prepared.split_whitespace().count();
-        let frames_after_eos = if word_count <= 4 { 3 } else { 1 } + 2;
-
-        // Pad short texts (<5 words) with 8 leading spaces
-        if word_count < 5 {
-            prepared = format!("        {}", prepared);
-        }
-
-        (prepared, frames_after_eos)
-    }
-
-    /// Split text into sentences for synthesis.
-    ///
-    /// The flow_main transformer has a 1000-position KV cache. Voice conditioning
-    /// uses ~20 positions and text conditioning uses one per token, so long text
-    /// must be split into sentences to stay within the limit.
-    fn split_sentences(text: &str) -> Vec<String> {
-        let mut sentences = Vec::new();
-        let mut current = String::new();
-
-        for ch in text.chars() {
-            current.push(ch);
-            // Split on sentence-ending punctuation followed by space or end
-            if matches!(ch, '.' | '!' | '?' | ';') {
-                let trimmed = current.trim().to_string();
-                if !trimmed.is_empty() {
-                    sentences.push(trimmed);
+        // spawn it
+        tokio::task::spawn_blocking({
+            move || {
+                while let Some(text) = text_rx.blocking_recv() {
+                    let mut cache_latent = vec![f32::NAN; LATENT_DIM];
+                    let mut cache_flow_state = match reset_flow_state
+                        .iter()
+                        .map(|v| v.deepclone())
+                        .collect::<Result<Vec<_>, _>>()
+                    {
+                        Ok(states) => states,
+                        Err(e) => {
+                            log_error!("Failed to clone flow state: {}", e);
+                            continue;
+                        }
+                    };
+                    let (prepared, frames_after) = prepare(&text);
+                    let token_ids = match tokenize(&tokenizer, &prepared) {
+                        Ok(token_ids) => token_ids,
+                        Err(e) => {
+                            log_error!("Failed to tokenize text: {}", e);
+                            continue;
+                        }
+                    };
+                    if let Err(error) = condition(
+                        &mut conditioner,
+                        &mut flow_main,
+                        &token_ids,
+                        &mut cache_flow_state,
+                        &flow_main_input_names,
+                        &flow_main_output_names,
+                    ) {
+                        log_error!("Failed to condition text: {}", error);
+                        continue;
+                    }
+                    let mut eos_countdown: Option<usize> = None;
+                    for _ in 0..MAX_TOKENS {
+                        let (latent, is_eos) = match step(
+                            &mut flow_main,
+                            &mut flow_step,
+                            &mut cache_flow_state,
+                            &mut cache_latent,
+                            &flow_main_input_names,
+                            &flow_main_output_names,
+                        ) {
+                            Ok((latent, is_eos)) => (latent, is_eos),
+                            Err(e) => {
+                                log_error!("Failed to step: {}", e);
+                                break;
+                            }
+                        };
+                        let sample = match decode_audio(
+                            &mut decoder,
+                            &latent,
+                            &mut cache_decoder_state,
+                            &decoder_input_names,
+                            &decoder_output_names,
+                        ) {
+                            Ok(sample) => sample,
+                            Err(e) => {
+                                log_error!("Failed to decode audio: {}", e);
+                                break;
+                            }
+                        };
+                        if let Err(e) = audio_tx.blocking_send(sample) {
+                            log_error!("Failed to send audio: {}", e);
+                            break;
+                        }
+                        if let Some(ref mut remaining) = eos_countdown {
+                            if *remaining == 0 {
+                                break;
+                            }
+                            *remaining -= 1;
+                        } else if is_eos {
+                            eos_countdown = Some(frames_after);
+                        }
+                    }
                 }
-                current.clear();
-            }
-        }
-
-        // Push remaining text
-        let trimmed = current.trim().to_string();
-        if !trimmed.is_empty() {
-            sentences.push(trimmed);
-        }
-
-        sentences
-    }
-
-    /// Synthesize a single sentence: reset → condition → generate → stream.
-    fn synthesize_sentence(
-        core_guard: &mut PocketCore,
-        tokenizer: &Tokenizer,
-        sentence: &str,
-        tx: &mpsc::Sender<Result<AudioSample>>,
-    ) -> Result<()> {
-        // Reset state for new sentence
-        core_guard.reset_for_utterance()?;
-
-        // Prepare text
-        let (prepared, frames_after_eos) = Self::prepare_text(sentence);
-
-        // Convert to SentencePiece format
-        let sp_text = format!("\u{2581}{}", prepared.replace(' ', "\u{2581}"));
-
-        // Tokenize
-        let encoding = tokenizer
-            .encode(sp_text, false)
-            .map_err(|e| InferError::Runtime(format!("Tokenization failed: {}", e)))?;
-        let token_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
-
-        // Run text conditioner
-        let embeddings = core_guard.run_text_conditioner(&token_ids)?;
-
-        // Condition text (text second, after voice from snapshot)
-        core_guard.condition_text(&embeddings, token_ids.len())?;
-
-        // AR generation loop — stream each chunk immediately
-        let max_tokens = 1000;
-        let mut eos_countdown: Option<usize> = None;
-
-        for _ in 0..max_tokens {
-            let (latent, is_eos) = core_guard.generate_step()?;
-            let audio_chunk = core_guard.decode_audio(&latent)?;
-
-            let i16_samples: Vec<i16> = audio_chunk
-                .iter()
-                .map(|&sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16)
-                .collect();
-
-            let num_samples = i16_samples.len();
-            let tensor = Tensor::new(vec![num_samples], i16_samples)
-                .map_err(|e| InferError::TensorError(e.to_string()))?;
-
-            let sample = AudioSample {
-                data: AudioData::Pcm(tensor),
-                sample_rate: SAMPLE_RATE,
-            };
-
-            if tx.capacity() == 0 {
-                base::log_debug!("TTS chunk channel full (cap {})", CHUNK_CHANNEL_CAPACITY);
-            }
-            if tx.blocking_send(Ok(sample)).is_err() {
-                return Ok(());
-            }
-
-            if let Some(ref mut remaining) = eos_countdown {
-                if *remaining == 0 {
-                    break;
-                }
-                *remaining -= 1;
-            } else if is_eos {
-                eos_countdown = Some(frames_after_eos);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Spawn synthesis of the given text, streaming audio chunks through a channel.
-    ///
-    /// Long text is automatically split into sentences so each stays within
-    /// the flow_main transformer's 1000-position context window.
-    fn start_synthesis(&mut self, text: String) {
-        let core = Arc::clone(&self.core);
-        let tokenizer = Arc::clone(&self.tokenizer);
-        let (tx, rx) = mpsc::channel(CHUNK_CHANNEL_CAPACITY);
-        self.chunk_rx = Some(rx);
-
-        tokio::task::spawn_blocking(move || {
-            let result = (|| -> Result<()> {
-                let mut core_guard = core
-                    .lock()
-                    .map_err(|e| InferError::Runtime(format!("Core lock poisoned: {}", e)))?;
-
-                let sentences = Self::split_sentences(&text);
-                for sentence in &sentences {
-                    Self::synthesize_sentence(&mut core_guard, &tokenizer, sentence, &tx)?;
-                }
-
-                Ok(())
-            })();
-
-            if let Err(e) = result {
-                let _ = tx.blocking_send(Err(e));
             }
         });
-    }
-}
 
-impl Sink<String> for PocketTts {
-    type Error = InferError;
-
-    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
-        Poll::Ready(Ok(()))
+        Ok(Self { text_tx, audio_rx })
     }
 
-    fn start_send(self: Pin<&mut Self>, item: String) -> Result<()> {
-        let this = self.get_mut();
-        this.pending.push_back(item);
-        if let Some(waker) = this.stream_waker.take() {
-            waker.wake();
+    pub fn text_tx(&self) -> mpsc::Sender<String> {
+        self.text_tx.clone()
+    }
+
+    pub async fn send(&self, text: String) -> Result<(), InferError> {
+        self.text_tx
+            .send(text)
+            .await
+            .map_err(|error| InferError::Runtime(format!("Failed to send text: {}", error)))
+    }
+
+    pub async fn recv(&mut self) -> Option<Vec<i16>> {
+        self.audio_rx.recv().await
+    }
+
+    pub fn try_recv(&mut self) -> Option<Vec<i16>> {
+        match self.audio_rx.try_recv() {
+            Ok(text) => Some(text),
+            _ => None,
         }
-        Ok(())
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<()>> {
-        let this = self.get_mut();
-        this.closed = true;
-        if let Some(waker) = this.stream_waker.take() {
-            waker.wake();
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl Stream for PocketTts {
-    type Item = Result<AudioSample>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        // Poll current chunk receiver
-        if let Some(rx) = this.chunk_rx.as_mut() {
-            match rx.poll_recv(cx) {
-                Poll::Ready(Some(chunk)) => return Poll::Ready(Some(chunk)),
-                Poll::Ready(None) => {
-                    // Channel closed — synthesis done for this text.
-                    // Yield empty AudioSample as end-of-utterance marker.
-                    this.chunk_rx = None;
-                    let marker = AudioSample {
-                        data: AudioData::Pcm(Tensor::new(vec![0], vec![]).unwrap()),
-                        sample_rate: SAMPLE_RATE,
-                    };
-                    return Poll::Ready(Some(Ok(marker)));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
-        }
-
-        // Start synthesis for next pending text
-        if let Some(text) = this.pending.pop_front() {
-            this.start_synthesis(text);
-            // Re-poll the new receiver
-            if let Some(rx) = this.chunk_rx.as_mut() {
-                match rx.poll_recv(cx) {
-                    Poll::Ready(Some(chunk)) => return Poll::Ready(Some(chunk)),
-                    Poll::Ready(None) => {
-                        this.chunk_rx = None;
-                    }
-                    Poll::Pending => return Poll::Pending,
-                }
-            }
-        }
-
-        // Stream complete when closed, pending empty, and no inflight
-        if this.closed {
-            return Poll::Ready(None);
-        }
-
-        // Nothing to do yet — park
-        this.stream_waker = Some(cx.waker().clone());
-        Poll::Pending
-    }
-}
-
-// Ensure PocketTts is Send
-fn _assert_send() {
-    fn assert<T: Send>() {}
-    assert::<PocketTts>();
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_prepare_text_capitalizes_first_char() {
-        let (text, _) = PocketTts::prepare_text("hello world this is a test.");
-        assert!(text.starts_with('H'));
-    }
-
-    #[test]
-    fn test_prepare_text_adds_period() {
-        let (text, _) = PocketTts::prepare_text("Hello world this is a test");
-        assert!(text.ends_with('.'));
-    }
-
-    #[test]
-    fn test_prepare_text_keeps_existing_punctuation() {
-        let (text, _) = PocketTts::prepare_text("Hello world this is a test?");
-        assert!(text.ends_with('?'));
-        assert!(!text.ends_with("?."));
-    }
-
-    #[test]
-    fn test_prepare_text_pads_short_text() {
-        let (text, _) = PocketTts::prepare_text("hello");
-        assert!(text.starts_with("        "));
-        assert!(text.contains("Hello."));
-    }
-
-    #[test]
-    fn test_prepare_text_no_pad_long_text() {
-        let (text, _) = PocketTts::prepare_text("one two three four five");
-        assert!(!text.starts_with(' '));
-    }
-
-    #[test]
-    fn test_prepare_text_replaces_newlines() {
-        let (text, _) = PocketTts::prepare_text("hello\nworld this is a test");
-        assert!(!text.contains('\n'));
-        assert!(text.contains("Hello world"));
-    }
-
-    #[test]
-    fn test_prepare_text_frames_after_eos_short() {
-        let (_, frames) = PocketTts::prepare_text("Hi");
-        assert_eq!(frames, 5); // 3 + 2 for <= 4 words
-    }
-
-    #[test]
-    fn test_prepare_text_frames_after_eos_long() {
-        let (_, frames) = PocketTts::prepare_text("This is a longer sentence with many words");
-        assert_eq!(frames, 3); // 1 + 2 for > 4 words
-    }
-
-    #[test]
-    fn test_prepare_text_empty_string() {
-        let (text, frames) = PocketTts::prepare_text("");
-        assert_eq!(frames, 5); // 0 words <= 4, so 3+2
-        // Empty string gets short-text padding (0 words < 5)
-        assert_eq!(text, "        ");
-    }
-
-    #[test]
-    fn test_prepare_text_single_word() {
-        let (text, _) = PocketTts::prepare_text("test");
-        assert!(text.starts_with("        "));
-        assert!(text.ends_with('.'));
-        assert!(text.contains("Test"));
-    }
-
-    #[test]
-    fn test_split_sentences_basic() {
-        let sentences = PocketTts::split_sentences("Hello world. How are you? I am fine!");
-        assert_eq!(
-            sentences,
-            vec!["Hello world.", "How are you?", "I am fine!"]
-        );
-    }
-
-    #[test]
-    fn test_split_sentences_semicolons() {
-        let sentences = PocketTts::split_sentences("First part; second part.");
-        assert_eq!(sentences, vec!["First part;", "second part."]);
-    }
-
-    #[test]
-    fn test_split_sentences_no_punctuation() {
-        let sentences = PocketTts::split_sentences("No punctuation here");
-        assert_eq!(sentences, vec!["No punctuation here"]);
-    }
-
-    #[test]
-    fn test_split_sentences_single_sentence() {
-        let sentences = PocketTts::split_sentences("Just one sentence.");
-        assert_eq!(sentences, vec!["Just one sentence."]);
-    }
-
-    #[test]
-    fn test_split_sentences_empty() {
-        let sentences = PocketTts::split_sentences("");
-        assert!(sentences.is_empty());
     }
 }

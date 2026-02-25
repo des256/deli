@@ -1,32 +1,21 @@
 use {
-    audio::{AudioData, AudioOut, AudioOutConfig},
+    audio::*,
     base::*,
-    futures_util::{SinkExt, StreamExt},
-    inference::Inference,
-    std::{
-        io::{self, Write},
-        time::Duration,
-    },
+    inference::*,
+    std::io::{self, Write},
 };
 
 const POCKET_VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
 const SAMPLE_RATE: usize = 24000;
-const MAX_TOKENS: usize = 2048;
+//const MAX_TOKENS: usize = 2048;
 const MAX_HISTORY_TURNS: usize = 10;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), InferError> {
     base::init_stdout_logger();
 
     // Initialize inference
-    #[cfg(feature = "cuda")]
-    let inference = Inference::cuda(0)?;
-    #[cfg(feature = "cuda")]
-    log_info!("CUDA inference initialized");
-    #[cfg(not(feature = "cuda"))]
-    let inference = Inference::cpu()?;
-    #[cfg(not(feature = "cuda"))]
-    log_info!("CPU inference initialized");
+    let inference = Inference::new().map_err(|e| InferError::Runtime(e.to_string()))?;
 
     // Load LLM
     log_info!("Loading LLM...");
@@ -34,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //let chat_format = ChatFormat::Gemma;
     //let mut llm = inference.use_llama32()?.with_max_tokens(MAX_TOKENS);
     //let chat_format = ChatFormat::Llama3;
-    let mut llm = inference.use_phi3()?.with_max_tokens(MAX_TOKENS);
+    let mut llm = inference.use_phi3(&onnx::Executor::Cuda(0))?;
     let chat_format = ChatFormat::Phi3;
     //let mut llm = inference.use_smollm3()?.with_max_tokens(MAX_TOKENS);
     //let chat_format = ChatFormat::ChatML;
@@ -42,7 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load Pocket TTS
     log_info!("Loading TTS...");
-    let mut tts = inference.use_pocket_tts(&POCKET_VOICE_PATH)?;
+    let mut tts = inference.use_pocket(&onnx::Executor::Cpu, &POCKET_VOICE_PATH)?;
+    let tts_text_tx = tts.text_tx();
     log_info!("Pocket TTS loaded");
 
     // Initialize AudioOut
@@ -56,6 +46,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await;
     log_info!("Audio output ready");
 
+    // TTS-> AudioOut pump
+    tokio::spawn({
+        async move {
+            while let Some(sample) = tts.recv().await {
+                audioout
+                    .play(AudioSample {
+                        data: sample,
+                        sample_rate: SAMPLE_RATE,
+                    })
+                    .await;
+            }
+        }
+    });
+
     // Conversation history: (user_message, assistant_response)
     let mut history: Vec<(String, String)> = Vec::new();
 
@@ -65,11 +69,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     loop {
         // Print prompt
         print!("> ");
-        io::stdout().flush()?;
+        io::stdout()
+            .flush()
+            .map_err(|e| InferError::Runtime(e.to_string()))?;
 
         // Read user input
         let mut user_input = String::new();
-        io::stdin().read_line(&mut user_input)?;
+        io::stdin()
+            .read_line(&mut user_input)
+            .map_err(|e| InferError::Runtime(e.to_string()))?;
         let user_input = user_input.trim();
 
         // Exit on empty input
@@ -92,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Generate LLM response (streaming) and pipeline sentences to TTS
         log_info!("Generating response...");
-        if let Err(e) = llm.forward(&prompt) {
+        if let Err(e) = llm.send(&prompt).await {
             log_error!("LLM forward failed: {}", e);
             eprintln!("Error starting generation: {}", e);
             continue;
@@ -104,13 +112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut response = String::new();
         let mut sentence_buf = String::new();
         let mut tts_error = false;
-        let mut total_samples = 0usize;
-        let mut sentences_sent = 0usize;
-        let mut sentences_done = 0usize;
 
         loop {
             match llm.recv().await {
-                Some(Ok(token)) => {
+                Some(LlmToken::Text(token)) => {
                     print!("{}", token);
                     io::stdout().flush().ok();
                     response.push_str(&token);
@@ -122,25 +127,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         sentence_buf.clear();
                         if !sentence.is_empty() {
                             eprint!("\n[sent.]\n");
-                            if let Err(e) = tts.send(sentence).await {
+                            if let Err(e) = tts_text_tx.send(sentence).await {
                                 log_error!("TTS send failed: {}", e);
                                 tts_error = true;
-                            } else {
-                                sentences_sent += 1;
                             }
                         }
                     }
-
-                    // Drain any ready TTS audio without blocking
-                    sentences_done +=
-                        drain_ready_audio(&mut tts, &mut audioout, &mut total_samples).await;
                 }
-                Some(Err(e)) => {
-                    log_error!("LLM generation error: {}", e);
-                    eprintln!("\nError during generation: {}", e);
+                Some(LlmToken::Eos) => {
                     break;
                 }
-                None => break,
+                None => {
+                    log_error!("LLM stream ended");
+                    break;
+                }
             }
         }
         println!(); // Newline after streamed output
@@ -153,45 +153,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let remaining = sentence_buf.trim().to_string();
         if !remaining.is_empty() && !tts_error {
             eprint!("\nsent.");
-            if let Err(e) = tts.send(remaining).await {
+            if let Err(e) = tts_text_tx.send(remaining).await {
                 log_error!("TTS send failed: {}", e);
-                tts_error = true;
-            } else {
-                sentences_sent += 1;
-            }
-        }
-
-        // Drain all remaining TTS audio until every sentence has been synthesized.
-        // Each sentence produces an end-of-utterance marker (empty PCM) when done.
-        while sentences_done < sentences_sent && !tts_error {
-            match tts.next().await {
-                Some(Ok(sample)) => {
-                    let n = match &sample.data {
-                        AudioData::Pcm(tensor) => tensor.data.len(),
-                    };
-                    if n == 0 {
-                        sentences_done += 1;
-                        continue;
-                    }
-                    total_samples += n;
-                    audioout.play(sample).await;
-                }
-                Some(Err(e)) => {
-                    log_error!("TTS synthesis failed: {}", e);
-                    eprintln!("Error synthesizing speech: {}", e);
-                    tts_error = true;
-                }
-                None => break,
             }
         }
 
         // Add to history
         history.push((user_input.to_string(), response.clone()));
-
-        log_info!("Streamed {} total audio samples", total_samples);
-
-        // Brief wait for remaining audio to drain from the ring buffer.
-        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
     log_info!("Chat session ended");
@@ -206,40 +174,6 @@ fn ends_with_sentence_boundary(text: &str) -> bool {
         trimmed.as_bytes().last(),
         Some(b'.' | b'!' | b'?' | b':' | b';')
     )
-}
-
-/// Drain any TTS audio chunks that are immediately ready, without blocking.
-/// Returns the number of end-of-utterance markers received (completed sentences).
-async fn drain_ready_audio(
-    tts: &mut inference::tts::pocket::PocketTts,
-    audioout: &mut AudioOut,
-    total_samples: &mut usize,
-) -> usize {
-    use futures_util::FutureExt;
-    let mut completed = 0;
-    loop {
-        // Poll tts.next() without waiting — return immediately if nothing ready
-        let maybe = tts.next().now_or_never();
-        match maybe {
-            Some(Some(Ok(sample))) => {
-                let n = match &sample.data {
-                    AudioData::Pcm(tensor) => tensor.data.len(),
-                };
-                if n == 0 {
-                    completed += 1;
-                    continue;
-                }
-                *total_samples += n;
-                audioout.play(sample).await;
-            }
-            Some(Some(Err(e))) => {
-                base::log_error!("TTS drain error: {}", e);
-                break;
-            }
-            _ => break, // Nothing ready or stream ended
-        }
-    }
-    completed
 }
 
 #[derive(Clone, Copy)]

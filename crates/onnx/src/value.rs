@@ -45,7 +45,6 @@ impl TensorElement for bool {
     }
 }
 
-/// ONNX Runtime value (tensor)
 pub struct Value {
     onnx: Arc<Onnx>,
     value: *mut ffi::OrtValue,
@@ -345,6 +344,27 @@ impl Value {
             onnx: Arc::clone(&onnx),
             value,
             _data: Box::new([]),
+        }
+    }
+
+    pub fn deepclone(&self) -> Result<Self, OnnxError> {
+        let shape = self.tensor_shape()?;
+        let shape_usize: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
+        let elem_type = self.tensor_element_type()?;
+        match elem_type {
+            ffi::ONNXTensorElementDataType::Float => {
+                Self::from_slice(&self.onnx, &shape_usize, self.extract_tensor::<f32>()?)
+            }
+            ffi::ONNXTensorElementDataType::Int64 => {
+                Self::from_slice(&self.onnx, &shape_usize, self.extract_tensor::<i64>()?)
+            }
+            ffi::ONNXTensorElementDataType::Bool => {
+                Self::from_slice(&self.onnx, &shape_usize, self.extract_tensor::<bool>()?)
+            }
+            other => Err(OnnxError::runtime_error(&format!(
+                "Unsupported element type {:?} for deepclone",
+                other
+            ))),
         }
     }
 }
