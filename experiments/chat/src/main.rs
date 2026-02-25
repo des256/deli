@@ -5,25 +5,11 @@ use {
     inference::Inference,
     std::{
         io::{self, Write},
-        path::PathBuf,
         time::Duration,
     },
 };
 
-const GEMMA3_MODEL_PATH: &str = "data/gemma3/model_int8.onnx";
-const GEMMA3_TOKENIZER_PATH: &str = "data/gemma3/tokenizer.json";
-const LLAMA32_MODEL_PATH: &str = "data/llama32/model_int8.onnx";
-const LLAMA32_TOKENIZER_PATH: &str = "data/llama32/tokenizer.json";
-const PHI3_MODEL_PATH: &str = "data/phi3/phi3-mini-4k-instruct-cuda-int4-rtn-block-32.onnx";
-const PHI3_TOKENIZER_PATH: &str = "data/phi3/tokenizer.json";
-const SMOLLM3_MODEL_PATH: &str = "data/smollm3/model_int8.onnx";
-const SMOLLM3_TOKENIZER_PATH: &str = "data/smollm3/tokenizer.json";
-const POCKET_TEXT_CONDITIONER: &str = "data/pocket/text_conditioner.onnx";
-const POCKET_FLOW_MAIN: &str = "data/pocket/flow_lm_main_int8.onnx";
-const POCKET_FLOW_STEP: &str = "data/pocket/flow_lm_flow_int8.onnx";
-const POCKET_MIMI_DECODER: &str = "data/pocket/mimi_decoder_int8.onnx";
-const POCKET_TOKENIZER: &str = "data/pocket/tokenizer.json";
-const POCKET_VOICE: &str = "data/pocket/voices/stephen.bin";
+const POCKET_VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
 const SAMPLE_RATE: usize = 24000;
 const MAX_TOKENS: usize = 2048;
 const MAX_HISTORY_TURNS: usize = 10;
@@ -31,52 +17,6 @@ const MAX_HISTORY_TURNS: usize = 10;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     base::init_stdout_logger();
-
-    // Validate model files exist
-    log_info!("Validating model files...");
-    let gemma3_model = PathBuf::from(GEMMA3_MODEL_PATH);
-    let gemma3_tokenizer = PathBuf::from(GEMMA3_TOKENIZER_PATH);
-    let llama32_model = PathBuf::from(LLAMA32_MODEL_PATH);
-    let llama32_tokenizer = PathBuf::from(LLAMA32_TOKENIZER_PATH);
-    let phi3_model = PathBuf::from(PHI3_MODEL_PATH);
-    let phi3_tokenizer = PathBuf::from(PHI3_TOKENIZER_PATH);
-    let smollm3_model = PathBuf::from(SMOLLM3_MODEL_PATH);
-    let smollm3_tokenizer = PathBuf::from(SMOLLM3_TOKENIZER_PATH);
-    let pocket_paths = [
-        POCKET_TEXT_CONDITIONER,
-        POCKET_FLOW_MAIN,
-        POCKET_FLOW_STEP,
-        POCKET_MIMI_DECODER,
-        POCKET_TOKENIZER,
-        POCKET_VOICE,
-    ];
-
-    let model_paths = [
-        &gemma3_model,
-        &gemma3_tokenizer,
-        &llama32_model,
-        &llama32_tokenizer,
-        &phi3_model,
-        &phi3_tokenizer,
-        &smollm3_model,
-        &smollm3_tokenizer,
-    ];
-
-    for path in &model_paths {
-        if !path.exists() {
-            eprintln!("Model file missing: {}", path.display());
-            std::process::exit(1);
-        }
-    }
-
-    for path in &pocket_paths {
-        if !PathBuf::from(path).exists() {
-            eprintln!("Pocket TTS model file missing: {}", path);
-            std::process::exit(1);
-        }
-    }
-
-    log_info!("Model files validated");
 
     // Initialize inference
     #[cfg(feature = "cuda")]
@@ -90,28 +30,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load LLM
     log_info!("Loading LLM...");
-    //let mut llm = inference.use_gemma3(&gemma3_model, &gemma3_tokenizer)?.with_max_tokens(MAX_TOKENS);
+    //let mut llm = inference.use_gemma3()?.with_max_tokens(MAX_TOKENS);
     //let chat_format = ChatFormat::Gemma;
-    //let mut llm = inference.use_llama32(&llama32_model, &llama32_tokenizer)?.with_max_tokens(MAX_TOKENS);
+    //let mut llm = inference.use_llama32()?.with_max_tokens(MAX_TOKENS);
     //let chat_format = ChatFormat::Llama3;
-    let mut llm = inference
-        .use_phi3(&phi3_model, &phi3_tokenizer)?
-        .with_max_tokens(MAX_TOKENS);
+    let mut llm = inference.use_phi3()?.with_max_tokens(MAX_TOKENS);
     let chat_format = ChatFormat::Phi3;
-    //let mut llm = inference.use_smollm3(&smollm3_model, &smollm3_tokenizer)?.with_max_tokens(MAX_TOKENS);
+    //let mut llm = inference.use_smollm3()?.with_max_tokens(MAX_TOKENS);
     //let chat_format = ChatFormat::ChatML;
     log_info!("LLM loaded");
 
     // Load Pocket TTS
     log_info!("Loading TTS...");
-    let mut tts = inference.use_pocket_tts(
-        POCKET_TEXT_CONDITIONER,
-        POCKET_FLOW_MAIN,
-        POCKET_FLOW_STEP,
-        POCKET_MIMI_DECODER,
-        POCKET_TOKENIZER,
-        POCKET_VOICE,
-    )?;
+    let mut tts = inference.use_pocket_tts(&POCKET_VOICE_PATH)?;
     log_info!("Pocket TTS loaded");
 
     // Initialize AudioOut

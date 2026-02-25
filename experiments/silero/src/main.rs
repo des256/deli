@@ -1,4 +1,8 @@
-use {audio::{AudioData, AudioIn, AudioInConfig}, base::*, inference::Inference};
+use {
+    audio::{AudioData, AudioIn, AudioInConfig},
+    base::*,
+    inference::Inference,
+};
 
 const VAD_FRAME_SIZE: usize = 512;
 const SPEECH_THRESHOLD: f32 = 0.5;
@@ -7,16 +11,11 @@ const SPEECH_THRESHOLD: f32 = 0.5;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     base::init_stdout_logger();
 
-    let model_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "data/silero/silero_vad.onnx".to_string());
-
     log_info!("Silero VAD");
-    log_info!("Model: {}", model_path);
 
     // Load VAD model
     let inference = Inference::cpu()?;
-    let mut vad = inference.use_silero_vad(&model_path)?;
+    let mut vad = inference.use_silero_vad()?;
     log_info!("Model loaded");
 
     // Open audio input at 16kHz with 512-sample chunks (matching VAD frame size)

@@ -1,4 +1,4 @@
-use crate::{llm::Llama32, Inference};
+use crate::{Inference, llm::Llama32};
 
 #[test]
 fn test_llama32_is_send() {
@@ -70,13 +70,7 @@ fn test_llama32_model_io_verification() {
 async fn test_llama32_integration() {
     // Integration test for forward/recv generation
     let inference = Inference::cpu().unwrap();
-    let mut model = inference
-        .use_llama32(
-            "../../data/llama32/model_int8.onnx",
-            "../../data/llama32/tokenizer.json",
-        )
-        .unwrap()
-        .with_max_tokens(20);
+    let mut model = inference.use_llama32().unwrap().with_max_tokens(20);
 
     // Start generation
     model.forward("Hello").unwrap();
@@ -106,10 +100,7 @@ async fn test_llama32_integration() {
 
     // Verify concatenated output is non-empty and >= 5 chars
     let output = tokens.join("");
-    assert!(
-        !output.is_empty(),
-        "Generated output is empty"
-    );
+    assert!(!output.is_empty(), "Generated output is empty");
     assert!(
         output.len() >= 5,
         "Generated output is too short: {} chars, expected >= 5",

@@ -1,5 +1,5 @@
-use base::log_info;
 use crate::error::{InferError, Result};
+use base::log_info;
 use onnx::Session;
 
 const BLANK_ID: i64 = 1024;
@@ -48,10 +48,9 @@ impl AsrCore {
             ENCODER_DIM as i64,
             CACHE_TIME_CONTEXT as i64,
         ])?;
-        let cache_last_channel_len = onnx::Value::from_slice(&[1], &[0i64])
-            .map_err(|e| {
-                InferError::Runtime(format!("Failed to create cache_last_channel_len: {}", e))
-            })?;
+        let cache_last_channel_len = onnx::Value::from_slice(&[1], &[0i64]).map_err(|e| {
+            InferError::Runtime(format!("Failed to create cache_last_channel_len: {}", e))
+        })?;
 
         Ok(Self {
             encoder,
@@ -67,6 +66,7 @@ impl AsrCore {
         })
     }
 
+    /*
     /// Reset decoder LSTM state only (preserves encoder caches).
     ///
     /// Use between chunks in batch mode to prevent decoder state corruption
@@ -101,16 +101,13 @@ impl AsrCore {
             })?;
         Ok(())
     }
+    */
 
     /// Decode a chunk of mel features into text.
     ///
     /// Features should be in channels-first layout: [128 * num_frames].
     /// Encoder caches and decoder states persist across chunks for streaming.
-    pub fn decode_chunk(
-        &mut self,
-        features: &[f32],
-        num_frames: usize,
-    ) -> Result<String> {
+    pub fn decode_chunk(&mut self, features: &[f32], num_frames: usize) -> Result<String> {
         if features.len() != num_frames * 128 {
             return Err(InferError::Runtime(format!(
                 "Features length {} does not match num_frames {} * 128",
@@ -140,18 +137,12 @@ impl AsrCore {
     }
 
     /// Run the streaming encoder with cache state.
-    fn run_encoder(
-        &mut self,
-        features: &[f32],
-        num_frames: usize,
-    ) -> Result<(Vec<f32>, usize)> {
+    fn run_encoder(&mut self, features: &[f32], num_frames: usize) -> Result<(Vec<f32>, usize)> {
         let audio_signal = onnx::Value::from_slice(&[1, 128, num_frames], features)
             .map_err(|e| InferError::Runtime(format!("Failed to create audio_signal: {}", e)))?;
 
         let length = onnx::Value::from_slice(&[1], &[num_frames as i64])
-            .map_err(|e| {
-                InferError::Runtime(format!("Failed to create length: {}", e))
-            })?;
+            .map_err(|e| InferError::Runtime(format!("Failed to create length: {}", e)))?;
 
         let mut outputs = self
             .encoder
@@ -174,9 +165,9 @@ impl AsrCore {
             .map_err(|e| InferError::Runtime(format!("Encoder inference failed: {}", e)))?;
 
         // Extract encoder output: [batch, 1024, T']
-        let encoder_out_shape = outputs[0]
-            .tensor_shape()
-            .map_err(|e| InferError::Runtime(format!("Failed to get encoder output shape: {}", e)))?;
+        let encoder_out_shape = outputs[0].tensor_shape().map_err(|e| {
+            InferError::Runtime(format!("Failed to get encoder output shape: {}", e))
+        })?;
         let encoder_out_elem_type = outputs[0]
             .tensor_element_type()
             .map_err(|e| InferError::Runtime(format!("Failed to get encoder elem type: {}", e)))?;
@@ -208,9 +199,17 @@ impl AsrCore {
         // Log encoder output stats
         if !encoder_out.is_empty() {
             let min = encoder_out.iter().cloned().fold(f32::INFINITY, f32::min);
-            let max = encoder_out.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+            let max = encoder_out
+                .iter()
+                .cloned()
+                .fold(f32::NEG_INFINITY, f32::max);
             let mean = encoder_out.iter().sum::<f32>() / encoder_out.len() as f32;
-            log_info!("encoder_out stats: min={:.4}, max={:.4}, mean={:.6}", min, max, mean);
+            log_info!(
+                "encoder_out stats: min={:.4}, max={:.4}, mean={:.6}",
+                min,
+                max,
+                mean
+            );
         }
 
         let mut encoder_frame = vec![0.0f32; ENCODER_DIM];
@@ -248,28 +247,30 @@ impl AsrCore {
                 if frame_idx == 0 && decoded_tokens.is_empty() {
                     // Log first frame's logits for debugging
                     let top5: Vec<(usize, f32)> = {
-                        let mut indexed: Vec<(usize, f32)> = logits.iter().copied().enumerate().collect();
+                        let mut indexed: Vec<(usize, f32)> =
+                            logits.iter().copied().enumerate().collect();
                         indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
                         indexed.into_iter().take(5).collect()
                     };
                     log_info!(
                         "frame0 logits: len={}, predicted={}, blank={}, top5={:?}",
-                        logits.len(), predicted, self.blank_id, top5
+                        logits.len(),
+                        predicted,
+                        self.blank_id,
+                        top5
                     );
                 }
 
                 if predicted == self.blank_id {
                     // Restore prediction network states on blank
-                    self.state1 =
-                        onnx::Value::from_slice(&[2, 1, DECODER_STATE_DIM], &state1_data)
-                            .map_err(|e| {
-                                InferError::Runtime(format!("Failed to restore state1: {}", e))
-                            })?;
-                    self.state2 =
-                        onnx::Value::from_slice(&[2, 1, DECODER_STATE_DIM], &state2_data)
-                            .map_err(|e| {
-                                InferError::Runtime(format!("Failed to restore state2: {}", e))
-                            })?;
+                    self.state1 = onnx::Value::from_slice(&[2, 1, DECODER_STATE_DIM], &state1_data)
+                        .map_err(|e| {
+                            InferError::Runtime(format!("Failed to restore state1: {}", e))
+                        })?;
+                    self.state2 = onnx::Value::from_slice(&[2, 1, DECODER_STATE_DIM], &state2_data)
+                        .map_err(|e| {
+                            InferError::Runtime(format!("Failed to restore state2: {}", e))
+                        })?;
                     break;
                 }
 
@@ -301,7 +302,12 @@ impl AsrCore {
                     ("input_states_1", &self.state1),
                     ("input_states_2", &self.state2),
                 ],
-                &["outputs", "prednet_lengths", "output_states_1", "output_states_2"],
+                &[
+                    "outputs",
+                    "prednet_lengths",
+                    "output_states_1",
+                    "output_states_2",
+                ],
             )
             .map_err(|e| InferError::Runtime(format!("Decoder-joint inference failed: {}", e)))?;
 

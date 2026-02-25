@@ -2,7 +2,6 @@ use {
     audio::{AudioData, AudioSample},
     base::*,
     inference::{Inference, asr::Transcription},
-    std::path::PathBuf,
     std::time::Instant,
 };
 
@@ -19,10 +18,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let wav_path = &args[1];
-    let model_dir = args
-        .get(2)
-        .map(|s| s.as_str())
-        .unwrap_or("data/parakeet");
 
     // Read WAV file
     let reader = hound::WavReader::open(wav_path)?;
@@ -77,19 +72,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let duration_secs = samples.len() as f64 / SAMPLE_RATE as f64;
     log_info!("Audio: {:.1}s, {} samples", duration_secs, samples.len());
 
-    // Validate model directory
-    let dir = PathBuf::from(model_dir);
-    let encoder_path = dir.join("encoder.onnx");
-    let decoder_joint_path = dir.join("decoder_joint.onnx");
-    let vocab_path = dir.join("tokenizer.model");
-
-    for path in [&encoder_path, &decoder_joint_path, &vocab_path] {
-        if !path.exists() {
-            eprintln!("Missing model file: {}", path.display());
-            std::process::exit(1);
-        }
-    }
-
     // Initialize inference
     #[cfg(feature = "cuda")]
     let inference = Inference::cuda(0)?;
@@ -98,11 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     log_info!("Loading Parakeet models...");
 
-    let mut asr = inference.use_parakeet_asr(
-        &encoder_path,
-        &decoder_joint_path,
-        &vocab_path,
-    )?;
+    let mut asr = inference.use_parakeet()?;
 
     // Feed audio in chunks via the streaming API
     let start = Instant::now();

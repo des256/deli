@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(feature = "cuda"))]
     let inference = Inference::cpu()?;
 
-    let mut asr = inference.use_parakeet_asr(&encoder_path, &decoder_joint_path, &vocab_path)?;
+    let mut asr = inference.use_parakeet()?;
     let mut audioin = AudioIn::open(None).await;
     let mut printed_len = 0;
 

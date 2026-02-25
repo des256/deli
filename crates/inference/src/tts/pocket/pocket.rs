@@ -19,6 +19,12 @@ use {
     tokio::sync::mpsc,
 };
 
+const POCKET_TEXT_CONDITIONER_PATH: &str = "data/pocket/text_conditioner.onnx";
+const POCKET_FLOW_MAIN_PATH: &str = "data/pocket/flow_lm_main_int8.onnx";
+const POCKET_FLOW_STEP_PATH: &str = "data/pocket/flow_lm_flow_int8.onnx";
+const POCKET_MIMI_DECODER_PATH: &str = "data/pocket/mimi_decoder_int8.onnx";
+const POCKET_TOKENIZER_PATH: &str = "data/pocket/tokenizer.json";
+
 const SAMPLE_RATE: usize = 24000;
 
 /// Channel capacity for streaming audio chunks between the synthesis
@@ -114,14 +120,18 @@ impl PocketTts {
     /// * `voice_latents` - Pre-encoded voice latents from the mimi encoder (flat f32 slice,
     ///   shape [1, T, 1024] where T = voice_latents.len() / 1024)
     pub fn new(
-        text_conditioner: Session,
-        flow_main: Session,
-        flow_step: Session,
-        mimi_decoder: Session,
-        tokenizer: Tokenizer,
-        voice_latents_path: impl AsRef<Path>,
+        onnx: &Arc<onnx::Onnx>,
+        executor: &onnx::Executor,
+        voice_path: impl AsRef<Path>,
     ) -> Result<Self> {
-        let voice_latents = load_voice_latents(voice_latents_path)?;
+        let text_conditioner = onnx.create_session(&executor, POCKET_TEXT_CONDITIONER_PATH)?;
+        let flow_main = onnx.create_session(&executor, POCKET_FLOW_MAIN_PATH)?;
+        let flow_step = onnx.create_session(&executor, POCKET_FLOW_STEP_PATH)?;
+        let mimi_decoder = onnx.create_session(&executor, POCKET_MIMI_DECODER_PATH)?;
+        let tokenizer = tokenizers::Tokenizer::from_file(POCKET_TOKENIZER_PATH)
+            .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
+
+        let voice_latents = load_voice_latents(voice_path)?;
 
         // Create PocketCore
         let mut core = PocketCore::new(text_conditioner, flow_main, flow_step, mimi_decoder)?;

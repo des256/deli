@@ -5,7 +5,6 @@ use crate::{
 use audio::AudioSample;
 use futures_core::Stream;
 use futures_sink::Sink;
-use onnx::Session;
 use std::{
     collections::VecDeque,
     future::Future,
@@ -16,6 +15,11 @@ use std::{
 };
 
 use super::asrcore::AsrCore;
+
+const SHERPA_ENCODER_PATH: &str = "data/sherpa/encoder-epoch-99-avg-1-chunk-16-left-128";
+const SHERPA_DECODER_PATH: &str = "data/sherpa/decoder-epoch-99-avg-1-chunk-16-left-128.onnx";
+const SHERPA_JOINER_PATH: &str = "data/sherpa/joiner-epoch-99-avg-1-chunk-16-left-128.onnx";
+const SHERPA_TOKENS_PATH: &str = "data/sherpa/tokens.txt";
 
 const REQUIRED_SAMPLE_RATE: usize = 16000;
 const HOP_SIZE: usize = 160; // 10ms hop at 16kHz
@@ -57,14 +61,13 @@ impl Sherpa {
     ///
     /// # Errors
     /// Returns an error if the token file is invalid or model shapes are unexpected.
-    pub fn new<P: AsRef<Path>>(
-        encoder: Session,
-        decoder: Session,
-        joiner: Session,
-        tokens_path: P,
-    ) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(onnx: &Arc<onnx::Onnx>, executor: &onnx::Executor) -> Result<Self> {
+        let encoder = onnx.create_session(executor, SHERPA_ENCODER_PATH)?;
+        let decoder = onnx.create_session(executor, SHERPA_DECODER_PATH)?;
+        let joiner = onnx.create_session(executor, SHERPA_JOINER_PATH)?;
+
         // Load tokens
-        let tokens = super::tokens::load_tokens(tokens_path)?;
+        let tokens = super::tokens::load_tokens(SHERPA_TOKENS_PATH)?;
 
         // Discover encoder state input/output names
         let encoder_state_names = AsrCore::discover_encoder_states(&encoder)?;

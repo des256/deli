@@ -1,9 +1,8 @@
 use {
     audio::{AudioData, AudioSample},
     base::*,
-    futures_util::{FutureExt, SinkExt, StreamExt},
     inference::{Inference, asr::Transcription},
-    std::{path::PathBuf, time::Instant},
+    std::time::Instant,
 };
 
 const SAMPLE_RATE: usize = 16000;
@@ -19,15 +18,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Usage: {} <wav-file> [model-dir]", args[0]);
         std::process::exit(1);
     }
-
     let wav_path = &args[1];
-    let model_dir = args.get(2).map(|s| s.as_str()).unwrap_or("data/sherpa");
-    let dir = PathBuf::from(model_dir);
 
     // Read WAV file
     let reader = hound::WavReader::open(wav_path)?;
     let spec = reader.spec();
-    log_info!("WAV: {} Hz, {} ch, {} bit", spec.sample_rate, spec.channels, spec.bits_per_sample);
+    log_info!(
+        "WAV: {} Hz, {} ch, {} bit",
+        spec.sample_rate,
+        spec.channels,
+        spec.bits_per_sample
+    );
 
     let all_samples: Vec<i16> = match spec.sample_format {
         hound::SampleFormat::Int => {
@@ -58,7 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Resample to 16kHz if needed
     let samples = if spec.sample_rate != SAMPLE_RATE as u32 {
-        log_info!("Resampling from {} Hz to {} Hz", spec.sample_rate, SAMPLE_RATE);
+        log_info!(
+            "Resampling from {} Hz to {} Hz",
+            spec.sample_rate,
+            SAMPLE_RATE
+        );
         resample(&mono_samples, spec.sample_rate, SAMPLE_RATE as u32)
     } else {
         mono_samples
@@ -69,12 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load streaming ASR
     let inference = Inference::cpu()?;
-    let mut asr = inference.use_streaming_asr(
-        dir.join("encoder-epoch-99-avg-1-chunk-16-left-128.onnx"),
-        dir.join("decoder-epoch-99-avg-1-chunk-16-left-128.onnx"),
-        dir.join("joiner-epoch-99-avg-1-chunk-16-left-128.onnx"),
-        dir.join("tokens.txt"),
-    )?;
+    let mut asr = inference.use_parakeet()?;
     log_info!("Model loaded");
 
     // Feed audio in chunks, simulating a real-time stream
@@ -90,15 +90,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         asr.send(sample).await?;
 
         // Drain any ready transcriptions
-        while let Some(result) = asr.next().now_or_never() {
+        while let Some(result) = asr.try_recv() {
             match result {
-                Some(Ok(Transcription::Partial { ref text, .. })) => {
+                Ok(Transcription::Partial { ref text, .. }) => {
                     if text.len() > printed_len {
                         print!("{}", &text[printed_len..]);
                         printed_len = text.len();
                     }
                 }
-                Some(Ok(Transcription::Final { ref text, .. })) => {
+                Ok(Transcription::Final { ref text, .. }) => {
                     if text.len() > printed_len {
                         print!("{}", &text[printed_len..]);
                     }
@@ -112,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Close and drain remaining
     asr.close().await?;
-    while let Some(result) = asr.next().await {
+    while let Some(result) = asr.try_recv() {
         match result {
             Ok(Transcription::Partial { ref text, .. }) => {
                 if text.len() > printed_len {
@@ -134,8 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let elapsed = start.elapsed();
-    log_info!("Transcription took {:.2?} for {:.1}s audio ({:.1}x realtime)",
-        elapsed, duration_secs, duration_secs / elapsed.as_secs_f64());
+    log_info!(
+        "Transcription took {:.2?} for {:.1}s audio ({:.1}x realtime)",
+        elapsed,
+        duration_secs,
+        duration_secs / elapsed.as_secs_f64()
+    );
 
     Ok(())
 }

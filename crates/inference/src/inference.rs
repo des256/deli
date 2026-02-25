@@ -1,217 +1,75 @@
-use {crate::error::InferError, candle_core::Device, onnx::Session, std::path::Path};
+use {crate::*, std::path::Path, std::sync::Arc};
 
-#[derive(Debug)]
-enum OnnxDevice {
-    Cpu,
-    #[allow(dead_code)]
-    Cuda(usize),
-}
+const ONNX_VERSION: usize = 24;
 
 #[derive(Debug)]
 pub struct Inference {
-    device: Device,
-    onnx_device: OnnxDevice,
+    onnx: Arc<onnx::Onnx>,
 }
 
 impl Inference {
-    pub fn cpu() -> Result<Self, InferError> {
-        onnx::init()?;
-        base::log_info!("Inference device: CPU");
-        Ok(Self {
-            device: Device::Cpu,
-            onnx_device: OnnxDevice::Cpu,
-        })
-    }
-
-    #[cfg(feature = "cuda")]
-    pub fn cuda(ordinal: usize) -> Result<Self, InferError> {
-        onnx::init()?;
-        let device = Device::new_cuda(ordinal)?;
-        if device.is_cuda() {
-            base::log_info!("Inference device: CUDA (ordinal {})", ordinal);
-        } else {
-            base::log_warn!(
-                "Inference device: requested CUDA ordinal {} but device reports non-CUDA",
-                ordinal
-            );
-        }
-        Ok(Self {
-            device,
-            onnx_device: OnnxDevice::Cuda(ordinal),
-        })
-    }
-
-    pub fn device(&self) -> &Device {
-        &self.device
-    }
-
-    pub fn use_pose_detector(
-        &self,
-        model_path: impl AsRef<Path>,
-    ) -> Result<crate::pose_detector::PoseDetector, InferError> {
-        crate::pose_detector::PoseDetector::new(model_path, self.device.clone())
-    }
-
-    pub fn use_whisper(
-        &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
-        config_path: impl AsRef<Path>,
-    ) -> Result<crate::asr::Whisper, InferError> {
-        crate::asr::Whisper::new(model_path, tokenizer_path, config_path, self.device.clone())
+    pub fn new() -> Result<Self, InferError> {
+        let onnx = onnx::Onnx::new(ONNX_VERSION)?;
+        Ok(Self { onnx })
     }
 
     pub fn use_smollm3(
         &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
+        executor: &onnx::Executor,
     ) -> Result<crate::llm::Smollm3, InferError> {
-        let session = self.onnx_session(model_path)?;
-        crate::llm::Smollm3::new(session, tokenizer_path)
+        crate::llm::Smollm3::new(&self.onnx, executor)
     }
 
     pub fn use_llama32(
         &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
+        executor: &onnx::Executor,
     ) -> Result<crate::llm::Llama32, InferError> {
-        let session = self.onnx_session(model_path)?;
-        crate::llm::Llama32::new(session, tokenizer_path)
+        crate::llm::Llama32::new(&self.onnx, executor)
     }
 
-    pub fn use_gemma3(
-        &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::llm::Gemma3, InferError> {
-        let session = self.onnx_session(model_path)?;
-        crate::llm::Gemma3::new(session, tokenizer_path)
+    pub fn use_gemma3(&self, executor: &onnx::Executor) -> Result<crate::llm::Gemma3, InferError> {
+        crate::llm::Gemma3::new(&self.onnx, executor)
     }
 
-    pub fn use_phi3(
-        &self,
-        model_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
-    ) -> Result<crate::llm::Phi3, InferError> {
-        let session = self.onnx_session(model_path)?;
-        crate::llm::Phi3::new(session, tokenizer_path)
-    }
-
-    pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<Session, InferError> {
-        let path = model_path.as_ref();
-        let session = match &self.onnx_device {
-            OnnxDevice::Cpu => onnx::session_builder()?.with_cpu().commit_from_file(path)?,
-            #[cfg(feature = "cuda")]
-            OnnxDevice::Cuda(ordinal) => onnx::session_builder()?
-                .with_cuda(*ordinal as i32)?
-                .commit_from_file(path)?,
-            #[cfg(not(feature = "cuda"))]
-            OnnxDevice::Cuda(_) => {
-                return Err(InferError::Runtime("CUDA feature not enabled".to_string()));
-            }
-        };
-        Ok(session)
+    pub fn use_phi3(&self, executor: &onnx::Executor) -> Result<crate::llm::Phi3, InferError> {
+        crate::llm::Phi3::new(&self.onnx, executor)
     }
 
     pub fn use_kokoro(
         &self,
-        model_path: impl AsRef<Path>,
+        executor: &onnx::Executor,
         voice_path: impl AsRef<Path>,
-        espeak_data_path: Option<&str>,
     ) -> Result<crate::tts::Kokoro, InferError> {
-        let session = self.onnx_session(model_path)?;
-        crate::tts::Kokoro::new(session, voice_path, espeak_data_path)
+        crate::tts::Kokoro::new(&self.onnx, &executor, voice_path)
     }
 
     pub fn use_pocket_tts(
         &self,
-        text_conditioner_path: impl AsRef<Path>,
-        flow_main_path: impl AsRef<Path>,
-        flow_step_path: impl AsRef<Path>,
-        mimi_decoder_path: impl AsRef<Path>,
-        tokenizer_path: impl AsRef<Path>,
-        voice_latents_path: impl AsRef<Path>,
+        executor: &onnx::Executor,
+        voice_path: impl AsRef<Path>,
     ) -> Result<crate::tts::pocket::PocketTts, InferError> {
-        let text_conditioner = self.onnx_session(text_conditioner_path)?;
-        let flow_main = self.onnx_session(flow_main_path)?;
-        let flow_step = self.onnx_session(flow_step_path)?;
-        let mimi_decoder = self.onnx_session(mimi_decoder_path)?;
-
-        let tokenizer = tokenizers::Tokenizer::from_file(tokenizer_path)
-            .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
-
-        crate::tts::pocket::PocketTts::new(
-            text_conditioner,
-            flow_main,
-            flow_step,
-            mimi_decoder,
-            tokenizer,
-            &voice_latents_path,
-        )
+        crate::tts::pocket::PocketTts::new(&self.onnx, &executor, voice_path)
     }
 
-    pub fn use_streaming_asr<P: AsRef<Path>>(
+    pub fn use_sherpa(
         &self,
-        encoder_path: P,
-        decoder_path: P,
-        joiner_path: P,
-        tokens_path: P,
+        executor: &onnx::Executor,
     ) -> Result<crate::asr::sherpa::Sherpa, InferError> {
-        let encoder_session = self.onnx_session(&encoder_path)?;
-        let decoder_session = self.onnx_session(&decoder_path)?;
-        let joiner_session = self.onnx_session(&joiner_path)?;
-        crate::asr::sherpa::Sherpa::new(
-            encoder_session,
-            decoder_session,
-            joiner_session,
-            tokens_path,
-        )
+        crate::asr::sherpa::Sherpa::new(&self.onnx, &executor)
     }
 
-    pub fn use_parakeet_asr<P: AsRef<Path>>(
+    pub fn use_parakeet(
         &self,
-        encoder_path: P,
-        decoder_joint_path: P,
-        vocab_path: P,
+        executor: &onnx::Executor,
     ) -> Result<crate::asr::parakeet::Parakeet, InferError> {
-        let encoder_session = self.onnx_session(&encoder_path)?;
-        let decoder_joint_session = self.onnx_session(&decoder_joint_path)?;
-        crate::asr::parakeet::Parakeet::new(encoder_session, decoder_joint_session, vocab_path)
+        crate::asr::parakeet::Parakeet::new(&self.onnx, &executor)
     }
 
-    pub fn transcribe_parakeet_batch<P: AsRef<Path>>(
-        &self,
-        encoder_path: P,
-        decoder_joint_path: P,
-        vocab_path: P,
-        pcm: &[i16],
-        sample_rate: usize,
-    ) -> Result<String, InferError> {
-        let encoder_session = self.onnx_session(&encoder_path)?;
-        let decoder_joint_session = self.onnx_session(&decoder_joint_path)?;
-        crate::asr::parakeet::transcribe_batch(
-            encoder_session,
-            decoder_joint_session,
-            vocab_path,
-            pcm,
-            sample_rate,
-        )
+    pub fn use_silero_vad(&self) -> Result<crate::vad::SileroVad, InferError> {
+        crate::vad::SileroVad::new(&self.onnx, &executor)
     }
 
-    pub fn use_silero_vad(
-        &self,
-        model_path: impl AsRef<Path>,
-    ) -> Result<crate::vad::SileroVad, InferError> {
-        let session = self.onnx_session(model_path)?;
-        crate::vad::SileroVad::new(session)
-    }
-
-    pub fn use_parakeet_diar(
-        &self,
-        model_path: impl AsRef<Path>,
-    ) -> Result<crate::diar::parakeet::Sortformer, InferError> {
-        let session = self.onnx_session(model_path)?;
-        let config = crate::diar::parakeet::DiarizationConfig::default();
+    pub fn use_parakeet_diar(&self) -> Result<crate::diar::parakeet::Sortformer, InferError> {
         crate::diar::parakeet::Sortformer::new(session, config)
     }
 }

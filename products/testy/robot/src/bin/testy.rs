@@ -11,17 +11,6 @@ use {
 
 const DEFAULT_ADDR: &str = "0.0.0.0:5090";
 
-const WHISPER_MODEL_PATH: &str = "data/whisper/tiny.en/model.safetensors";
-const WHISPER_TOKENIZER_PATH: &str = "data/whisper/tiny.en/tokenizer.json";
-const WHISPER_CONFIG_PATH: &str = "data/whisper/tiny.en/config.json";
-
-const KOKORO_MODEL_PATH: &str = "data/kokoro/kokoro-v1.0.onnx";
-const KOKORO_VOICE_PATH: &str = "data/kokoro/bf_nicole.npy";
-const KOKORO_ESPEAK_DATA_PATH: &str = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
-
-const QWEN3_MODEL_PATH: &str = "data/qwen3/qwen3-4b-q4_k_m.gguf";
-const QWEN3_TOKENIZER_PATH: &str = "data/qwen3/tokenizer.json";
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     base::init_stdout_logger();
@@ -30,10 +19,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let inference = Inference::cuda(0)?;
 
     log_info!("opening audio input");
-    let audioin = AudioIn::open(None).await;
+    let _audioin = AudioIn::open(None).await;
 
     log_info!("opening audio output");
-    let audioout = AudioOut::open(None).await;
+    let _audioout = AudioOut::open(None).await;
 
     tokio::task::spawn(async move {
         log_info!("spawning audio pipeline");
@@ -43,21 +32,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     log_info!("loading ASR model");
-    let asr = inference.use_whisper(
-        WHISPER_MODEL_PATH,
-        WHISPER_TOKENIZER_PATH,
-        WHISPER_CONFIG_PATH,
-    )?;
+    let _asr = inference.use_parakeet()?;
 
     log_info!("loading TTS model");
-    let tts = inference.use_kokoro(
-        KOKORO_MODEL_PATH,
-        KOKORO_VOICE_PATH,
-        Some(KOKORO_ESPEAK_DATA_PATH),
-    )?;
+    let _tts = inference.use_kokoro()?;
 
     log_info!("loading LLM");
-    let llm = inference.use_qwen3(QWEN3_MODEL_PATH, QWEN3_TOKENIZER_PATH)?;
+    let _llm = inference.use_smollm3()?;
 
     log_info!("opening video input");
     let mut videoin = VideoIn::open(Some(VideoInConfig::Realsense(RealsenseConfig {

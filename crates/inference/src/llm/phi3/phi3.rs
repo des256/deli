@@ -1,10 +1,14 @@
-use crate::error::{InferError, Result};
-use onnx::Session;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use tokenizers::Tokenizer;
+use {
+    crate::error::{InferError, Result},
+    onnx::Session,
+    std::sync::{Arc, Mutex},
+    tokenizers::Tokenizer,
+};
 
 use crate::llm::generate::{self, GenerateParams};
+
+const PHI3_MODEL_PATH: &str = "data/phi3/phi3-mini-4k-instruct-cuda-int4-rtn-block-32.onnx";
+const PHI3_TOKENIZER_PATH: &str = "data/phi3/tokenizer.json";
 
 const EOS_TOKEN_IDS: &[u32] = &[32000, 32001, 32007];
 const DEFAULT_MAX_TOKENS: usize = 512;
@@ -31,13 +35,9 @@ pub struct Phi3 {
 }
 
 impl Phi3 {
-    /// Create a new Phi3 instance from an ONNX session and tokenizer
-    ///
-    /// Loads the tokenizer, discovers all model I/O names dynamically,
-    /// derives num_layers from the KV cache input count, and wraps the
-    /// session in Arc<Mutex<>> for thread-safe access.
-    pub fn new<P: AsRef<Path>>(session: Session, tokenizer_path: P) -> Result<Self> {
-        let tokenizer = Tokenizer::from_file(tokenizer_path.as_ref())
+    pub fn new(onnx: &Arc<onnx::Onnx>, executor: onnx::Executor) -> Result<Self> {
+        let session = onnx.create_session(executor, PHI3_MODEL_PATH)?;
+        let tokenizer = Tokenizer::from_file(PHI3_TOKENIZER_PATH)
             .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
         let tokenizer = Arc::new(tokenizer);
 
@@ -64,7 +64,9 @@ impl Phi3 {
         }
         let num_layers = kv_key_count;
 
-        let first_kv_idx = input_names.iter().position(|n| n.contains(".key") || n.contains(".value"))
+        let first_kv_idx = input_names
+            .iter()
+            .position(|n| n.contains(".key") || n.contains(".value"))
             .ok_or_else(|| InferError::Runtime("No KV cache inputs found".to_string()))?;
         let kv_dtype = session.input_element_type(first_kv_idx)?;
 
@@ -97,7 +99,8 @@ impl Phi3 {
     /// Spawns a background task that generates tokens using the ONNX model with KV caching.
     /// Tokens can be received asynchronously via `recv()`.
     pub fn forward(&mut self, text: &str) -> Result<()> {
-        let encoding = self.tokenizer
+        let encoding = self
+            .tokenizer
             .encode(text, false)
             .map_err(|e| InferError::TokenizerError(format!("Tokenization failed: {}", e)))?;
         let token_ids = encoding.get_ids().to_vec();

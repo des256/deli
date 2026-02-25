@@ -5,18 +5,9 @@ use crate::Inference;
 fn test_inference_use_parakeet_diar() {
     // Test that Inference::use_parakeet_diar creates a Sortformer instance
     let inference = Inference::cpu().expect("Failed to create inference");
-    let model_path = format!(
-        "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
-        env!("CARGO_MANIFEST_DIR")
-    );
-
-    if !std::path::Path::new(&model_path).exists() {
-        eprintln!("Skipping: model not found at {}", model_path);
-        return;
-    }
 
     let sortformer = inference
-        .use_parakeet_diar(&model_path)
+        .use_parakeet_diar()
         .expect("Failed to create Sortformer via Inference API");
 
     // Verify it was created successfully
@@ -39,7 +30,7 @@ fn test_diarize_silence_returns_empty_segments() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar(&model_path)
+        .use_parakeet_diar()
         .expect("Failed to create Sortformer");
 
     // 1 second of silence at 16kHz
@@ -74,7 +65,7 @@ fn test_diarize_test_audio_produces_valid_segments() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar(&model_path)
+        .use_parakeet_diar()
         .expect("Failed to create Sortformer");
 
     // Generate synthetic audio: 440Hz sine wave (simulates speech)
@@ -130,7 +121,7 @@ fn test_multi_chunk_streaming_state_persistence() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar(&model_path)
+        .use_parakeet_diar()
         .expect("Failed to create Sortformer");
 
     // Generate 3 seconds of audio
@@ -179,7 +170,7 @@ fn test_short_audio_no_panic() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar(&model_path)
+        .use_parakeet_diar()
         .expect("Failed to create Sortformer");
 
     // 0.5 seconds = 8000 samples at 16kHz

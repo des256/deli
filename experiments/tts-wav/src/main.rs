@@ -3,7 +3,6 @@ use {
     base::*,
     futures_util::{SinkExt, StreamExt},
     inference::Inference,
-    std::path::PathBuf,
 };
 
 const SENTENCE: &str = "To be, or not to be, equals, minus one.";
@@ -21,26 +20,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let output_path = &args[1];
 
-    // Model paths
-    let model_path = PathBuf::from("data/kokoro/kokoro-v1.0.onnx");
-    let voice_path = PathBuf::from("data/kokoro/bf_emma.npy");
-    let espeak_data_path = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
-
-    // Validate model files exist
-    if !model_path.exists() || !voice_path.exists() {
-        eprintln!("Model files missing. Expected:");
-        eprintln!("  - data/kokoro/kokoro-v1.0.onnx");
-        eprintln!("  - data/kokoro/af_nicole.npy");
-        std::process::exit(1);
-    }
-
     // Initialize inference and load Kokoro model
     log_info!("Initializing Kokoro TTS...");
     #[cfg(feature = "cuda")]
     let inference = Inference::cuda(0)?;
     #[cfg(not(feature = "cuda"))]
     let inference = Inference::cpu()?;
-    let mut kokoro = inference.use_kokoro(&model_path, &voice_path, Some(espeak_data_path))?;
+    let mut kokoro = inference.use_kokoro()?;
     log_info!("Kokoro model loaded");
 
     // Synthesize speech

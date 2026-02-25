@@ -1,12 +1,9 @@
 use {
-    crate::{
-        error::Result,
-        tts::pocket::PocketTts,
-        Inference,
-    },
+    crate::{Inference, error::Result, tts::pocket::PocketTts},
     audio::AudioData,
-    futures_sink::Sink,
     futures_core::Stream,
+    futures_sink::Sink,
+    std::path::Path,
 };
 
 #[test]
@@ -30,14 +27,7 @@ fn test_pocket_tts_integration() -> Result<()> {
     let inference = Inference::cpu()?;
 
     // Create PocketTts via factory method
-    let mut tts = inference.use_pocket_tts(
-        "data/pocket/text_conditioner.onnx",
-        "data/pocket/flow_lm_main_int8.onnx",
-        "data/pocket/flow_lm_flow_int8.onnx",
-        "data/pocket/mimi_decoder_int8.onnx",
-        "data/pocket/tokenizer.json",
-        "data/pocket/voices/tricia.bin",
-    )?;
+    let mut tts = inference.use_pocket_tts(Path::new("data/pocket/voices/hannah.bin"))?;
 
     // Generate audio (streaming)
     use futures_util::SinkExt;
@@ -65,8 +55,16 @@ fn test_pocket_tts_integration() -> Result<()> {
 
         // Verify audio has samples (last chunk is empty end-of-utterance marker)
         assert!(!all_data.is_empty(), "Audio should have samples");
-        assert!(chunk_count > 1, "Should stream multiple chunks, got {}", chunk_count);
-        println!("Generated {} samples in {} chunks", all_data.len(), chunk_count);
+        assert!(
+            chunk_count > 1,
+            "Should stream multiple chunks, got {}",
+            chunk_count
+        );
+        println!(
+            "Generated {} samples in {} chunks",
+            all_data.len(),
+            chunk_count
+        );
 
         // Verify non-zero variance (not silence)
         let len = all_data.len();
@@ -83,8 +81,11 @@ fn test_pocket_tts_integration() -> Result<()> {
 
         // Verify duration is reasonable (1-10s for "Hello world")
         let duration_sec = len as f32 / 24000.0;
-        assert!(duration_sec >= 1.0 && duration_sec <= 10.0,
-                "Duration {} s is unreasonable for 'Hello world'", duration_sec);
+        assert!(
+            duration_sec >= 1.0 && duration_sec <= 10.0,
+            "Duration {} s is unreasonable for 'Hello world'",
+            duration_sec
+        );
 
         // Write to file for manual verification
         std::fs::write("/tmp/pocket_tts_output.raw", unsafe {
@@ -107,14 +108,7 @@ fn test_pocket_tts_multiple_utterances() -> Result<()> {
     let inference = Inference::cpu()?;
 
     // Create PocketTts via factory method
-    let mut tts = inference.use_pocket_tts(
-        "data/pocket/text_conditioner.onnx",
-        "data/pocket/flow_lm_main_int8.onnx",
-        "data/pocket/flow_lm_flow_int8.onnx",
-        "data/pocket/mimi_decoder_int8.onnx",
-        "data/pocket/tokenizer.json",
-        "data/pocket/voices/tricia.bin",
-    )?;
+    let mut tts = inference.use_pocket_tts(Path::new("data/pocket/voices/hannah.bin"))?;
 
     // Generate multiple utterances (streaming)
     use futures_util::SinkExt;
@@ -137,8 +131,11 @@ fn test_pocket_tts_multiple_utterances() -> Result<()> {
                 AudioData::Pcm(tensor) => {
                     if tensor.data.is_empty() {
                         // End-of-utterance marker
-                        assert!(current_utterance_samples > 0,
-                                "Utterance {} should have samples", utterance_count + 1);
+                        assert!(
+                            current_utterance_samples > 0,
+                            "Utterance {} should have samples",
+                            utterance_count + 1
+                        );
                         utterance_count += 1;
                         current_utterance_samples = 0;
                     } else {

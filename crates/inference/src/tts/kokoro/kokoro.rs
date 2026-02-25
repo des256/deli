@@ -20,9 +20,12 @@ use {
     },
 };
 
-/// Load and validate an NPY voice style file.
-///
-/// Expects a NumPy .npy file with 510x256 f32 values (130560 total).
+const KOKORO_MODEL_PATH: &str = "data/kokoro/kokoro-v1.0.onnx";
+const KOKORO_VOICE_PATH: &str = "data/kokoro/bf_nicole.npy";
+const KOKORO_ESPEAK_DATA_PATH: &str = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
+
+const SAMPLE_RATE: usize = 24000;
+
 pub(crate) fn load_voice_style(path: impl AsRef<std::path::Path>) -> Result<Vec<f32>> {
     let bytes = std::fs::read(path)?;
 
@@ -56,18 +59,8 @@ pub(crate) fn load_voice_style(path: impl AsRef<std::path::Path>) -> Result<Vec<
     Ok(style)
 }
 
-const SAMPLE_RATE: usize = 24000;
-
-/// Kokoro TTS model for text-to-speech synthesis.
-///
-/// Implements `Sink<String>` to accept text input and
-/// `Stream<Item = Result<AudioSample>>` to produce synthesized audio.
-///
-/// Each `String` sent via the Sink maps 1:1 to an `AudioSample` yielded
-/// from the Stream. Closing the sink signals no more input; the stream
-/// ends once all pending texts are synthesized.
 pub struct Kokoro {
-    session: Arc<Mutex<Session>>,
+    session: Arc<Session>,
     vocab: Arc<HashMap<char, i64>>,
     style: Arc<Vec<f32>>,
     pending: VecDeque<String>,
@@ -77,25 +70,21 @@ pub struct Kokoro {
 }
 
 impl Kokoro {
-    /// Create a new Kokoro TTS instance
-    ///
-    /// # Arguments
-    /// * `session` - Pre-configured ONNX session
-    /// * `voice_path` - Path to NPY voice style file
-    /// * `espeak_data_path` - Path to espeak-ng data directory (None for default)
     pub fn new(
-        session: Session,
+        onnx: &Arc<onnx::Onnx>,
+        executor: onnx::Executor,
         voice_path: impl AsRef<std::path::Path>,
-        espeak_data_path: Option<&str>,
     ) -> Result<Self> {
+        let session = onnx.create_session(executor, KOKORO_MODEL_PATH)?;
         // Initialize espeak-ng
-        super::phonemize::espeak_init(espeak_data_path).map_err(|e| InferError::Runtime(e))?;
+        super::phonemize::espeak_init(Some(KOKORO_ESPEAK_DATA_PATH))
+            .map_err(|e| InferError::Runtime(e))?;
 
         let vocab = vocab();
         let style = load_voice_style(voice_path)?;
 
         Ok(Kokoro {
-            session: Arc::new(Mutex::new(session)),
+            session: Arc::new(session),
             vocab: Arc::new(vocab),
             style: Arc::new(style),
             pending: VecDeque::new(),
@@ -105,7 +94,7 @@ impl Kokoro {
         })
     }
 
-    /// Spawn synthesis of the given text as an inflight future.
+    // Refactor to: spawn blocking task, create session inside task, get text from channel, feed text to TTS, send audio samples back over other channel
     fn start_synthesis(&mut self, text: String) {
         let session = Arc::clone(&self.session);
         let vocab = Arc::clone(&self.vocab);
@@ -131,40 +120,36 @@ impl Kokoro {
 
                 // Build input tensors
                 let tokens_shape = [1usize, token_ids.len()];
-                let tokens = Value::from_slice::<i64>(&tokens_shape, &token_ids)?;
+                let tokens =
+                    Value::from_slice::<i64>(&self.session.onnx, &tokens_shape, &token_ids)?;
 
                 let style_shape = [1usize, 256];
                 let style_vec = style_slice.to_vec();
-                let style_tensor = Value::from_slice::<f32>(&style_shape, &style_vec)?;
+                let style_tensor =
+                    Value::from_slice::<f32>(&self.session.onnx, &style_shape, &style_vec)?;
 
                 let speed_shape = [1usize];
-                let speed_tensor = Value::from_slice::<f32>(&speed_shape, &[1.0f32])?;
+                let speed_tensor =
+                    Value::from_slice::<f32>(&self.session.onnx, &speed_shape, &[1.0f32])?;
 
                 // Run inference with named inputs, extract data within lock scope
-                let samples: Vec<i16> = {
-                    let mut session_guard = session.lock().map_err(|e| {
-                        InferError::Runtime(format!("Session lock poisoned: {}", e))
-                    })?;
-                    let outputs = session_guard
-                        .run(
-                            &[
-                                ("tokens", &tokens),
-                                ("style", &style_tensor),
-                                ("speed", &speed_tensor),
-                            ],
-                            &["audio"],
-                        )
-                        .map_err(|e| InferError::Onnx(e.to_string()))?;
+                let outputs = session.run(
+                    &[
+                        ("tokens", &tokens),
+                        ("style", &style_tensor),
+                        ("speed", &speed_tensor),
+                    ],
+                    &["audio"],
+                )?;
 
-                    let output_data = outputs[0].extract_tensor::<f32>().map_err(|e| {
-                        InferError::Runtime(format!("Failed to extract output: {}", e))
-                    })?;
+                let output_data = outputs[0]
+                    .extract_tensor::<f32>()
+                    .map_err(|e| InferError::Runtime(format!("Failed to extract output: {}", e)))?;
 
-                    output_data
-                        .iter()
-                        .map(|&sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16)
-                        .collect()
-                };
+                let samples: Vec<i16> = output_data
+                    .iter()
+                    .map(|&sample| (sample * 32768.0).clamp(-32768.0, 32767.0) as i16)
+                    .collect();
 
                 let num_samples = samples.len();
                 Tensor::new(vec![num_samples], samples)

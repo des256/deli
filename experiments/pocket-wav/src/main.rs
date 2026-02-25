@@ -9,6 +9,8 @@ use {
 const SENTENCE: &str = "The key issue, with rookworst, is that it is a delicious deli meat, made of willing, pork volunteers, slaughtered with love, prepared with care. - Have you had your rookworst today?";
 const SAMPLE_RATE: u32 = 24000;
 
+const POCKET_VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     base::init_stdout_logger();
@@ -51,14 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let inference = Inference::cuda(0)?;
     #[cfg(not(feature = "cuda"))]
     let inference = Inference::cpu()?;
-    let mut tts = inference.use_pocket_tts(
-        &text_conditioner,
-        &flow_main,
-        &flow_step,
-        &mimi_decoder,
-        &tokenizer,
-        &voice,
-    )?;
+    let mut tts = inference.use_pocket_tts(&POCKET_VOICE_PATH)?;
     log_info!("Pocket TTS loaded");
 
     // Synthesize speech (streaming — collect all chunks)

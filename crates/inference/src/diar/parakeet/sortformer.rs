@@ -1,9 +1,6 @@
-use crate::diar::parakeet::compression;
-use crate::diar::parakeet::features::compute_mel_features;
-use crate::diar::parakeet::postprocess;
-use crate::diar::parakeet::{DiarizationConfig, SpeakerSegment};
-use crate::error::{InferError, Result};
-use onnx::Session;
+use {crate::*, std::sync::Arc};
+
+const PARAKEET_DIAR_MODEL_PATH: &str = "data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx";
 
 // Constants from reference implementation
 const CHUNK_LEN: usize = 124;
@@ -34,10 +31,11 @@ pub struct Sortformer {
 
 impl Sortformer {
     /// Create a new Sortformer with zero-initialized streaming state.
-    pub fn new(session: Session, config: DiarizationConfig) -> Result<Self> {
+    pub fn new(onnx: &Arc<onnx::Onnx>, executor: &onnx::Executor) -> Result<Self> {
+        let session = onnx.create_session(executor, PARAKEET_DIAR_MODEL_PATH)?;
         Ok(Self {
             session,
-            config,
+            config: DiarizationConfig::default(),
             chunk_len: CHUNK_LEN,
             fifo_len: FIFO_LEN,
             spkcache_len: SPKCACHE_LEN,
@@ -101,13 +99,16 @@ impl Sortformer {
             onnx::Value::from_slice(&[1, spkcache_frames, EMB_DIM], &self.spkcache)
                 .map_err(|e| InferError::Runtime(format!("Failed to create spkcache: {}", e)))?
         } else {
-            onnx::Value::zeros::<f32>(&[1, 0, EMB_DIM as i64])
-                .map_err(|e| InferError::Runtime(format!("Failed to create empty spkcache: {}", e)))?
+            onnx::Value::zeros::<f32>(&[1, 0, EMB_DIM as i64]).map_err(|e| {
+                InferError::Runtime(format!("Failed to create empty spkcache: {}", e))
+            })?
         };
 
         let spkcache_lengths = vec![spkcache_frames as i64];
-        let spkcache_lengths_tensor = onnx::Value::from_slice(&[1], &spkcache_lengths)
-            .map_err(|e| InferError::Runtime(format!("Failed to create spkcache_lengths: {}", e)))?;
+        let spkcache_lengths_tensor =
+            onnx::Value::from_slice(&[1], &spkcache_lengths).map_err(|e| {
+                InferError::Runtime(format!("Failed to create spkcache_lengths: {}", e))
+            })?;
 
         let fifo_frames = self.fifo.len() / EMB_DIM;
         let fifo = if fifo_frames > 0 {
@@ -134,7 +135,11 @@ impl Sortformer {
                     ("fifo", &fifo),
                     ("fifo_lengths", &fifo_lengths_tensor),
                 ],
-                &["spkcache_fifo_chunk_preds", "chunk_pre_encode_embs", "chunk_pre_encode_lengths"],
+                &[
+                    "spkcache_fifo_chunk_preds",
+                    "chunk_pre_encode_embs",
+                    "chunk_pre_encode_lengths",
+                ],
             )
             .map_err(|e| InferError::Runtime(format!("Sortformer inference failed: {}", e)))?;
 
@@ -179,14 +184,15 @@ impl Sortformer {
         if fifo_frames_after > self.fifo_len {
             // Reference pops at least chunk_len frames (aggressive flush)
             let mut pop_out_len = self.chunk_len;
-            pop_out_len = pop_out_len.max(
-                valid_chunk_frames.saturating_sub(self.fifo_len) + fifo_frames,
-            );
+            pop_out_len =
+                pop_out_len.max(valid_chunk_frames.saturating_sub(self.fifo_len) + fifo_frames);
             pop_out_len = pop_out_len.min(fifo_frames_after);
 
             let pop_out_embs: Vec<f32> = self.fifo.drain(0..pop_out_len * EMB_DIM).collect();
-            let pop_out_preds: Vec<f32> =
-                self.fifo_preds.drain(0..pop_out_len * NUM_SPEAKERS).collect();
+            let pop_out_preds: Vec<f32> = self
+                .fifo_preds
+                .drain(0..pop_out_len * NUM_SPEAKERS)
+                .collect();
 
             // Update silence profile from popped frames
             for i in 0..pop_out_len {
@@ -218,8 +224,7 @@ impl Sortformer {
             if self.spkcache.len() / EMB_DIM > self.spkcache_len {
                 if self.spkcache_preds.is_none() {
                     // First-time initialization: model's spkcache predictions + overflow preds
-                    let mut initial_preds =
-                        all_preds[0..spkcache_frames * NUM_SPEAKERS].to_vec();
+                    let mut initial_preds = all_preds[0..spkcache_frames * NUM_SPEAKERS].to_vec();
                     initial_preds.extend_from_slice(&pop_out_preds);
                     self.spkcache_preds = Some(initial_preds);
                 }

@@ -3,7 +3,6 @@ use {
     base::*,
     inference::{Inference, diar::parakeet::SpeakerSegment},
     std::io::Write,
-    std::path::PathBuf,
     tokio::sync::mpsc,
 };
 
@@ -11,21 +10,13 @@ use {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     base::init_stdout_logger();
 
-    let model_dir = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "data/parakeet".to_string());
-
-    let dir = PathBuf::from(&model_dir);
-    let model_path = dir.join("diar_streaming_sortformer_4spk-v2.1.onnx");
-
     log_info!("Streaming Speaker Diarization (Sortformer v2)");
-    log_info!("Model: {}", model_path.display());
 
     #[cfg(feature = "cuda")]
     let inference = Inference::cuda(0)?;
     #[cfg(not(feature = "cuda"))]
     let inference = Inference::cpu()?;
-    let diar = inference.use_parakeet_diar(&model_path)?;
+    let diar = inference.use_parakeet_diar()?;
     log_info!("Model loaded — listening...");
 
     // Channels: audio → processing thread, segments → main loop

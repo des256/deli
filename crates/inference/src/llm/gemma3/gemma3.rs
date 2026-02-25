@@ -1,20 +1,23 @@
-use crate::error::{InferError, Result};
-use onnx::Session;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use tokenizers::Tokenizer;
+use {
+    crate::error::{InferError, Result},
+    onnx::Session,
+    std::sync::{Arc, Mutex},
+    tokenizers::Tokenizer,
+};
 
 use crate::llm::generate::{self, GenerateParams};
 
+const GEMMA3_MODEL_PATH: &str = "data/gemma3/model_int8.onnx";
+const GEMMA3_TOKENIZER_PATH: &str = "data/gemma3/tokenizer.json";
+
 const EOS_TOKEN_IDS: &[u32] = &[1, 106];
+
 const DEFAULT_MAX_TOKENS: usize = 512;
+
 const NUM_KV_HEADS: usize = 1;
+
 const HEAD_DIM: usize = 256;
 
-/// Gemma 3 ONNX-based language model with KV cache
-///
-/// Supports autoregressive text generation with streaming token output.
-/// The ONNX model uses grouped-query attention with KV caching for efficient generation.
 pub struct Gemma3 {
     session: Arc<Mutex<Session>>,
     tokenizer: Arc<Tokenizer>,
@@ -30,13 +33,9 @@ pub struct Gemma3 {
 }
 
 impl Gemma3 {
-    /// Create a new Gemma3 instance from an ONNX session and tokenizer
-    ///
-    /// Loads the tokenizer, discovers all model I/O names dynamically,
-    /// derives num_layers from the KV cache input count, and wraps the
-    /// session in Arc<Mutex<>> for thread-safe access.
-    pub fn new<P: AsRef<Path>>(session: Session, tokenizer_path: P) -> Result<Self> {
-        let tokenizer = Tokenizer::from_file(tokenizer_path.as_ref())
+    pub fn new(onnx: &Arc<onnx::Onnx>, executor: onnx::Executor) -> Result<Self> {
+        let session = onnx.create_session(executor, GEMMA3_MODEL_PATH)?;
+        let tokenizer = Tokenizer::from_file(GEMMA3_TOKENIZER_PATH)
             .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
         let tokenizer = Arc::new(tokenizer);
 
@@ -63,7 +62,9 @@ impl Gemma3 {
         }
         let num_layers = kv_key_count;
 
-        let first_kv_idx = input_names.iter().position(|n| n.contains(".key") || n.contains(".value"))
+        let first_kv_idx = input_names
+            .iter()
+            .position(|n| n.contains(".key") || n.contains(".value"))
             .ok_or_else(|| InferError::Runtime("No KV cache inputs found".to_string()))?;
         let kv_dtype = session.input_element_type(first_kv_idx)?;
 
@@ -96,7 +97,8 @@ impl Gemma3 {
     /// Spawns a background task that generates tokens using the ONNX model with KV caching.
     /// Tokens can be received asynchronously via `recv()`.
     pub fn forward(&mut self, text: &str) -> Result<()> {
-        let encoding = self.tokenizer
+        let encoding = self
+            .tokenizer
             .encode(text, false)
             .map_err(|e| InferError::TokenizerError(format!("Tokenization failed: {}", e)))?;
         let token_ids = encoding.get_ids().to_vec();

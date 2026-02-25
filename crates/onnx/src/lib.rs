@@ -1,121 +1,69 @@
-pub mod error;
-pub mod ffi;
-pub mod session;
-pub mod value;
+use std::{ffi::CStr, fmt};
 
-pub use error::{OnnxError, Result};
-pub use session::{session_builder, Session, SessionBuilder};
-pub use value::{TensorElement, Value};
-use ffi::{OrtApi, OrtEnv, OrtGetApiBase, OrtLoggingLevel, ORT_API_VERSION};
-use std::ffi::CString;
-use std::sync::{Mutex, OnceLock};
+mod onnx;
+pub use onnx::*;
 
-/// Global API and environment state
-struct OnnxRuntime {
-    api: *const OrtApi,
-    env: *mut OrtEnv,
+mod session;
+pub use session::*;
+
+mod ffi;
+
+mod value;
+pub use value::*;
+
+pub(crate) mod f16;
+
+#[derive(Debug, Clone)]
+pub struct OnnxError {
+    pub code: ffi::OrtErrorCode,
+    pub message: String,
 }
 
-unsafe impl Send for OnnxRuntime {}
-unsafe impl Sync for OnnxRuntime {}
+impl OnnxError {
+    pub(crate) fn runtime_error(message: &str) -> Self {
+        OnnxError {
+            code: ffi::OrtErrorCode::RuntimeException,
+            message: message.to_string(),
+        }
+    }
 
-static RUNTIME: OnceLock<Mutex<std::result::Result<OnnxRuntime, String>>> = OnceLock::new();
+    pub(crate) fn from_status(api: *const ffi::OrtApi, status: *mut ffi::OrtStatus) -> Self {
+        let get_error_code: crate::ffi::GetErrorCodeFn =
+            unsafe { (*api).get_fn(crate::ffi::IDX_GET_ERROR_CODE) };
+        let code = unsafe { get_error_code(status) };
 
-/// Initialize the ONNX Runtime
-///
-/// This must be called before using any other functionality.
-/// Calling this multiple times is safe - it will return the same result.
-///
-/// # Errors
-/// Returns an error if:
-/// - The installed onnxruntime version doesn't support API version 17
-/// - Environment creation fails
-pub fn init() -> Result<()> {
-    let mutex = RUNTIME.get_or_init(|| {
-        let result = unsafe {
-            // Get the API base
-            let api_base = OrtGetApiBase();
-            if api_base.is_null() {
-                return Mutex::new(Err("Failed to get ONNX Runtime API base".to_string()));
-            }
-
-            // Get the specific API version
-            let get_api = (*api_base).GetApi;
-            let api = get_api(ORT_API_VERSION);
-            if api.is_null() {
-                return Mutex::new(Err(
-                    "ONNX Runtime doesn't support API version 24. Requires onnxruntime >= 1.24."
-                        .to_string(),
-                ));
-            }
-
-            // Create the environment
-            let log_id = CString::new("onnx").unwrap();
-            let mut env: *mut OrtEnv = std::ptr::null_mut();
-
-            let create_env: ffi::CreateEnvFn = (*api).get_fn(ffi::IDX_CREATE_ENV);
-            let status = create_env(
-                OrtLoggingLevel::Warning,
-                log_id.as_ptr(),
-                &mut env as *mut _,
-            );
-
-            if status.is_null() {
-                Mutex::new(Ok(OnnxRuntime { api, env }))
-            } else {
-                let err = error::OnnxError::from_status(api, status);
-                Mutex::new(Err(err.message().to_string()))
-            }
+        let get_error_message: crate::ffi::GetErrorMessageFn =
+            unsafe { (*api).get_fn(crate::ffi::IDX_GET_ERROR_MESSAGE) };
+        let msg_ptr = unsafe { get_error_message(status) };
+        let message = if msg_ptr.is_null() {
+            String::from("Unknown error")
+        } else {
+            unsafe { CStr::from_ptr(msg_ptr).to_string_lossy().into_owned() }
         };
 
-        result
-    });
+        let release_status: crate::ffi::ReleaseStatusFn =
+            unsafe { (*api).get_fn(crate::ffi::IDX_RELEASE_STATUS) };
+        unsafe { release_status(status) };
 
-    match mutex.lock().unwrap().as_ref() {
-        Ok(_) => Ok(()),
-        Err(msg) => Err(OnnxError::runtime_error(msg)),
+        OnnxError { code, message }
     }
 }
 
-/// Get the API pointer (for internal use)
-///
-/// # Safety
-/// - Must call init() first
-pub(crate) unsafe fn get_api() -> *const OrtApi {
-    let mutex = RUNTIME
-        .get()
-        .expect("ONNX Runtime not initialized - call init() first");
-
-    match mutex.lock().unwrap().as_ref() {
-        Ok(runtime) => runtime.api,
-        Err(_) => panic!("ONNX Runtime initialization failed"),
+impl fmt::Display for OnnxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "ONNX error ({:?}): {}", self.code, self.message)
     }
 }
 
-/// Get the environment pointer (for internal use)
-///
-/// # Safety
-/// - Must call init() first
-pub(crate) unsafe fn get_env() -> *const OrtEnv {
-    let mutex = RUNTIME
-        .get()
-        .expect("ONNX Runtime not initialized - call init() first");
-
-    match mutex.lock().unwrap().as_ref() {
-        Ok(runtime) => runtime.env,
-        Err(_) => panic!("ONNX Runtime initialization failed"),
-    }
-}
-
-// Ensure runtime is dropped properly (though it lives for 'static in practice)
-impl Drop for OnnxRuntime {
-    fn drop(&mut self) {
-        unsafe {
-            if !self.env.is_null() {
-                let release_env: ffi::ReleaseEnvFn = (*self.api).get_fn(ffi::IDX_RELEASE_ENV);
-                release_env(self.env);
-            }
-        }
+pub(crate) fn check_status<T>(
+    api: *const ffi::OrtApi,
+    status: *mut ffi::OrtStatus,
+    value: T,
+) -> Result<T, OnnxError> {
+    if status.is_null() {
+        Ok(value)
+    } else {
+        Err(OnnxError::from_status(api, status))
     }
 }
 
@@ -124,10 +72,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_double_init_is_safe() {
-        // First init - may fail if onnxruntime not installed, that's ok
-        let _ = init();
-        // Second init should not panic
-        let _ = init();
+    fn test_error_display() {
+        let err = OnnxError {
+            code: ffi::OrtErrorCode::InvalidArgument,
+            message: "invalid input".to_string(),
+        };
+
+        let display = format!("{}", err);
+        assert!(display.contains("invalid input"));
+        assert!(display.contains("InvalidArgument"));
     }
 }

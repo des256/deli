@@ -421,14 +421,15 @@ impl PocketCore {
     /// restored for each new utterance without re-running voice conditioning.
     pub fn snapshot_state(&mut self) -> Result<()> {
         let flow_snapshots = snapshot::snapshot_values(&self.flow_states)?;
-        let mimi_snapshots = snapshot::snapshot_values(&self.mimi_states)?;
+        //let mimi_snapshots = snapshot::snapshot_values(&self.mimi_states)?;
         self.voice_snapshot = Some(StateSnapshot {
             flow_states: flow_snapshots,
-            mimi_states: mimi_snapshots,
+            //mimi_states: mimi_snapshots,
         });
         Ok(())
     }
 
+    /*
     /// Restore state from voice-conditioned snapshot
     fn restore_snapshot(&mut self) -> Result<()> {
         let snap = self
@@ -439,6 +440,7 @@ impl PocketCore {
         self.mimi_states = snapshot::restore_values(&snap.mimi_states)?;
         Ok(())
     }
+    */
 
     /// Reset for new utterance.
     ///

@@ -12,7 +12,7 @@ use {
 /// Snapshot of all ONNX state tensors as raw bytes
 pub(crate) struct StateSnapshot {
     pub flow_states: Vec<TensorSnapshot>,
-    pub mimi_states: Vec<TensorSnapshot>,
+    //pub mimi_states: Vec<TensorSnapshot>,
 }
 
 /// Single tensor snapshot: raw bytes + shape + element type
@@ -26,9 +26,9 @@ pub(crate) struct TensorSnapshot {
 pub(crate) fn snapshot_values(states: &[Value]) -> Result<Vec<TensorSnapshot>> {
     let mut snapshots = Vec::with_capacity(states.len());
     for state in states {
-        let shape = state.tensor_shape().map_err(|e| {
-            InferError::Runtime(format!("Failed to get tensor shape: {}", e))
-        })?;
+        let shape = state
+            .tensor_shape()
+            .map_err(|e| InferError::Runtime(format!("Failed to get tensor shape: {}", e)))?;
         let elem_type = state.tensor_element_type().map_err(|e| {
             InferError::Runtime(format!("Failed to get tensor element type: {}", e))
         })?;
@@ -60,15 +60,15 @@ fn extract_raw_bytes(
 ) -> Result<Vec<u8>> {
     match elem_type {
         onnx::ffi::ONNXTensorElementDataType::Float => {
-            let slice = state.extract_tensor::<f32>().map_err(|e| {
-                InferError::Runtime(format!("Failed to extract f32 tensor: {}", e))
-            })?;
+            let slice = state
+                .extract_tensor::<f32>()
+                .map_err(|e| InferError::Runtime(format!("Failed to extract f32 tensor: {}", e)))?;
             Ok(typed_to_bytes(slice))
         }
         onnx::ffi::ONNXTensorElementDataType::Int64 => {
-            let slice = state.extract_tensor::<i64>().map_err(|e| {
-                InferError::Runtime(format!("Failed to extract i64 tensor: {}", e))
-            })?;
+            let slice = state
+                .extract_tensor::<i64>()
+                .map_err(|e| InferError::Runtime(format!("Failed to extract i64 tensor: {}", e)))?;
             Ok(typed_to_bytes(slice))
         }
         onnx::ffi::ONNXTensorElementDataType::Bool => {

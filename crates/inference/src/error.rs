@@ -29,12 +29,6 @@ impl fmt::Display for InferError {
 
 impl std::error::Error for InferError {}
 
-impl From<candle_core::Error> for InferError {
-    fn from(err: candle_core::Error) -> Self {
-        InferError::Candle(err.to_string())
-    }
-}
-
 impl From<std::io::Error> for InferError {
     fn from(err: std::io::Error) -> Self {
         InferError::Io(err.to_string())

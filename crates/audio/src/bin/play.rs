@@ -4,32 +4,17 @@ use {audio::*, base::*, hound, std::time::Duration};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_stdout_logger();
 
-    // Parse CLI arguments
+    let audioout = AudioOut::open(None).await;
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         log_fatal!("Usage: {} <wav-file>", args[0]);
     }
     let wav_path = &args[1];
 
-    // Open and read WAV file
     let mut reader = hound::WavReader::open(wav_path)?;
     let spec = reader.spec();
-
-    log_info!(
-        "WAV format: {} Hz, {} channel(s), {} bits per sample",
-        spec.sample_rate,
-        spec.channels,
-        spec.bits_per_sample
-    );
-
-    if spec.bits_per_sample != 16 {
-        log_info!("Converting {}-bit to 16-bit", spec.bits_per_sample);
-    }
-
-    // Read all samples as i16
     let samples: Vec<i16> = reader.samples::<i16>().collect::<Result<Vec<_>, _>>()?;
-
-    // Convert to mono if needed
     let mono_samples: Vec<i16> = match spec.channels {
         1 => samples,
         2 => {
@@ -40,12 +25,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .collect()
         }
         _ => {
-            log_fatal!("{} channels not supported (only mono and stereo)", spec.channels);
+            log_fatal!(
+                "{} channels not supported (only mono and stereo)",
+                spec.channels
+            );
         }
     };
-
     let sample_count = mono_samples.len();
     let duration_secs = sample_count as f64 / spec.sample_rate as f64;
+    let tensor = Tensor::new(vec![mono_samples.len()], mono_samples).unwrap();
 
     log_info!(
         "Playing {} ({} Hz, {:.2}s)...",
@@ -53,10 +41,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spec.sample_rate,
         duration_secs
     );
-
-    // Create AudioOut and send samples
-    let audioout = AudioOut::open(None).await;
-    let tensor = Tensor::new(vec![mono_samples.len()], mono_samples).unwrap();
     audioout
         .play(AudioSample {
             data: AudioData::Pcm(tensor),
@@ -64,10 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .await;
 
-    // Wait for playback to complete
     let duration_ms = (duration_secs * 1000.0) as u64 + 500;
     tokio::time::sleep(Duration::from_millis(duration_ms)).await;
 
     log_info!("Playback complete");
+
     Ok(())
 }

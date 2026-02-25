@@ -1,4 +1,4 @@
-use crate::{llm::Gemma3, Inference};
+use crate::{Inference, llm::Gemma3};
 
 #[test]
 fn test_gemma3_is_send() {
@@ -72,13 +72,7 @@ fn test_gemma3_model_io_verification() {
 async fn test_gemma3_integration() {
     // Integration test for forward/recv generation
     let inference = Inference::cpu().unwrap();
-    let mut model = inference
-        .use_gemma3(
-            "../../data/gemma3/model_int8.onnx",
-            "../../data/gemma3/tokenizer.json",
-        )
-        .unwrap()
-        .with_max_tokens(20);
+    let mut model = inference.use_gemma3().unwrap().with_max_tokens(20);
 
     // Start generation
     model.forward("Hello").unwrap();
@@ -108,10 +102,7 @@ async fn test_gemma3_integration() {
 
     // Verify concatenated output is non-empty and >= 5 chars
     let output = tokens.join("");
-    assert!(
-        !output.is_empty(),
-        "Generated output is empty"
-    );
+    assert!(!output.is_empty(), "Generated output is empty");
     assert!(
         output.len() >= 5,
         "Generated output is too short: {} chars, expected >= 5",

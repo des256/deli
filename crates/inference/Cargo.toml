@@ -7,16 +7,15 @@ edition = "2024"
 audio = { path = "../audio" }
 base = { path = "../base" }
 image = { path = "../image" }
-candle-core = "0.9"
-candle-nn = "0.9"
-candle-transformers = "0.9"
 memmap2 = "0.9"
 num-traits = "0.2"
 onnx = { path = "../onnx" }
 safetensors = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
+tokenizers = { version = "0.21", default-features = false, features = [
+    "fancy-regex",
+] }
 tokio = { version = "1", features = ["rt", "sync"] }
 futures-core = "0.3"
 futures-sink = "0.3"
@@ -24,12 +23,7 @@ rand = "0.8"
 rand_distr = "0.4"
 
 [features]
-cuda = [
-    "candle-core/cuda",
-    "candle-nn/cuda",
-    "candle-transformers/cuda",
-    "onnx/cuda",
-]
+cuda = ["onnx/cuda"]
 
 [dev-dependencies]
 inference = { path = ".", features = ["cuda"] }

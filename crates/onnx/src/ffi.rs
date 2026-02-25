@@ -1,6 +1,5 @@
 use std::ffi::{c_char, c_void};
 
-// Opaque types - never constructed in Rust, only passed as pointers
 #[repr(C)]
 pub struct OrtEnv {
     _private: [u8; 0],
@@ -51,7 +50,6 @@ pub struct OrtTypeInfo {
     _private: [u8; 0],
 }
 
-// Enums
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrtLoggingLevel {
@@ -66,19 +64,19 @@ pub enum OrtLoggingLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ONNXTensorElementDataType {
     Undefined = 0,
-    Float = 1,      // f32
-    Uint8 = 2,      // u8
-    Int8 = 3,       // i8
-    Uint16 = 4,     // u16
-    Int16 = 5,      // i16
-    Int32 = 6,      // i32
-    Int64 = 7,      // i64
+    Float = 1,  // f32
+    Uint8 = 2,  // u8
+    Int8 = 3,   // i8
+    Uint16 = 4, // u16
+    Int16 = 5,  // i16
+    Int32 = 6,  // i32
+    Int64 = 7,  // i64
     String = 8,
     Bool = 9,
     Float16 = 10,
-    Double = 11,    // f64
-    Uint32 = 12,    // u32
-    Uint64 = 13,    // u64
+    Double = 11, // f64
+    Uint32 = 12, // u32
+    Uint64 = 13, // u64
     Complex64 = 14,
     Complex128 = 15,
     BFloat16 = 16,
@@ -114,7 +112,7 @@ pub enum GraphOptimizationLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OrtMemType {
     CpuInput = -2,
-    CpuOutput = -1,  // Also known as Cpu in the C API
+    CpuOutput = -1,
     Default = 0,
 }
 
@@ -126,7 +124,6 @@ pub enum OrtAllocatorType {
     Arena = 1,
 }
 
-// OrtApiBase structure
 #[repr(C)]
 #[allow(non_snake_case)]
 pub struct OrtApiBase {
@@ -134,19 +131,15 @@ pub struct OrtApiBase {
     pub GetVersionString: unsafe extern "C" fn() -> *const c_char,
 }
 
-// OrtApi represented as a raw pointer to a vtable array
-// All fields are function pointers of the same size, so we can access by index
 #[repr(C)]
 pub struct OrtApi {
     _private: [u8; 0],
 }
 
-// Entry point to get the API base
 unsafe extern "C" {
     pub fn OrtGetApiBase() -> *const OrtApiBase;
 }
 
-// CUDA execution provider function (only available when cuda feature is enabled)
 #[cfg(feature = "cuda")]
 unsafe extern "C" {
     pub fn OrtSessionOptionsAppendExecutionProvider_CUDA(
@@ -155,20 +148,26 @@ unsafe extern "C" {
     ) -> *mut OrtStatus;
 }
 
-// API version constant - matches onnxruntime 1.24 on Jetson
-pub const ORT_API_VERSION: u32 = 24;
-
-// Function pointer types for the OrtApi vtable
-// These correspond to the function signatures in onnxruntime_c_api.h
-pub type CreateStatusFn = unsafe extern "C" fn(code: OrtErrorCode, msg: *const c_char) -> *mut OrtStatus;
+pub type CreateStatusFn =
+    unsafe extern "C" fn(code: OrtErrorCode, msg: *const c_char) -> *mut OrtStatus;
 pub type GetErrorCodeFn = unsafe extern "C" fn(status: *const OrtStatus) -> OrtErrorCode;
 pub type GetErrorMessageFn = unsafe extern "C" fn(status: *const OrtStatus) -> *const c_char;
-pub type CreateEnvFn = unsafe extern "C" fn(log_level: OrtLoggingLevel, log_id: *const c_char, out: *mut *mut OrtEnv) -> *mut OrtStatus;
+pub type CreateEnvFn = unsafe extern "C" fn(
+    log_level: OrtLoggingLevel,
+    log_id: *const c_char,
+    out: *mut *mut OrtEnv,
+) -> *mut OrtStatus;
 pub type ReleaseEnvFn = unsafe extern "C" fn(env: *mut OrtEnv);
-pub type GetAllocatorWithDefaultOptionsFn = unsafe extern "C" fn(out: *mut *mut OrtAllocator) -> *mut OrtStatus;
+pub type GetAllocatorWithDefaultOptionsFn =
+    unsafe extern "C" fn(out: *mut *mut OrtAllocator) -> *mut OrtStatus;
 pub type AllocatorFreeFn = unsafe extern "C" fn(allocator: *mut OrtAllocator, ptr: *mut c_void);
 pub type ReleaseStatusFn = unsafe extern "C" fn(status: *mut OrtStatus);
-pub type CreateSessionFn = unsafe extern "C" fn(env: *const OrtEnv, model_path: *const c_char, options: *const OrtSessionOptions, out: *mut *mut OrtSession) -> *mut OrtStatus;
+pub type CreateSessionFn = unsafe extern "C" fn(
+    env: *const OrtEnv,
+    model_path: *const c_char,
+    options: *const OrtSessionOptions,
+    out: *mut *mut OrtSession,
+) -> *mut OrtStatus;
 pub type ReleaseSessionFn = unsafe extern "C" fn(session: *mut OrtSession);
 pub type RunFn = unsafe extern "C" fn(
     session: *mut OrtSession,
@@ -181,15 +180,11 @@ pub type RunFn = unsafe extern "C" fn(
     outputs: *mut *mut OrtValue,
 ) -> *mut OrtStatus;
 
-pub type SessionGetInputCountFn = unsafe extern "C" fn(
-    session: *const OrtSession,
-    out: *mut usize,
-) -> *mut OrtStatus;
+pub type SessionGetInputCountFn =
+    unsafe extern "C" fn(session: *const OrtSession, out: *mut usize) -> *mut OrtStatus;
 
-pub type SessionGetOutputCountFn = unsafe extern "C" fn(
-    session: *const OrtSession,
-    out: *mut usize,
-) -> *mut OrtStatus;
+pub type SessionGetOutputCountFn =
+    unsafe extern "C" fn(session: *const OrtSession, out: *mut usize) -> *mut OrtStatus;
 
 pub type SessionGetInputNameFn = unsafe extern "C" fn(
     session: *const OrtSession,
@@ -211,10 +206,15 @@ pub type SessionGetInputTypeInfoFn = unsafe extern "C" fn(
     type_info: *mut *mut OrtTypeInfo,
 ) -> *mut OrtStatus;
 
-pub type CreateSessionOptionsFn = unsafe extern "C" fn(out: *mut *mut OrtSessionOptions) -> *mut OrtStatus;
+pub type CreateSessionOptionsFn =
+    unsafe extern "C" fn(out: *mut *mut OrtSessionOptions) -> *mut OrtStatus;
 pub type ReleaseSessionOptionsFn = unsafe extern "C" fn(options: *mut OrtSessionOptions);
-pub type SetSessionGraphOptimizationLevelFn = unsafe extern "C" fn(options: *mut OrtSessionOptions, level: GraphOptimizationLevel) -> *mut OrtStatus;
-pub type SetIntraOpNumThreadsFn = unsafe extern "C" fn(options: *mut OrtSessionOptions, num_threads: i32) -> *mut OrtStatus;
+pub type SetSessionGraphOptimizationLevelFn = unsafe extern "C" fn(
+    options: *mut OrtSessionOptions,
+    level: GraphOptimizationLevel,
+) -> *mut OrtStatus;
+pub type SetIntraOpNumThreadsFn =
+    unsafe extern "C" fn(options: *mut OrtSessionOptions, num_threads: i32) -> *mut OrtStatus;
 pub type CreateCpuMemoryInfoFn = unsafe extern "C" fn(
     allocator_type: OrtAllocatorType,
     mem_type: OrtMemType,
@@ -231,15 +231,32 @@ pub type CreateTensorWithDataAsOrtValueFn = unsafe extern "C" fn(
     out: *mut *mut OrtValue,
 ) -> *mut OrtStatus;
 pub type ReleaseValueFn = unsafe extern "C" fn(value: *mut OrtValue);
-pub type GetTensorMutableDataFn = unsafe extern "C" fn(value: *mut OrtValue, out: *mut *mut std::ffi::c_void) -> *mut OrtStatus;
-pub type GetTensorTypeAndShapeFn = unsafe extern "C" fn(value: *const OrtValue, out: *mut *mut OrtTensorTypeAndShapeInfo) -> *mut OrtStatus;
-pub type ReleaseTensorTypeAndShapeInfoFn = unsafe extern "C" fn(info: *mut OrtTensorTypeAndShapeInfo);
+pub type GetTensorMutableDataFn =
+    unsafe extern "C" fn(value: *mut OrtValue, out: *mut *mut std::ffi::c_void) -> *mut OrtStatus;
+pub type GetTensorTypeAndShapeFn = unsafe extern "C" fn(
+    value: *const OrtValue,
+    out: *mut *mut OrtTensorTypeAndShapeInfo,
+) -> *mut OrtStatus;
+pub type ReleaseTensorTypeAndShapeInfoFn =
+    unsafe extern "C" fn(info: *mut OrtTensorTypeAndShapeInfo);
 pub type ReleaseTypeInfoFn = unsafe extern "C" fn(info: *mut OrtTypeInfo);
-pub type GetTensorElementTypeFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut ONNXTensorElementDataType) -> *mut OrtStatus;
-pub type CastTypeInfoToTensorInfoFn = unsafe extern "C" fn(type_info: *const OrtTypeInfo, out: *mut *const OrtTensorTypeAndShapeInfo) -> *mut OrtStatus;
-pub type GetDimensionsCountFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
-pub type GetDimensionsFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, dim_values: *mut i64, dim_count: usize) -> *mut OrtStatus;
-pub type GetTensorShapeElementCountFn = unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
+pub type GetTensorElementTypeFn = unsafe extern "C" fn(
+    info: *const OrtTensorTypeAndShapeInfo,
+    out: *mut ONNXTensorElementDataType,
+) -> *mut OrtStatus;
+pub type CastTypeInfoToTensorInfoFn = unsafe extern "C" fn(
+    type_info: *const OrtTypeInfo,
+    out: *mut *const OrtTensorTypeAndShapeInfo,
+) -> *mut OrtStatus;
+pub type GetDimensionsCountFn =
+    unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
+pub type GetDimensionsFn = unsafe extern "C" fn(
+    info: *const OrtTensorTypeAndShapeInfo,
+    dim_values: *mut i64,
+    dim_count: usize,
+) -> *mut OrtStatus;
+pub type GetTensorShapeElementCountFn =
+    unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
 
 // OrtApi vtable indices — verified against onnxruntime_c_api.h v1.24.2
 // on Jetson (aarch64). These indices are stable across versions since
@@ -288,11 +305,6 @@ pub const IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO: usize = 99;
 pub const IDX_RELEASE_SESSION_OPTIONS: usize = 100;
 
 impl OrtApi {
-    /// Access a function in the vtable by index
-    ///
-    /// # Safety
-    /// - The index must be valid for this API version
-    /// - The returned function pointer must be transmuted to the correct type before calling
     pub unsafe fn get_fn<F>(&self, index: usize) -> F {
         unsafe {
             let vtable = self as *const _ as *const *const ();
@@ -305,11 +317,6 @@ impl OrtApi {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // NOTE: These tests require libonnxruntime.so to be available for linking.
-    // Set ONNXRUNTIME_DIR environment variable before running tests.
-    // The tests themselves don't call any onnxruntime functions - they verify
-    // compile-time properties of the FFI types.
 
     #[test]
     fn test_opaque_types_are_zero_sized() {
@@ -331,10 +338,5 @@ mod tests {
         assert_eq!(ONNXTensorElementDataType::Int64 as i32, 7);
         assert_eq!(ONNXTensorElementDataType::Double as i32, 11);
         assert_eq!(GraphOptimizationLevel::EnableAll as i32, 99);
-    }
-
-    #[test]
-    fn test_api_version() {
-        assert_eq!(ORT_API_VERSION, 24);
     }
 }

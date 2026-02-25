@@ -1,4 +1,4 @@
-use crate::{vad::SileroVad, Inference};
+use crate::{Inference, vad::SileroVad};
 
 #[test]
 fn test_silero_vad_is_send() {
@@ -11,7 +11,9 @@ fn test_silero_vad_is_send() {
 fn test_silero_vad_model_io_names() {
     // Risk mitigation: verify Silero VAD v5 I/O names match expectations
     let inference = Inference::cpu().unwrap();
-    let session = inference.onnx_session("../../data/silero/silero_vad.onnx").unwrap();
+    let session = inference
+        .onnx_session("../../data/silero/silero_vad.onnx")
+        .unwrap();
 
     // Verify input names
     let input_count = session.input_count().unwrap();
@@ -36,9 +38,7 @@ fn test_silero_vad_model_io_names() {
 #[ignore] // Requires ONNX model
 fn test_silero_vad_integration() {
     let inference = Inference::cpu().unwrap();
-    let mut vad = inference
-        .use_silero_vad("../../data/silero/silero_vad.onnx")
-        .unwrap();
+    let mut vad = inference.use_silero_vad().unwrap();
 
     // Test 1: Silence should produce low probability
     let silence: Vec<f32> = vec![0.0; 512];
@@ -86,9 +86,7 @@ fn test_silero_vad_integration() {
 #[ignore] // Requires ONNX model
 fn test_silero_vad_multiple_frames() {
     let inference = Inference::cpu().unwrap();
-    let mut vad = inference
-        .use_silero_vad("../../data/silero/silero_vad.onnx")
-        .unwrap();
+    let mut vad = inference.use_silero_vad().unwrap();
 
     let silence: Vec<f32> = vec![0.0; 512];
 

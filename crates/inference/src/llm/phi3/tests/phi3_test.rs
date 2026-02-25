@@ -1,4 +1,4 @@
-use crate::{llm::Phi3, Inference};
+use crate::{Inference, llm::Phi3};
 
 #[test]
 fn test_phi3_is_send() {
@@ -71,13 +71,7 @@ fn test_phi3_model_io_verification() {
 async fn test_phi3_integration() {
     // Integration test for forward/recv generation
     let inference = Inference::cpu().unwrap();
-    let mut model = inference
-        .use_phi3(
-            "../../data/phi3/phi3-mini-4k-instruct-cuda-int4-rtn-block-32.onnx",
-            "../../data/phi3/tokenizer.json",
-        )
-        .unwrap()
-        .with_max_tokens(20);
+    let mut model = inference.use_phi3().unwrap().with_max_tokens(20);
 
     // Start generation
     model.forward("Hello").unwrap();
@@ -107,10 +101,7 @@ async fn test_phi3_integration() {
 
     // Verify concatenated output is non-empty and >= 5 chars
     let output = tokens.join("");
-    assert!(
-        !output.is_empty(),
-        "Generated output is empty"
-    );
+    assert!(!output.is_empty(), "Generated output is empty");
     assert!(
         output.len() >= 5,
         "Generated output is too short: {} chars, expected >= 5",
