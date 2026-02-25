@@ -33,7 +33,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let sample_count = mono_samples.len();
     let duration_secs = sample_count as f64 / spec.sample_rate as f64;
-    let tensor = Tensor::new(vec![mono_samples.len()], mono_samples).unwrap();
 
     log_info!(
         "Playing {} ({} Hz, {:.2}s)...",
@@ -43,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     audioout
         .play(AudioSample {
-            data: AudioData::Pcm(tensor),
+            data: mono_samples,
             sample_rate: spec.sample_rate as usize,
         })
         .await;

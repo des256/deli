@@ -4,11 +4,8 @@ pub enum Transcription {
     Cancelled,
 }
 
-pub mod asr;
-pub use asr::Asr;
-
-pub mod sherpa;
-pub use sherpa::Sherpa;
-
 pub mod parakeet;
 pub use parakeet::Parakeet;
+
+//pub mod sherpa;
+//pub use sherpa::Sherpa;

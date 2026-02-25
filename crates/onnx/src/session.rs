@@ -1,6 +1,6 @@
 use {
     crate::*,
-    std::{ffi::CString, sync::Arc},
+    std::{collections::HashMap, ffi::CString, sync::Arc},
 };
 
 pub struct Session {
@@ -180,6 +180,95 @@ impl Session {
         }
 
         Ok(elem_type)
+    }
+
+    /// Get custom metadata from the model as a key-value map.
+    pub fn metadata(&self) -> Result<HashMap<String, String>, OnnxError> {
+        // Get model metadata handle
+        let mut metadata: *mut ffi::OrtModelMetadata = std::ptr::null_mut();
+        let status = unsafe {
+            (self.onnx.session_get_model_metadata)(self.session, &mut metadata as *mut _)
+        };
+        if !status.is_null() {
+            return Err(OnnxError::from_status(self.onnx.api, status));
+        }
+
+        // Get all custom metadata keys
+        let mut keys_ptr: *mut *mut std::os::raw::c_char = std::ptr::null_mut();
+        let mut num_keys: i64 = 0;
+        let status = unsafe {
+            (self.onnx.model_metadata_get_custom_metadata_map_keys)(
+                metadata,
+                self.onnx.allocator,
+                &mut keys_ptr as *mut _,
+                &mut num_keys as *mut _,
+            )
+        };
+        if !status.is_null() {
+            unsafe { (self.onnx.release_model_metadata)(metadata) };
+            return Err(OnnxError::from_status(self.onnx.api, status));
+        }
+
+        let mut map = HashMap::new();
+
+        for i in 0..num_keys as usize {
+            let key_ptr = unsafe { *keys_ptr.add(i) };
+            let key = unsafe {
+                std::ffi::CStr::from_ptr(key_ptr)
+                    .to_string_lossy()
+                    .into_owned()
+            };
+
+            // Look up the value for this key
+            let key_cstr = CString::new(key.as_str())
+                .map_err(|_| OnnxError::runtime_error("Null byte in metadata key"))?;
+            let mut value_ptr: *mut std::os::raw::c_char = std::ptr::null_mut();
+            let status = unsafe {
+                (self.onnx.model_metadata_lookup_custom_metadata_map)(
+                    metadata,
+                    self.onnx.allocator,
+                    key_cstr.as_ptr(),
+                    &mut value_ptr as *mut _,
+                )
+            };
+            if !status.is_null() {
+                // Free the key, remaining keys, and metadata before returning
+                unsafe { (self.onnx.allocator_free)(self.onnx.allocator, key_ptr as *mut _) };
+                for j in (i + 1)..num_keys as usize {
+                    unsafe {
+                        (self.onnx.allocator_free)(
+                            self.onnx.allocator,
+                            *keys_ptr.add(j) as *mut _,
+                        )
+                    };
+                }
+                unsafe { (self.onnx.allocator_free)(self.onnx.allocator, keys_ptr as *mut _) };
+                unsafe { (self.onnx.release_model_metadata)(metadata) };
+                return Err(OnnxError::from_status(self.onnx.api, status));
+            }
+
+            if !value_ptr.is_null() {
+                let value = unsafe {
+                    std::ffi::CStr::from_ptr(value_ptr)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                map.insert(key, value);
+                unsafe {
+                    (self.onnx.allocator_free)(self.onnx.allocator, value_ptr as *mut _)
+                };
+            }
+
+            unsafe { (self.onnx.allocator_free)(self.onnx.allocator, key_ptr as *mut _) };
+        }
+
+        // Free the keys array and metadata handle
+        if !keys_ptr.is_null() {
+            unsafe { (self.onnx.allocator_free)(self.onnx.allocator, keys_ptr as *mut _) };
+        }
+        unsafe { (self.onnx.release_model_metadata)(metadata) };
+
+        Ok(map)
     }
 
     pub fn run(

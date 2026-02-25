@@ -1,4 +1,4 @@
-use {crate::*, std::path::Path, std::sync::Arc};
+use {crate::*, std::sync::Arc};
 
 const ONNX_VERSION: usize = 24;
 
@@ -9,10 +9,21 @@ pub struct Inference {
 
 impl Inference {
     pub fn new() -> Result<Self, InferError> {
-        let onnx = onnx::Onnx::new(ONNX_VERSION)?;
+        let onnx = match onnx::Onnx::new(ONNX_VERSION) {
+            Ok(onnx) => onnx,
+            Err(error) => return Err(InferError::Onnx(error.to_string())),
+        };
         Ok(Self { onnx })
     }
 
+    pub fn use_parakeet(
+        &self,
+        executor: &onnx::Executor,
+    ) -> Result<crate::asr::parakeet::Parakeet, InferError> {
+        crate::asr::parakeet::Parakeet::new(&self.onnx, &executor)
+    }
+
+    /*
     pub fn use_smollm3(
         &self,
         executor: &onnx::Executor,
@@ -58,13 +69,6 @@ impl Inference {
         crate::asr::sherpa::Sherpa::new(&self.onnx, &executor)
     }
 
-    pub fn use_parakeet(
-        &self,
-        executor: &onnx::Executor,
-    ) -> Result<crate::asr::parakeet::Parakeet, InferError> {
-        crate::asr::parakeet::Parakeet::new(&self.onnx, &executor)
-    }
-
     pub fn use_silero_vad(&self) -> Result<crate::vad::SileroVad, InferError> {
         crate::vad::SileroVad::new(&self.onnx, &executor)
     }
@@ -72,4 +76,5 @@ impl Inference {
     pub fn use_parakeet_diar(&self) -> Result<crate::diar::parakeet::Sortformer, InferError> {
         crate::diar::parakeet::Sortformer::new(session, config)
     }
+    */
 }

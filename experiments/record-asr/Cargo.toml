@@ -8,6 +8,7 @@ name = "record_asr"
 path = "src/main.rs"
 
 [dependencies]
+onnx = { path = "../../crates/onnx" }
 inference = { path = "../../crates/inference" }
 audio = { path = "../../crates/audio" }
 base = { path = "../../crates/base" }
@@ -20,4 +21,4 @@ tokio = { version = "1", features = [
 ] }
 
 [features]
-cuda = ["inference/cuda"]
+cuda = ["inference/cuda", "onnx/cuda"]

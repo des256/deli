@@ -71,12 +71,7 @@ impl Parakeet {
         })
     }
 
-    /// Configure chunk size in samples (default: 16000 = 1 second).
-    pub fn with_chunk_samples(mut self, chunk_samples: usize) -> Self {
-        self.chunk_samples = chunk_samples;
-        self
-    }
-
+    /*
     /// Send an audio sample for transcription.
     ///
     /// Audio is buffered and dispatched in fixed-size chunks to the background
@@ -123,6 +118,7 @@ impl Parakeet {
             _ => None,
         }
     }
+    */
 
     /// Signal that no more audio will be sent.
     ///
@@ -147,6 +143,7 @@ impl Parakeet {
         Ok(())
     }
 
+    /*
     /// Spawn a blocking background task that reads audio chunks from `audio_rx`,
     /// runs ASR, and pushes transcription results to `text_tx`.
     fn spawn_worker(
@@ -211,7 +208,7 @@ impl Parakeet {
             }
             // text_tx drops here, causing recv() to return None
         });
-    }
+    }*/
 }
 
 /*

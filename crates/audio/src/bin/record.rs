@@ -20,11 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut all_samples: Vec<i16> = Vec::new();
     while all_samples.len() < TOTAL_SAMPLES {
         match audioin.capture().await {
-            Ok(AudioSample { data, .. }) => match data {
-                AudioData::Pcm(tensor) => {
-                    all_samples.extend(&tensor.data);
-                }
-            },
+            Ok(AudioSample { data, .. }) => all_samples.extend(data),
             Err(error) => {
                 log_error!("Audio capture ended unexpectedly: {}", error);
                 break;

@@ -1,13 +1,11 @@
-use {base::Tensor, std::fmt};
-
 #[derive(Debug)]
 pub enum AudioError {
     Device(String), // device errors (not available, initialization failure, etc.)
     Stream(String), // streaming errors (disconnection, read error, etc.)
 }
 
-impl fmt::Display for AudioError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl std::fmt::Display for AudioError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AudioError::Device(error) => write!(f, "Audio device error: {error}"),
             AudioError::Stream(error) => write!(f, "Audio streaming error: {error}"),
@@ -16,13 +14,8 @@ impl fmt::Display for AudioError {
 }
 
 #[derive(Debug, Clone)]
-pub enum AudioData {
-    Pcm(Tensor<i16>),
-}
-
-#[derive(Debug, Clone)]
 pub struct AudioSample {
-    pub data: AudioData,
+    pub data: Vec<i16>,
     pub sample_rate: usize,
 }
 

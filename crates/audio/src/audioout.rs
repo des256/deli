@@ -156,11 +156,7 @@ impl AudioOut {
                             // drain all available samples from the channel into the ring buffer
                             loop {
                                 match receiver.try_recv() {
-                                    Ok(sample) => match sample.data {
-                                        AudioData::Pcm(tensor) => {
-                                            ring_buffer.extend(tensor.data.iter())
-                                        }
-                                    },
+                                    Ok(sample) => ring_buffer.extend(sample.data.iter()),
                                     Err(mpsc::error::TryRecvError::Empty) => break,
                                     Err(mpsc::error::TryRecvError::Disconnected) => {
                                         log_error!("Audio output channel disconnected");

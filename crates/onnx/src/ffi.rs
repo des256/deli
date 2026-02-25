@@ -5,10 +5,16 @@ pub struct OrtEnv {
     _private: [u8; 0],
 }
 
+unsafe impl Send for OrtEnv {}
+unsafe impl Sync for OrtEnv {}
+
 #[repr(C)]
 pub struct OrtSession {
     _private: [u8; 0],
 }
+
+unsafe impl Send for OrtSession {}
+unsafe impl Sync for OrtSession {}
 
 #[repr(C)]
 pub struct OrtSessionOptions {
@@ -47,6 +53,11 @@ pub struct OrtTensorTypeAndShapeInfo {
 
 #[repr(C)]
 pub struct OrtTypeInfo {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct OrtModelMetadata {
     _private: [u8; 0],
 }
 
@@ -131,10 +142,15 @@ pub struct OrtApiBase {
     pub GetVersionString: unsafe extern "C" fn() -> *const c_char,
 }
 
+unsafe impl Send for OrtApiBase {}
+
 #[repr(C)]
 pub struct OrtApi {
     _private: [u8; 0],
 }
+
+unsafe impl Send for OrtApi {}
+unsafe impl Sync for OrtApi {}
 
 unsafe extern "C" {
     pub fn OrtGetApiBase() -> *const OrtApiBase;
@@ -258,6 +274,25 @@ pub type GetDimensionsFn = unsafe extern "C" fn(
 pub type GetTensorShapeElementCountFn =
     unsafe extern "C" fn(info: *const OrtTensorTypeAndShapeInfo, out: *mut usize) -> *mut OrtStatus;
 
+// Model metadata
+pub type SessionGetModelMetadataFn = unsafe extern "C" fn(
+    session: *const OrtSession,
+    out: *mut *mut OrtModelMetadata,
+) -> *mut OrtStatus;
+pub type ModelMetadataLookupCustomMetadataMapFn = unsafe extern "C" fn(
+    model_metadata: *const OrtModelMetadata,
+    allocator: *mut OrtAllocator,
+    key: *const c_char,
+    value: *mut *mut c_char,
+) -> *mut OrtStatus;
+pub type ModelMetadataGetCustomMetadataMapKeysFn = unsafe extern "C" fn(
+    model_metadata: *const OrtModelMetadata,
+    allocator: *mut OrtAllocator,
+    keys: *mut *mut *mut c_char,
+    num_keys: *mut i64,
+) -> *mut OrtStatus;
+pub type ReleaseModelMetadataFn = unsafe extern "C" fn(metadata: *mut OrtModelMetadata);
+
 // OrtApi vtable indices — verified against onnxruntime_c_api.h v1.24.2
 // on Jetson (aarch64). These indices are stable across versions since
 // the vtable only grows (new entries appended, existing entries never move).
@@ -303,6 +338,11 @@ pub const IDX_RELEASE_RUN_OPTIONS: usize = 97;
 pub const IDX_RELEASE_TYPE_INFO: usize = 98;
 pub const IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO: usize = 99;
 pub const IDX_RELEASE_SESSION_OPTIONS: usize = 100;
+// Model metadata
+pub const IDX_SESSION_GET_MODEL_METADATA: usize = 111;
+pub const IDX_MODEL_METADATA_LOOKUP_CUSTOM_METADATA_MAP: usize = 116;
+pub const IDX_RELEASE_MODEL_METADATA: usize = 118;
+pub const IDX_MODEL_METADATA_GET_CUSTOM_METADATA_MAP_KEYS: usize = 123;
 
 impl OrtApi {
     pub unsafe fn get_fn<F>(&self, index: usize) -> F {

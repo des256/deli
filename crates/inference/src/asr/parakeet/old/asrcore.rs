@@ -2,14 +2,8 @@ use crate::error::{InferError, Result};
 use base::log_info;
 use onnx::Session;
 
-const BLANK_ID: i64 = 1024;
 const MAX_SYMBOLS_PER_STEP: usize = 10;
 const VOCAB_SIZE: usize = 1025; // 1024 tokens + 1 blank
-const ENCODER_DIM: usize = 1024;
-const NUM_LAYERS: usize = 24;
-const CACHE_CHANNEL_CONTEXT: usize = 70;
-const CACHE_TIME_CONTEXT: usize = 8;
-const DECODER_STATE_DIM: usize = 640;
 
 /// Core ASR state for the streaming Parakeet FastConformer-Transducer.
 ///
@@ -31,6 +25,7 @@ pub(crate) struct AsrCore {
 }
 
 impl AsrCore {
+    /*
     /// Create a new AsrCore with zero-initialized states
     pub fn new(encoder: Session, decoder_joint: Session, tokens: Vec<String>) -> Result<Self> {
         let state1 = zeros_f32(&[2, 1, DECODER_STATE_DIM as i64])?;
@@ -65,6 +60,7 @@ impl AsrCore {
             cache_last_channel_len,
         })
     }
+    */
 
     /*
     /// Reset decoder LSTM state only (preserves encoder caches).

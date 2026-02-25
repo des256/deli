@@ -135,10 +135,8 @@ impl AudioIn {
                                             buffer.len() / 2,
                                         )
                                     };
-                                    let tensor =
-                                        Tensor::new(vec![slice.len()], slice.to_vec()).unwrap();
                                     let sample = AudioSample {
-                                        data: AudioData::Pcm(tensor),
+                                        data: slice.to_vec(),
                                         sample_rate: config.sample_rate as usize,
                                     };
 

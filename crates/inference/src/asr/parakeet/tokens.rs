@@ -1,13 +1,12 @@
-use crate::error::{InferError, Result};
-use std::path::Path;
+use {crate::*, std::path::Path};
 
 /// Load token vocabulary from a SentencePiece `.model` file.
 ///
 /// Parses the protobuf to extract piece strings in vocabulary order.
-pub fn load_tokens<P: AsRef<Path>>(path: P) -> Result<Vec<String>> {
+pub fn load_tokens<P: AsRef<Path>>(path: P) -> Result<Vec<String>, InferError> {
     let path = path.as_ref();
-    let data = std::fs::read(path)
-        .map_err(|e| InferError::Io(format!("{}: {}", path.display(), e)))?;
+    let data =
+        std::fs::read(path).map_err(|e| InferError::Io(format!("{}: {}", path.display(), e)))?;
 
     parse_sentencepiece_model(&data)
 }
@@ -15,7 +14,7 @@ pub fn load_tokens<P: AsRef<Path>>(path: P) -> Result<Vec<String>> {
 /// Minimal protobuf parser for SentencePiece ModelProto.
 ///
 /// Extracts piece strings from field 1 (repeated SentencePiece).
-fn parse_sentencepiece_model(data: &[u8]) -> Result<Vec<String>> {
+fn parse_sentencepiece_model(data: &[u8]) -> Result<Vec<String>, InferError> {
     let mut pieces = Vec::new();
     let mut pos = 0;
 
@@ -46,7 +45,7 @@ fn parse_sentencepiece_model(data: &[u8]) -> Result<Vec<String>> {
 }
 
 /// Parse a SentencePiece sub-message, returning the piece string.
-fn parse_sentencepiece(data: &[u8]) -> Result<Option<String>> {
+fn parse_sentencepiece(data: &[u8]) -> Result<Option<String>, InferError> {
     let mut pos = 0;
     let mut piece = None;
 
@@ -66,7 +65,7 @@ fn parse_sentencepiece(data: &[u8]) -> Result<Option<String>> {
     Ok(piece)
 }
 
-fn read_varint(data: &[u8], mut pos: usize) -> Result<(u64, usize)> {
+fn read_varint(data: &[u8], mut pos: usize) -> Result<(u64, usize), InferError> {
     let mut result: u64 = 0;
     let mut shift = 0;
     loop {
@@ -88,14 +87,14 @@ fn read_varint(data: &[u8], mut pos: usize) -> Result<(u64, usize)> {
     }
 }
 
-fn read_tag(data: &[u8], pos: usize) -> Result<(u32, u8, usize)> {
+fn read_tag(data: &[u8], pos: usize) -> Result<(u32, u8, usize), InferError> {
     let (value, new_pos) = read_varint(data, pos)?;
     let tag = (value >> 3) as u32;
     let wire_type = (value & 0x07) as u8;
     Ok((tag, wire_type, new_pos))
 }
 
-fn read_bytes<'a>(data: &'a [u8], pos: usize) -> Result<(&'a [u8], usize)> {
+fn read_bytes<'a>(data: &'a [u8], pos: usize) -> Result<(&'a [u8], usize), InferError> {
     let (len, pos) = read_varint(data, pos)?;
     let len = len as usize;
     let end = pos + len;
@@ -107,7 +106,7 @@ fn read_bytes<'a>(data: &'a [u8], pos: usize) -> Result<(&'a [u8], usize)> {
     Ok((&data[pos..end], end))
 }
 
-fn skip_field(data: &[u8], pos: usize, wire_type: u8) -> Result<usize> {
+fn skip_field(data: &[u8], pos: usize, wire_type: u8) -> Result<usize, InferError> {
     match wire_type {
         0 => {
             let (_, new_pos) = read_varint(data, pos)?;

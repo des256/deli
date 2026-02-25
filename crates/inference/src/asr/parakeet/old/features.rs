@@ -4,12 +4,8 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 const REQUIRED_SAMPLE_RATE: usize = 16000;
-const WINDOW_SIZE: usize = 400; // 25ms at 16kHz
 const HOP_SIZE: usize = 160; // 10ms at 16kHz
-const NUM_MEL_BINS: usize = 128;
 const PRE_EMPHASIS: f32 = 0.97;
-const FFT_SIZE: usize = 512;
-const SPECTRUM_BINS: usize = FFT_SIZE / 2 + 1; // 257
 
 /// NeMo's log zero guard value (2^-24, smallest normal float16).
 const LOG_ZERO_GUARD: f32 = 5.960_464_5e-08;
@@ -22,6 +18,7 @@ static MEL_FILTERBANK: OnceLock<Vec<f32>> = OnceLock::new();
 /// Loaded once from `hann_window.bin`.
 static HANN_WINDOW: OnceLock<Vec<f32>> = OnceLock::new();
 
+/*
 /// Initialize feature extraction by loading the mel filterbank and window
 /// from binary files exported from the NeMo model's preprocessor.
 ///
@@ -70,6 +67,7 @@ pub fn init_features(model_dir: &Path) -> Result<()> {
 
     Ok(())
 }
+*/
 
 /// Compute 128-dimensional log-mel filterbank features from 16kHz PCM audio.
 ///

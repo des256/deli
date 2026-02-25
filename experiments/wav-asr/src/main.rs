@@ -1,14 +1,10 @@
-use {
-    audio::{AudioData, AudioSample},
-    base::*,
-    inference::{Inference, asr::Transcription},
-    std::time::Instant,
-};
+use {base::*, inference::*, onnx::*};
 
 const SAMPLE_RATE: usize = 16000;
+const CHUNK_SIZE: usize = 16000;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), InferError> {
     base::init_stdout_logger();
 
     let args: Vec<String> = std::env::args().collect();
@@ -20,7 +16,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wav_path = &args[1];
 
     // Read WAV file
-    let reader = hound::WavReader::open(wav_path)?;
+    let reader =
+        hound::WavReader::open(wav_path).map_err(|e| InferError::Runtime(e.to_string()))?;
     let spec = reader.spec();
     log_info!(
         "WAV: {} Hz, {} ch, {} bit",
@@ -36,12 +33,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             reader
                 .into_samples::<i32>()
                 .map(|s| s.map(|v| (v as f32 / max_val * i16::MAX as f32) as i16))
-                .collect::<Result<_, _>>()?
+                .collect::<Result<_, _>>()
+                .map_err(|e| InferError::Runtime(e.to_string()))?
         }
         hound::SampleFormat::Float => reader
             .into_samples::<f32>()
             .map(|s| s.map(|v| (v * i16::MAX as f32) as i16))
-            .collect::<Result<_, _>>()?,
+            .collect::<Result<_, _>>()
+            .map_err(|e| InferError::Runtime(e.to_string()))?,
     };
 
     // Convert to mono if stereo
@@ -73,54 +72,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     log_info!("Audio: {:.1}s, {} samples", duration_secs, samples.len());
 
     // Initialize inference
-    #[cfg(feature = "cuda")]
-    let inference = Inference::cuda(0)?;
-    #[cfg(not(feature = "cuda"))]
-    let inference = Inference::cpu()?;
+    let inference = Inference::new()?;
 
-    log_info!("Loading Parakeet models...");
+    // load ASR model
+    let mut asr = inference.use_parakeet(&Executor::Cpu)?;
 
-    let mut asr = inference.use_parakeet()?;
-
-    // Feed audio in chunks via the streaming API
-    let start = Instant::now();
-    let chunk_size = SAMPLE_RATE; // 1 second chunks
-    for chunk in samples.chunks(chunk_size) {
-        let sample = AudioSample {
-            data: AudioData::Pcm(base::Tensor {
-                shape: vec![chunk.len()],
-                data: chunk.to_vec(),
-            }),
-            sample_rate: SAMPLE_RATE,
-        };
-        asr.send(sample).await?;
-    }
-    asr.close().await?;
-
-    // Collect transcription results
-    let mut final_text = String::new();
-    while let Some(result) = asr.recv().await {
-        match result {
-            Ok(Transcription::Partial { ref text, .. }) => {
-                log_info!("partial: {}", text);
+    // spawn off task to feed ASR
+    tokio::spawn({
+        let asr_audio_tx = asr.audio_tx();
+        async move {
+            for chunk in samples.chunks(CHUNK_SIZE) {
+                if let Err(error) = asr_audio_tx.send(chunk.to_vec()).await {
+                    log_error!("file -> asr: {}", error);
+                    break;
+                }
             }
-            Ok(Transcription::Final { ref text, .. }) => {
-                final_text = text.clone();
-            }
-            Ok(Transcription::Cancelled) => {}
-            Err(e) => {
-                eprintln!("Transcription error: {}", e);
+            if let Err(error) = asr_audio_tx.send(vec![0i16; 2 * CHUNK_SIZE]).await {
+                log_error!("file -> asr: {}", error);
             }
         }
-    }
+    });
 
-    let elapsed = start.elapsed();
-    if !final_text.trim().is_empty() {
-        println!("{}", final_text.trim());
-    } else {
-        log_info!("No speech detected");
+    // Collect transcription results
+    while let Some(text) = asr.recv().await {
+        println!("{}", text);
     }
-    log_info!("Transcription took {:?}", elapsed);
 
     Ok(())
 }

@@ -11,8 +11,14 @@ path = "src/main.rs"
 inference = { path = "../../crates/inference" }
 base = { path = "../../crates/base" }
 audio = { path = "../../crates/audio" }
+onnx = { path = "../../crates/onnx" }
 hound = "3.5"
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "signal",
+] }
 
 [features]
-cuda = ["inference/cuda"]
+cuda = ["inference/cuda", "onnx/cuda"]

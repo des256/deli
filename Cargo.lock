@@ -1387,6 +1387,7 @@ dependencies = [
  "audio",
  "base",
  "inference",
+ "onnx",
  "tokio",
 ]
 
@@ -2083,6 +2084,7 @@ dependencies = [
  "base",
  "hound",
  "inference",
+ "onnx",
  "tokio",
 ]
 

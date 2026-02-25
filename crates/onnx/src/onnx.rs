@@ -45,7 +45,15 @@ pub struct Onnx {
     pub(crate) get_tensor_shape_element_count: ffi::GetTensorShapeElementCountFn,
     pub(crate) release_tensor_type_and_shape_info: ffi::ReleaseTensorTypeAndShapeInfoFn,
     pub(crate) get_tensor_mutable_data: ffi::GetTensorMutableDataFn,
+    // Model metadata
+    pub(crate) session_get_model_metadata: ffi::SessionGetModelMetadataFn,
+    pub(crate) model_metadata_lookup_custom_metadata_map: ffi::ModelMetadataLookupCustomMetadataMapFn,
+    pub(crate) model_metadata_get_custom_metadata_map_keys: ffi::ModelMetadataGetCustomMetadataMapKeysFn,
+    pub(crate) release_model_metadata: ffi::ReleaseModelMetadataFn,
 }
+
+unsafe impl Send for Onnx {}
+unsafe impl Sync for Onnx {}
 
 impl Onnx {
     pub fn new(version: usize) -> Result<Arc<Self>, OnnxError> {
@@ -114,6 +122,14 @@ impl Onnx {
             unsafe { (*api).get_fn(ffi::IDX_RELEASE_TENSOR_TYPE_AND_SHAPE_INFO) };
         let get_tensor_mutable_data: ffi::GetTensorMutableDataFn =
             unsafe { (*api).get_fn(ffi::IDX_GET_TENSOR_MUTABLE_DATA) };
+        let session_get_model_metadata: ffi::SessionGetModelMetadataFn =
+            unsafe { (*api).get_fn(ffi::IDX_SESSION_GET_MODEL_METADATA) };
+        let model_metadata_lookup_custom_metadata_map: ffi::ModelMetadataLookupCustomMetadataMapFn =
+            unsafe { (*api).get_fn(ffi::IDX_MODEL_METADATA_LOOKUP_CUSTOM_METADATA_MAP) };
+        let model_metadata_get_custom_metadata_map_keys: ffi::ModelMetadataGetCustomMetadataMapKeysFn =
+            unsafe { (*api).get_fn(ffi::IDX_MODEL_METADATA_GET_CUSTOM_METADATA_MAP_KEYS) };
+        let release_model_metadata: ffi::ReleaseModelMetadataFn =
+            unsafe { (*api).get_fn(ffi::IDX_RELEASE_MODEL_METADATA) };
 
         // create environment
         let log_id = CString::new("onnx").unwrap();
@@ -169,6 +185,10 @@ impl Onnx {
             get_tensor_shape_element_count,
             release_tensor_type_and_shape_info,
             get_tensor_mutable_data,
+            session_get_model_metadata,
+            model_metadata_lookup_custom_metadata_map,
+            model_metadata_get_custom_metadata_map_keys,
+            release_model_metadata,
         }))
     }
 
