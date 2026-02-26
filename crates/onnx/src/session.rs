@@ -236,10 +236,7 @@ impl Session {
                 unsafe { (self.onnx.allocator_free)(self.onnx.allocator, key_ptr as *mut _) };
                 for j in (i + 1)..num_keys as usize {
                     unsafe {
-                        (self.onnx.allocator_free)(
-                            self.onnx.allocator,
-                            *keys_ptr.add(j) as *mut _,
-                        )
+                        (self.onnx.allocator_free)(self.onnx.allocator, *keys_ptr.add(j) as *mut _)
                     };
                 }
                 unsafe { (self.onnx.allocator_free)(self.onnx.allocator, keys_ptr as *mut _) };
@@ -254,9 +251,7 @@ impl Session {
                         .into_owned()
                 };
                 map.insert(key, value);
-                unsafe {
-                    (self.onnx.allocator_free)(self.onnx.allocator, value_ptr as *mut _)
-                };
+                unsafe { (self.onnx.allocator_free)(self.onnx.allocator, value_ptr as *mut _) };
             }
 
             unsafe { (self.onnx.allocator_free)(self.onnx.allocator, key_ptr as *mut _) };
@@ -364,7 +359,12 @@ mod tests {
     #[test]
     fn test_session_builder_nonexistent_file() {
         let onnx = Onnx::new(17).unwrap();
-        let result = onnx.create_session(&Executor::Cpu, "/nonexistent/model.onnx");
+        let result = onnx.create_session(
+            &Executor::Cpu,
+            &OptimizationLevel::Disabled,
+            1,
+            "/nonexistent/model.onnx",
+        );
         assert!(result.is_err(), "Should error for non-existent file");
     }
 }

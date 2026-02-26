@@ -17,6 +17,11 @@ async fn main() -> Result<(), InferError> {
     // Initialize inference
     let inference = Inference::new().map_err(|e| InferError::Runtime(e.to_string()))?;
 
+    // Load ASR
+    log_info!("Loading ASR...");
+    let mut asr = inference.use_parakeet(&onnx::Executor::Cuda(0))?;
+    log_info!("ASR loaded");
+
     // Load LLM
     log_info!("Loading LLM...");
     //let mut llm = inference.use_gemma3()?.with_max_tokens(MAX_TOKENS);

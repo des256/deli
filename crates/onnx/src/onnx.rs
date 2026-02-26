@@ -3,15 +3,18 @@ use {
     std::{ffi::CString, path::Path, ptr::null_mut, sync::Arc},
 };
 
-const GRAPH_OPTIMIZATION_LEVEL: ffi::GraphOptimizationLevel =
-    ffi::GraphOptimizationLevel::EnableBasic;
-
-const INTRA_OP_NUM_THREADS: usize = 2;
-
 #[derive(Debug, Clone)]
 pub enum Executor {
     Cpu,
     Cuda(usize),
+}
+
+#[derive(Debug, Clone)]
+pub enum OptimizationLevel {
+    Disabled,
+    EnableBasic,
+    EnableExtended,
+    EnableAll,
 }
 
 #[derive(Debug, Clone)]
@@ -47,8 +50,10 @@ pub struct Onnx {
     pub(crate) get_tensor_mutable_data: ffi::GetTensorMutableDataFn,
     // Model metadata
     pub(crate) session_get_model_metadata: ffi::SessionGetModelMetadataFn,
-    pub(crate) model_metadata_lookup_custom_metadata_map: ffi::ModelMetadataLookupCustomMetadataMapFn,
-    pub(crate) model_metadata_get_custom_metadata_map_keys: ffi::ModelMetadataGetCustomMetadataMapKeysFn,
+    pub(crate) model_metadata_lookup_custom_metadata_map:
+        ffi::ModelMetadataLookupCustomMetadataMapFn,
+    pub(crate) model_metadata_get_custom_metadata_map_keys:
+        ffi::ModelMetadataGetCustomMetadataMapKeysFn,
     pub(crate) release_model_metadata: ffi::ReleaseModelMetadataFn,
 }
 
@@ -195,6 +200,8 @@ impl Onnx {
     pub fn create_session(
         self: &Arc<Self>,
         executor: &Executor,
+        optimization_level: &OptimizationLevel,
+        threads: usize,
         model_path: impl AsRef<Path>,
     ) -> Result<Session, OnnxError> {
         let mut options: *mut ffi::OrtSessionOptions = null_mut();
@@ -214,15 +221,24 @@ impl Onnx {
         }
 
         let status = unsafe {
-            (self.set_session_graph_optimization_level)(options, GRAPH_OPTIMIZATION_LEVEL)
+            (self.set_session_graph_optimization_level)(
+                options,
+                match optimization_level {
+                    OptimizationLevel::Disabled => ffi::GraphOptimizationLevel::DisableAll,
+                    OptimizationLevel::EnableBasic => ffi::GraphOptimizationLevel::EnableBasic,
+                    OptimizationLevel::EnableExtended => {
+                        ffi::GraphOptimizationLevel::EnableExtended
+                    }
+                    OptimizationLevel::EnableAll => ffi::GraphOptimizationLevel::EnableAll,
+                },
+            )
         };
         if !status.is_null() {
             unsafe { (self.release_session_options)(options) };
             return Err(OnnxError::from_status(self.api, status));
         }
 
-        let status =
-            unsafe { (self.set_intra_op_num_threads)(options, INTRA_OP_NUM_THREADS as i32) };
+        let status = unsafe { (self.set_intra_op_num_threads)(options, threads as i32) };
         if !status.is_null() {
             unsafe { (self.release_session_options)(options) };
             return Err(OnnxError::from_status(self.api, status));

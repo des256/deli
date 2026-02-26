@@ -121,6 +121,11 @@ impl Value {
         })
     }
 
+    pub fn as_slice_mut<T: TensorElement>(&mut self) -> &mut [T] {
+        let count = self._data.len() / std::mem::size_of::<T>();
+        unsafe { std::slice::from_raw_parts_mut(self._data.as_mut_ptr() as *mut T, count) }
+    }
+
     pub fn empty_typed(
         onnx: &Arc<Onnx>,
         shape: &[usize],

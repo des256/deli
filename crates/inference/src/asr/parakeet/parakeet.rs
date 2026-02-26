@@ -304,10 +304,20 @@ impl Parakeet {
     pub fn new(onnx: &Arc<onnx::Onnx>, executor: &onnx::Executor) -> Result<Self, InferError> {
         // create encoder and decoder_joint sessions
         let mut encoder = onnx
-            .create_session(executor, PARAKEET_ENCODER_PATH)
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                PARAKEET_ENCODER_PATH,
+            )
             .map_err(|e| InferError::Runtime(format!("Failed to create encoder session: {e}")))?;
         let mut decoder_joint = onnx
-            .create_session(executor, PARAKEET_DECODER_PATH)
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                PARAKEET_DECODER_PATH,
+            )
             .map_err(|e| {
                 InferError::Runtime(format!("Failed to create decoder_joint session: {e}"))
             })?;

@@ -2,7 +2,7 @@ use {
     crate::*,
     base::*,
     rand_distr::{Distribution, Normal},
-    std::{collections::HashMap, io::Read, path::Path, sync::Arc},
+    std::{collections::HashMap, io::Read, path::Path, sync::Arc, time::Instant},
     tokio::sync::mpsc,
 };
 
@@ -64,9 +64,13 @@ fn get_names(
     exclude: &[&str],
 ) -> Result<(Vec<String>, Vec<String>), InferError> {
     let mut input_names: Vec<String> = Vec::new();
+
+    // get number of inputs
     let input_count = session
         .input_count()
         .map_err(|error| InferError::Runtime(format!("Failed to get input count: {}", error)))?;
+
+    // get each name
     for i in 0..input_count {
         let name = session
             .input_name(i)
@@ -75,20 +79,26 @@ fn get_names(
             input_names.push(name);
         }
     }
+
+    // construct output names by prepending out_ in front of each input name
     let output_names = input_names
         .iter()
         .map(|name| format!("out_{}", name))
         .collect();
+
     Ok((input_names, output_names))
 }
 
-fn initialize_cache(
+fn initialize_states(
     session: &onnx::Session,
     names: &[String],
 ) -> Result<Vec<onnx::Value>, InferError> {
+    // get number of inputs
     let input_count = session
         .input_count()
         .map_err(|e| InferError::Runtime(format!("Failed to get input count: {}", e)))?;
+
+    // build name to index map
     let mut name_to_index = HashMap::new();
     for i in 0..input_count {
         let name = session
@@ -96,18 +106,25 @@ fn initialize_cache(
             .map_err(|e| InferError::Runtime(format!("Failed to get input name: {}", e)))?;
         name_to_index.insert(name, i);
     }
-    let mut cache = Vec::new();
+
+    // build states
+    let mut states = Vec::new();
     for name in names {
+        // find index
         let index = *name_to_index
             .get(name)
             .ok_or_else(|| InferError::Runtime(format!("State input '{}' not found", name)))?;
+
+        // get tensor shape and element type
         let shape = session
             .input_shape(index)
             .map_err(|e| InferError::Runtime(format!("Failed to get shape for {}: {}", name, e)))?;
         let elem_type = session.input_element_type(index).map_err(|e| {
             InferError::Runtime(format!("Failed to get element type for {}: {}", name, e))
         })?;
+
         let tensor = if shape == [0] {
+            // create new 0x0 tensor
             onnx::Value::from_slice::<f32>(&session.onnx, &[0], &[]).map_err(|e| {
                 InferError::Runtime(format!(
                     "Failed to create initial tensor for {}: {}",
@@ -115,6 +132,7 @@ fn initialize_cache(
                 ))
             })?
         } else {
+            // create new empty tensor
             match elem_type {
                 onnx::ffi::ONNXTensorElementDataType::Float => {
                     onnx::Value::zeros::<f32>(&session.onnx, &shape)
@@ -145,26 +163,41 @@ fn initialize_cache(
                 ))
             })?
         };
-        cache.push(tensor);
+
+        // add to states
+        states.push(tensor);
     }
-    Ok(cache)
+
+    Ok(states)
 }
 
 fn prepare(text: &str) -> (String, usize) {
+    // remove leading and trailing whitespace and replace newlines with spaces
     let mut prepared = text.trim().replace('\n', " ");
+
+    // count words
     let words = prepared.split_whitespace().count();
+
+    // specify number of frames to add afterwards
     let frames_after = if words <= 4 { 3 } else { 1 } + 2;
+
+    // for small utterances, prepend with spaces
     if words < 5 {
         prepared = format!("        {}", prepared);
     }
+
+    // replace spaces with low line
     let prepared = format!("\u{2581}{}", prepared.replace(' ', "\u{2581}"));
+
     (prepared, frames_after)
 }
 
 fn tokenize(tokenizer: &tokenizers::Tokenizer, text: &str) -> Result<Vec<i64>, InferError> {
+    // tokenize sentence
     let encoding = tokenizer
         .encode(text, false)
         .map_err(|error| InferError::Runtime(format!("Tokenization failed: {}", error)))?;
+
     Ok(encoding.get_ids().iter().map(|&id| id as i64).collect())
 }
 
@@ -172,80 +205,105 @@ fn condition(
     conditioner: &mut onnx::Session,
     flow_main: &mut onnx::Session,
     token_ids: &[i64],
-    cache_flow_state: &mut Vec<onnx::Value>,
+    states: &mut Vec<onnx::Value>,
     flow_main_input_names: &[String],
     flow_main_output_names: &[String],
 ) -> Result<(), InferError> {
+    // get numbet of tokens
     let seq_len = token_ids.len();
+
+    // create tokens tensor
     let tokens = onnx::Value::from_slice::<i64>(&conditioner.onnx, &[1, seq_len], token_ids)
         .map_err(|e| InferError::Runtime(format!("Failed to create tokens tensor: {}", e)))?;
+
+    // run conditioner, turn tokens into embeddings
     let outputs = conditioner
         .run(&[("token_ids", &tokens)], &["embeddings"])
         .map_err(|error| InferError::Runtime(format!("Conditioning failed: {}", error)))?;
+
+    // extract embeddings
     let embeddings = outputs[0]
         .extract_tensor::<f32>()
         .map_err(|error| InferError::Runtime(format!("Failed to extract embeddings: {}", error)))?;
+
+    // create sequence tensor
     let sequence = onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 0, LATENT_DIM], &[])
         .map_err(|e| InferError::Runtime(format!("Failed to create sequence tensor: {}", e)))?;
+
+    // create embeddings tensor
     let text_embeddings = onnx::Value::from_slice::<f32>(
         &flow_main.onnx,
         &[1, seq_len, CONDITIONING_DIM],
         embeddings,
     )
     .map_err(|e| InferError::Runtime(format!("Failed to create text embeddings tensor: {}", e)))?;
+
+    // run flow main on sequence, embeddings and flow states
     let mut inputs = vec![
         ("sequence", &sequence),
         ("text_embeddings", &text_embeddings),
     ];
-    for (i, state) in cache_flow_state.iter().enumerate() {
+    for (i, state) in states.iter().enumerate() {
         inputs.push((&flow_main_input_names[i], state));
     }
     let output_names: Vec<&str> = flow_main_output_names.iter().map(|s| s.as_str()).collect();
     let outputs = flow_main
         .run(&inputs, &output_names)
         .map_err(|error| InferError::Runtime(format!("Flow main failed: {}", error)))?;
-    *cache_flow_state = outputs.into_iter().collect();
+
+    // store flow state
+    *states = outputs.into_iter().collect();
+
     Ok(())
 }
 
 fn step(
     flow_main: &mut onnx::Session,
     flow_step: &mut onnx::Session,
-    cache_flow_state: &mut Vec<onnx::Value>,
-    cache_latent: &mut Vec<f32>,
+    states: &mut Vec<onnx::Value>,
+    latent_state: &mut [f32],
     flow_main_input_names: &[String],
     flow_main_output_names: &[String],
-) -> Result<(Vec<f32>, bool), InferError> {
-    let sequence_data: Vec<f32> = cache_latent.clone();
-    let sequence =
-        onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 1, LATENT_DIM], &sequence_data)
-            .map_err(|e| InferError::Runtime(format!("Failed to create sequence tensor: {}", e)))?;
-    let text_embeddings =
-        onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 0, CONDITIONING_DIM], &[]).map_err(
-            |e| InferError::Runtime(format!("Failed to create text embeddings tensor: {}", e)),
-        )?;
+    sequence_tensor: &mut onnx::Value,
+    empty_text_embeddings: &onnx::Value,
+    s_tensor: &mut onnx::Value,
+    t_tensor: &mut onnx::Value,
+    c_tensor: &mut onnx::Value,
+    x_tensor: &mut onnx::Value,
+    decoder_latent_tensor: &mut onnx::Value,
+) -> Result<bool, InferError> {
+    // write latent state into pre-allocated sequence tensor
+    sequence_tensor
+        .as_slice_mut::<f32>()
+        .copy_from_slice(latent_state);
+
+    // run flow main on sequence, empty embeddings and flow state
     let mut inputs = vec![
-        ("sequence", &sequence),
-        ("text_embeddings", &text_embeddings),
+        ("sequence", &*sequence_tensor as &onnx::Value),
+        ("text_embeddings", empty_text_embeddings),
     ];
-    for (i, state) in cache_flow_state.iter().enumerate() {
+    for (i, state) in states.iter().enumerate() {
         inputs.push((&flow_main_input_names[i], state));
     }
     let mut output_names = vec!["conditioning", "eos_logit"];
     output_names.extend(flow_main_output_names.iter().map(|s| s.as_str()));
-    let outputs = flow_main
+    let mut outputs = flow_main
         .run(&inputs, &output_names)
         .map_err(|error| InferError::Runtime(format!("Flow main failed: {}", error)))?;
-    let conditioning = outputs[0]
-        .extract_tensor::<f32>()
-        .map_err(|error| InferError::Runtime(format!("Failed to extract conditioning: {}", error)))?
-        .to_vec();
-    let eos_logit_tensor = outputs[1]
+
+    // store flow state, leaving conditioning and eos_logit in outputs
+    *states = outputs.split_off(2);
+
+    // extract conditioning and EOS logit
+    let conditioning = outputs[0].extract_tensor::<f32>().map_err(|error| {
+        InferError::Runtime(format!("Failed to extract conditioning: {}", error))
+    })?;
+    let eos_logit = outputs[1]
         .extract_tensor::<f32>()
         .map_err(|error| InferError::Runtime(format!("Failed to extract eos_logit: {}", error)))?
-        .to_vec();
-    let eos_logit = eos_logit_tensor[0];
-    *cache_flow_state = outputs.into_iter().skip(2).collect();
+        [0];
+
+    // prepare to run LSD steps
     let num_steps = DEFAULT_LSD_STEPS;
     let temperature = DEFAULT_TEMPERATURE;
     let mut rng = rand::thread_rng();
@@ -253,22 +311,17 @@ fn step(
     let normal = Normal::new(0.0, std).map_err(|error| {
         InferError::Runtime(format!("Failed to create normal distribution: {}", error))
     })?;
-    let mut latent: Vec<f32> = (0..LATENT_DIM)
-        .map(|_| normal.sample(&mut rng) as f32)
-        .collect();
+    let mut latent = [0f32; LATENT_DIM];
+    for i in 0..LATENT_DIM {
+        latent[i] = normal.sample(&mut rng) as f32;
+    }
     for i in 0..num_steps {
-        let s = i as f32 / num_steps as f32;
-        let t = (i + 1) as f32 / num_steps as f32;
-        let c_tensor =
-            onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, CONDITIONING_DIM], &conditioning)
-                .map_err(|e| InferError::Runtime(format!("Failed to create c tensor: {}", e)))?;
-        let s_tensor = onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, 1], &[s])
-            .map_err(|e| InferError::Runtime(format!("Failed to create s tensor: {}", e)))?;
-        let t_tensor = onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, 1], &[t])
-            .map_err(|e| InferError::Runtime(format!("Failed to create t tensor: {}", e)))?;
-        let x_tensor =
-            onnx::Value::from_slice::<f32>(&flow_step.onnx, &[1, LATENT_DIM], &latent)
-                .map_err(|e| InferError::Runtime(format!("Failed to create x tensor: {}", e)))?;
+        s_tensor.as_slice_mut::<f32>()[0] = i as f32 / num_steps as f32;
+        t_tensor.as_slice_mut::<f32>()[0] = (i + 1) as f32 / num_steps as f32;
+        c_tensor.as_slice_mut::<f32>().copy_from_slice(conditioning);
+        x_tensor.as_slice_mut::<f32>().copy_from_slice(&latent);
+
+        // run flow step on c, s, t and x
         let outputs = flow_step
             .run(
                 &[
@@ -280,41 +333,54 @@ fn step(
                 &["flow_dir"],
             )
             .map_err(|error| InferError::Runtime(format!("Flow step failed: {}", error)))?;
+
+        // extract flow direction
         let flow_dir = outputs[0].extract_tensor::<f32>().map_err(|error| {
             InferError::Runtime(format!("Failed to extract flow_dir: {}", error))
         })?;
+
+        // apply flow direction to latent
         for j in 0..LATENT_DIM {
             latent[j] += flow_dir[j] / num_steps as f32;
         }
     }
-    *cache_latent = latent.clone();
-    let is_eos = eos_logit > DEFAULT_EOS_THRESHOLD;
-    Ok((latent, is_eos))
+
+    // store latent and prepare decoder input
+    latent_state.copy_from_slice(&latent);
+    decoder_latent_tensor
+        .as_slice_mut::<f32>()
+        .copy_from_slice(&latent);
+
+    // check if EOS
+    Ok(eos_logit > DEFAULT_EOS_THRESHOLD)
 }
 
 fn decode_audio(
     decoder: &mut onnx::Session,
-    latent: &[f32],
-    cache_decoder_state: &mut Vec<onnx::Value>,
+    decoder_latent_tensor: &onnx::Value,
+    decoder_states: &mut Vec<onnx::Value>,
     decoder_input_names: &[String],
     decoder_output_names: &[String],
 ) -> Result<Vec<i16>, InferError> {
-    let latent_tensor = onnx::Value::from_slice::<f32>(&decoder.onnx, &[1, 1, LATENT_DIM], latent)
-        .map_err(|e| InferError::Runtime(format!("Failed to create latent tensor: {}", e)))?;
-    let mut inputs = vec![("latent", &latent_tensor)];
-    for (i, state) in cache_decoder_state.iter().enumerate() {
+    // run decoder on pre-allocated latent tensor and decoder state
+    let mut inputs = vec![("latent", decoder_latent_tensor)];
+    for (i, state) in decoder_states.iter().enumerate() {
         inputs.push((&decoder_input_names[i], state));
     }
     let mut output_names = vec!["audio_frame"];
     output_names.extend(decoder_output_names.iter().map(|s| s.as_str()));
-    let outputs = decoder
+    let mut outputs = decoder
         .run(&inputs, &output_names)
         .map_err(|error| InferError::Runtime(format!("Decoder failed: {}", error)))?;
+
+    // store decoder state, leaving audio_frame in outputs
+    *decoder_states = outputs.split_off(1);
+
+    // convert audio directly from extracted slice to i16
     let audio = outputs[0]
         .extract_tensor::<f32>()
-        .map_err(|error| InferError::Runtime(format!("Failed to extract audio: {}", error)))?
-        .to_vec();
-    *cache_decoder_state = outputs.into_iter().skip(1).collect();
+        .map_err(|error| InferError::Runtime(format!("Failed to extract audio: {}", error)))?;
+
     Ok(audio
         .iter()
         .map(|&f| (f * 32768.0).clamp(-32768.0, 32767.0) as i16)
@@ -334,18 +400,42 @@ impl Pocket {
     ) -> Result<Self, InferError> {
         // load the things
         let mut conditioner = onnx
-            .create_session(executor, CONDITIONER_PATH)
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                CONDITIONER_PATH,
+            )
             .map_err(|e| {
                 InferError::Runtime(format!("Failed to create conditioner session: {}", e))
             })?;
-        let mut flow_main = onnx.create_session(executor, FLOW_MAIN_PATH).map_err(|e| {
-            InferError::Runtime(format!("Failed to create flow main session: {}", e))
-        })?;
-        let mut flow_step = onnx.create_session(executor, FLOW_STEP_PATH).map_err(|e| {
-            InferError::Runtime(format!("Failed to create flow step session: {}", e))
-        })?;
+        let mut flow_main = onnx
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                FLOW_MAIN_PATH,
+            )
+            .map_err(|e| {
+                InferError::Runtime(format!("Failed to create flow main session: {}", e))
+            })?;
+        let mut flow_step = onnx
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                FLOW_STEP_PATH,
+            )
+            .map_err(|e| {
+                InferError::Runtime(format!("Failed to create flow step session: {}", e))
+            })?;
         let mut decoder = onnx
-            .create_session(executor, DECODER_PATH)
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                DECODER_PATH,
+            )
             .map_err(|e| InferError::Runtime(format!("Failed to create decoder session: {}", e)))?;
         let tokenizer = tokenizers::Tokenizer::from_file(TOKENIZER_PATH)
             .map_err(|e| InferError::Runtime(format!("Failed to create tokenizer: {}", e)))?;
@@ -357,8 +447,8 @@ impl Pocket {
         let (decoder_input_names, decoder_output_names) = get_names(&decoder, &["latent"])?;
 
         // initialize caches
-        let mut reset_flow_state = initialize_cache(&flow_main, &flow_main_input_names)?;
-        let mut cache_decoder_state = initialize_cache(&decoder, &decoder_input_names)?;
+        let mut reset_flow_states = initialize_states(&flow_main, &flow_main_input_names)?;
+        let mut decoder_states = initialize_states(&decoder, &decoder_input_names)?;
 
         // condition voice
         let latent_frames = voice.len() / 1024;
@@ -376,14 +466,41 @@ impl Pocket {
             ("sequence", &sequence),
             ("text_embeddings", &text_embeddings),
         ];
-        for (i, state) in reset_flow_state.iter().enumerate() {
+        for (i, state) in reset_flow_states.iter().enumerate() {
             inputs.push((&flow_main_input_names[i], state));
         }
         let output_names: Vec<&str> = flow_main_output_names.iter().map(|s| s.as_str()).collect();
         let outputs = flow_main
             .run(&inputs, &output_names)
             .map_err(|error| InferError::Runtime(format!("Flow main failed: {}", error)))?;
-        reset_flow_state = outputs;
+        reset_flow_states = outputs;
+
+        // prepare re-usable tensors
+        let mut sequence_tensor =
+            onnx::Value::zeros::<f32>(&flow_main.onnx, &[1, 1, LATENT_DIM as i64]).map_err(
+                |e| InferError::Runtime(format!("Failed to create sequence tensor: {}", e)),
+            )?;
+        let empty_text_embeddings =
+            onnx::Value::from_slice::<f32>(&flow_main.onnx, &[1, 0, CONDITIONING_DIM], &[])
+                .map_err(|e| {
+                    InferError::Runtime(format!(
+                        "Failed to create empty text embeddings tensor: {}",
+                        e
+                    ))
+                })?;
+        let mut s_tensor = onnx::Value::zeros::<f32>(&flow_step.onnx, &[1, 1])
+            .map_err(|e| InferError::Runtime(format!("Failed to create s tensor: {}", e)))?;
+        let mut t_tensor = onnx::Value::zeros::<f32>(&flow_step.onnx, &[1, 1])
+            .map_err(|e| InferError::Runtime(format!("Failed to create t tensor: {}", e)))?;
+        let mut c_tensor =
+            onnx::Value::zeros::<f32>(&flow_step.onnx, &[1, CONDITIONING_DIM as i64])
+                .map_err(|e| InferError::Runtime(format!("Failed to create c tensor: {}", e)))?;
+        let mut x_tensor = onnx::Value::zeros::<f32>(&flow_step.onnx, &[1, LATENT_DIM as i64])
+            .map_err(|e| InferError::Runtime(format!("Failed to create x tensor: {}", e)))?;
+        let mut decoder_latent_tensor =
+            onnx::Value::zeros::<f32>(&decoder.onnx, &[1, 1, LATENT_DIM as i64]).map_err(|e| {
+                InferError::Runtime(format!("Failed to create decoder latent tensor: {}", e))
+            })?;
 
         // create channels
         let (text_tx, mut text_rx) = mpsc::channel::<String>(32);
@@ -393,8 +510,9 @@ impl Pocket {
         tokio::task::spawn_blocking({
             move || {
                 while let Some(text) = text_rx.blocking_recv() {
+                    let now = Instant::now();
                     let mut cache_latent = vec![f32::NAN; LATENT_DIM];
-                    let mut cache_flow_state = match reset_flow_state
+                    let mut cache_flow_state = match reset_flow_states
                         .iter()
                         .map(|v| v.deepclone())
                         .collect::<Result<Vec<_>, _>>()
@@ -405,6 +523,9 @@ impl Pocket {
                             continue;
                         }
                     };
+                    let reset_nanos = now.elapsed().as_nanos();
+
+                    let now = Instant::now();
                     let (prepared, frames_after) = prepare(&text);
                     let token_ids = match tokenize(&tokenizer, &prepared) {
                         Ok(token_ids) => token_ids,
@@ -413,6 +534,9 @@ impl Pocket {
                             continue;
                         }
                     };
+                    let prepare_nanos = now.elapsed().as_nanos();
+
+                    let now = Instant::now();
                     if let Err(error) = condition(
                         &mut conditioner,
                         &mut flow_main,
@@ -424,26 +548,44 @@ impl Pocket {
                         log_error!("Failed to condition text: {}", error);
                         continue;
                     }
+                    let condition_nanos = now.elapsed().as_nanos();
+
+                    let mut process_nanos = 0;
+                    let mut decode_nanos = 0;
+                    let mut steps = 0usize;
                     let mut eos_countdown: Option<usize> = None;
                     for _ in 0..MAX_TOKENS {
-                        let (latent, is_eos) = match step(
+                        steps += 1;
+
+                        let now = Instant::now();
+                        let is_eos = match step(
                             &mut flow_main,
                             &mut flow_step,
                             &mut cache_flow_state,
                             &mut cache_latent,
                             &flow_main_input_names,
                             &flow_main_output_names,
+                            &mut sequence_tensor,
+                            &empty_text_embeddings,
+                            &mut s_tensor,
+                            &mut t_tensor,
+                            &mut c_tensor,
+                            &mut x_tensor,
+                            &mut decoder_latent_tensor,
                         ) {
-                            Ok((latent, is_eos)) => (latent, is_eos),
+                            Ok(is_eos) => is_eos,
                             Err(e) => {
                                 log_error!("Failed to step: {}", e);
                                 break;
                             }
                         };
+                        process_nanos += now.elapsed().as_nanos();
+
+                        let now = Instant::now();
                         let sample = match decode_audio(
                             &mut decoder,
-                            &latent,
-                            &mut cache_decoder_state,
+                            &decoder_latent_tensor,
+                            &mut decoder_states,
                             &decoder_input_names,
                             &decoder_output_names,
                         ) {
@@ -453,6 +595,8 @@ impl Pocket {
                                 break;
                             }
                         };
+                        decode_nanos += now.elapsed().as_nanos();
+
                         if let Err(e) = audio_tx.blocking_send(sample) {
                             log_error!("Failed to send audio: {}", e);
                             break;
@@ -466,6 +610,23 @@ impl Pocket {
                             eos_countdown = Some(frames_after);
                         }
                     }
+
+                    log_info!(
+                        "reset {}us  prep {}us  cond {}us  proc {}us  decode {}us  proc/step {}us  decode/step {}us  total {}us",
+                        reset_nanos / 1000,
+                        prepare_nanos / 1000,
+                        condition_nanos / 1000,
+                        process_nanos / 1000,
+                        decode_nanos / 1000,
+                        process_nanos / (1000 * steps as u128),
+                        decode_nanos / (1000 * steps as u128),
+                        (reset_nanos
+                            + prepare_nanos
+                            + condition_nanos
+                            + process_nanos
+                            + decode_nanos)
+                            / 1000
+                    );
                 }
             }
         });

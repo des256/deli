@@ -21,7 +21,12 @@ pub struct Phi3 {
 impl Phi3 {
     pub fn new(onnx: &Arc<onnx::Onnx>, executor: &onnx::Executor) -> Result<Self, InferError> {
         let mut session = onnx
-            .create_session(executor, PHI3_MODEL_PATH)
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                PHI3_MODEL_PATH,
+            )
             .map_err(|e| InferError::Onnx(e.to_string()))?;
         let tokenizer = Tokenizer::from_file(PHI3_TOKENIZER_PATH)
             .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
