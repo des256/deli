@@ -79,23 +79,33 @@ async fn main() -> Result<(), InferError> {
 
     // spawn off task to feed ASR
     tokio::spawn({
-        let asr_audio_tx = asr.audio_tx();
+        let asr_input_tx = asr.input_tx();
         async move {
             for chunk in samples.chunks(CHUNK_SIZE) {
-                if let Err(error) = asr_audio_tx.send(chunk.to_vec()).await {
+                if let Err(error) = asr_input_tx
+                    .send(AsrInput {
+                        audio: chunk.to_vec(),
+                    })
+                    .await
+                {
                     log_error!("file -> asr: {}", error);
                     break;
                 }
             }
-            if let Err(error) = asr_audio_tx.send(vec![0i16; 2 * CHUNK_SIZE]).await {
+            if let Err(error) = asr_input_tx
+                .send(AsrInput {
+                    audio: vec![0i16; 2 * CHUNK_SIZE],
+                })
+                .await
+            {
                 log_error!("file -> asr: {}", error);
             }
         }
     });
 
     // Collect transcription results
-    while let Some(text) = asr.recv().await {
-        println!("{}", text);
+    while let Some(output) = asr.recv().await {
+        println!("{}", output.text);
     }
 
     Ok(())

@@ -296,8 +296,8 @@ fn greedy_decode(
 }
 
 pub struct Parakeet {
-    audio_tx: mpsc::Sender<Vec<i16>>,
-    text_rx: mpsc::Receiver<String>,
+    input_tx: mpsc::Sender<AsrInput>,
+    output_rx: mpsc::Receiver<AsrOutput>,
 }
 
 impl Parakeet {
@@ -374,8 +374,8 @@ impl Parakeet {
         let tokenizer_tokens = load_tokens(&PARAKEET_TOKENIZER_PATH)?;
 
         // create channels
-        let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<i16>>(AUDIO_CHANNEL_CAPACITY);
-        let (text_tx, text_rx) = mpsc::channel::<String>(TEXT_CHANNEL_CAPACITY);
+        let (input_tx, mut input_rx) = mpsc::channel::<AsrInput>(AUDIO_CHANNEL_CAPACITY);
+        let (output_tx, output_rx) = mpsc::channel::<AsrOutput>(TEXT_CHANNEL_CAPACITY);
 
         // spawn processing task
         tokio::task::spawn_blocking({
@@ -388,6 +388,7 @@ impl Parakeet {
                 // --- feature rolling buffer (frames-first [T, 128]) ---
                 let mut feat_buf: Vec<f32> = Vec::new();
                 let mut feat_buf_frames: usize = 0;
+
                 // --- encoder cache ---
                 let mut cache_last_channel = match zeros_f32(
                     &onnx,
@@ -446,10 +447,10 @@ impl Parakeet {
                 let mut cache_last_token = BLANK_ID;
 
                 // main audio loop
-                while let Some(chunk) = audio_rx.blocking_recv() {
+                while let Some(chunk) = input_rx.blocking_recv() {
                     // Level 1: audio -> feature frames (frames-first)
                     let new_features = audio_to_features(
-                        &chunk,
+                        &chunk.audio,
                         &mel_filterbank,
                         &hann_window,
                         &mut audio_tail,
@@ -519,7 +520,7 @@ impl Parakeet {
                                 })
                                 .collect::<String>();
 
-                            if let Err(e) = text_tx.blocking_send(text) {
+                            if let Err(e) = output_tx.blocking_send(AsrOutput { text }) {
                                 log_error!("error sending text: {e}");
                                 return;
                             }
@@ -566,7 +567,7 @@ impl Parakeet {
                                         }
                                     })
                                     .collect::<String>();
-                                let _ = text_tx.blocking_send(text);
+                                let _ = output_tx.blocking_send(AsrOutput { text });
                             }
                         }
                     }
@@ -574,27 +575,30 @@ impl Parakeet {
             }
         });
 
-        Ok(Self { audio_tx, text_rx })
+        Ok(Self {
+            input_tx,
+            output_rx,
+        })
     }
 
-    pub fn audio_tx(&self) -> mpsc::Sender<Vec<i16>> {
-        self.audio_tx.clone()
+    pub fn input_tx(&self) -> mpsc::Sender<AsrInput> {
+        self.input_tx.clone()
     }
 
-    pub async fn send(&self, chunk: Vec<i16>) -> Result<(), InferError> {
-        self.audio_tx
-            .send(chunk)
+    pub async fn send(&self, input: AsrInput) -> Result<(), InferError> {
+        self.input_tx
+            .send(input)
             .await
             .map_err(|error| InferError::Runtime(format!("Failed to send audio chunk: {}", error)))
     }
 
-    pub async fn recv(&mut self) -> Option<String> {
-        self.text_rx.recv().await
+    pub async fn recv(&mut self) -> Option<AsrOutput> {
+        self.output_rx.recv().await
     }
 
-    pub fn try_recv(&mut self) -> Option<String> {
-        match self.text_rx.try_recv() {
-            Ok(text) => Some(text),
+    pub fn try_recv(&mut self) -> Option<AsrOutput> {
+        match self.output_rx.try_recv() {
+            Ok(output) => Some(output),
             _ => None,
         }
     }

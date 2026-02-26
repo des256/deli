@@ -62,7 +62,7 @@ impl Default for AudioOutConfig {
 
 // audio output
 pub struct AudioOut {
-    sender: mpsc::Sender<AudioSample>,
+    sender: mpsc::Sender<Vec<i16>>,
     new_config_sender: mpsc::Sender<AudioOutConfig>,
     cancel: Arc<AtomicBool>,
     config: AudioOutConfig,
@@ -75,7 +75,7 @@ impl AudioOut {
         let config = config.unwrap_or_default();
 
         // channel for sending audio samples
-        let (sender, mut receiver) = mpsc::channel::<AudioSample>(CHANNEL_CAPACITY);
+        let (sender, mut receiver) = mpsc::channel::<Vec<i16>>(CHANNEL_CAPACITY);
 
         // channel for sending new audio configurations
         let (new_config_sender, mut new_config_receiver) =
@@ -156,7 +156,7 @@ impl AudioOut {
                             // drain all available samples from the channel into the ring buffer
                             loop {
                                 match receiver.try_recv() {
-                                    Ok(sample) => ring_buffer.extend(sample.data.iter()),
+                                    Ok(sample) => ring_buffer.extend(sample.iter()),
                                     Err(mpsc::error::TryRecvError::Empty) => break,
                                     Err(mpsc::error::TryRecvError::Disconnected) => {
                                         log_error!("Audio output channel disconnected");
@@ -221,14 +221,11 @@ impl AudioOut {
         self.config = config;
     }
 
-    // play an audio sample
-    pub async fn play(&self, sample: AudioSample) {
-        if self.sender.capacity() == 0 {
-            log_debug!("AudioOut channel full (cap {})", CHANNEL_CAPACITY);
-        }
-        if let Err(error) = self.sender.send(sample).await {
-            log_error!("Failed to play audio sample: {}", error);
-        }
+    pub async fn send(&self, sample: Vec<i16>) -> Result<(), AudioError> {
+        self.sender
+            .send(sample)
+            .await
+            .map_err(|error| AudioError::Device(error.to_string()))
     }
 
     // cancel audio playback

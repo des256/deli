@@ -38,6 +38,14 @@ impl Inference {
         crate::llm::Phi3::new(&self.onnx, executor)
     }
 
+    pub fn use_silero(
+        &self,
+        executor: &onnx::Executor,
+        sample_rate: usize,
+    ) -> Result<crate::vad::Silero, InferError> {
+        crate::vad::Silero::new(&self.onnx, &executor, sample_rate)
+    }
+
     /*
     pub fn use_smollm3(
         &self,
@@ -70,10 +78,6 @@ impl Inference {
         executor: &onnx::Executor,
     ) -> Result<crate::asr::sherpa::Sherpa, InferError> {
         crate::asr::sherpa::Sherpa::new(&self.onnx, &executor)
-    }
-
-    pub fn use_silero_vad(&self) -> Result<crate::vad::SileroVad, InferError> {
-        crate::vad::SileroVad::new(&self.onnx, &executor)
     }
 
     pub fn use_parakeet_diar(&self) -> Result<crate::diar::parakeet::Sortformer, InferError> {

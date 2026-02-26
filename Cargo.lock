@@ -1644,6 +1644,7 @@ dependencies = [
  "audio",
  "base",
  "inference",
+ "onnx",
  "tokio",
 ]
 

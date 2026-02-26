@@ -11,6 +11,7 @@ path = "src/main.rs"
 inference = { path = "../../crates/inference" }
 audio = { path = "../../crates/audio" }
 base = { path = "../../crates/base" }
+onnx = { path = "../../crates/onnx" }
 tokio = { version = "1", features = [
     "rt",
     "rt-multi-thread",

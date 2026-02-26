@@ -1,6 +1,5 @@
 # TODO
 
-- optimize Pocket TTS
 - add ASR side to chat
 - implement VAD-based turn detection
 - add Qwen 2.5 3B for better complex prompts, A/B testing with Llama 3.2 3B

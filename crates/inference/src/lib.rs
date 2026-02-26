@@ -15,8 +15,8 @@ pub use inference::*;
 mod llm;
 pub use llm::*;
 
-//mod vad;
-//pub use vad::*;
+mod vad;
+pub use vad::*;
 
 #[derive(Debug)]
 pub enum InferError {

@@ -4,14 +4,14 @@ use {audio::*, base::*, hound, std::time::Duration};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_stdout_logger();
 
-    let audioout = AudioOut::open(None).await;
-
+    // get parameters
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         log_fatal!("Usage: {} <wav-file>", args[0]);
     }
     let wav_path = &args[1];
 
+    // load WAV file
     let mut reader = hound::WavReader::open(wav_path)?;
     let spec = reader.spec();
     let samples: Vec<i16> = reader.samples::<i16>().collect::<Result<Vec<_>, _>>()?;
@@ -34,23 +34,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sample_count = mono_samples.len();
     let duration_secs = sample_count as f64 / spec.sample_rate as f64;
 
-    log_info!(
-        "Playing {} ({} Hz, {:.2}s)...",
-        wav_path,
-        spec.sample_rate,
-        duration_secs
-    );
-    audioout
-        .play(AudioSample {
-            data: mono_samples,
-            sample_rate: spec.sample_rate as usize,
-        })
-        .await;
+    // open audio output
+    let audioout = AudioOut::open(Some(AudioOutConfig {
+        sample_rate: spec.sample_rate as usize,
+        ..Default::default()
+    }))
+    .await;
 
+    // play sample
+    audioout.send(mono_samples).await;
+
+    // wait for playback to complete
     let duration_ms = (duration_secs * 1000.0) as u64 + 500;
     tokio::time::sleep(Duration::from_millis(duration_ms)).await;
-
-    log_info!("Playback complete");
 
     Ok(())
 }

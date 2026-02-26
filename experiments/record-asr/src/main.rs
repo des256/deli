@@ -1,34 +1,24 @@
-use {audio::*, base::*, inference::*, onnx::*};
+use {audio::*, inference::*, onnx::*};
 
 #[tokio::main]
 async fn main() -> Result<(), InferError> {
     base::init_stdout_logger();
-
-    // initialize inference
     let inference = Inference::new()?;
-
-    // initialize audio input
     let mut audioin = AudioIn::open(None).await;
-
-    // load ASR model
     let mut asr = inference.use_parakeet(&Executor::Cpu)?;
-
-    // spawn off task to feed ASR
     tokio::spawn({
-        let asr_audio_tx = asr.audio_tx();
+        let asr_input_tx = asr.input_tx();
         async move {
-            while let Ok(sample) = audioin.capture().await {
-                if let Err(error) = asr_audio_tx.send(sample.data).await {
-                    log_error!("audio in -> asr: {}", error);
-                    break;
+            while let Some(audio) = audioin.recv().await {
+                if let Err(error) = asr_input_tx.send(AsrInput { audio }).await {
+                    panic!("unable to send audio to ASR: {}", error);
                 }
             }
         }
     });
 
-    // ASR -> stdout
-    while let Some(text) = asr.recv().await {
-        println!("{}", text);
+    while let Some(output) = asr.recv().await {
+        println!("{}", output.text);
     }
 
     Ok(())

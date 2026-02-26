@@ -13,12 +13,6 @@ impl std::fmt::Display for AudioError {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AudioSample {
-    pub data: Vec<i16>,
-    pub sample_rate: usize,
-}
-
 mod audioin;
 pub use audioin::*;
 

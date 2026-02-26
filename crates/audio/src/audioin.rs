@@ -51,7 +51,7 @@ impl Default for AudioInConfig {
 
 // audio input
 pub struct AudioIn {
-    receiver: mpsc::Receiver<AudioSample>,
+    receiver: mpsc::Receiver<Vec<i16>>,
     new_config_sender: mpsc::Sender<AudioInConfig>,
     config: AudioInConfig,
 }
@@ -63,7 +63,7 @@ impl AudioIn {
         let config = config.unwrap_or_default();
 
         // channel for receiving audio samples
-        let (sender, receiver) = mpsc::channel::<AudioSample>(CHANNEL_CAPACITY);
+        let (sender, receiver) = mpsc::channel::<Vec<i16>>(CHANNEL_CAPACITY);
 
         // channel for sending new audio configurations
         let (new_config_sender, mut new_config_receiver) =
@@ -135,13 +135,9 @@ impl AudioIn {
                                             buffer.len() / 2,
                                         )
                                     };
-                                    let sample = AudioSample {
-                                        data: slice.to_vec(),
-                                        sample_rate: config.sample_rate as usize,
-                                    };
 
                                     // send the sample
-                                    match sender.try_send(sample) {
+                                    match sender.try_send(slice.to_vec()) {
                                         Ok(()) => {}
 
                                         // if channel is full, silently drop the chunk
@@ -192,10 +188,14 @@ impl AudioIn {
     }
 
     // capture the next audio chunk
-    pub async fn capture(&mut self) -> Result<AudioSample, AudioError> {
-        match self.receiver.recv().await {
-            Some(sample) => Ok(sample),
-            None => Err(AudioError::Stream("Audio input channel closed".to_string())),
+    pub async fn recv(&mut self) -> Option<Vec<i16>> {
+        self.receiver.recv().await
+    }
+
+    pub fn try_recv(&mut self) -> Option<Vec<i16>> {
+        match self.receiver.try_recv() {
+            Ok(sample) => Some(sample),
+            _ => None,
         }
     }
 

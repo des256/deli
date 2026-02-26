@@ -1,3 +1,11 @@
+pub struct AsrInput {
+    pub audio: Vec<i16>,
+}
+
+pub struct AsrOutput {
+    pub text: String,
+}
+
 pub enum Transcription {
     Partial { text: String, confidence: f32 },
     Final { text: String, confidence: f32 },
