@@ -11,8 +11,8 @@ use {
         stream::Direction,
     },
     libpulse_simple_binding::Simple,
-    std::{cell::RefCell, rc::Rc},
-    tokio::sync::mpsc,
+    std::{cell::RefCell, rc::Rc, sync::mpsc as std_mpsc},
+    tokio::sync::mpsc as tokio_mpsc,
 };
 
 // capacity of the audio input channel
@@ -50,35 +50,34 @@ impl Default for AudioInConfig {
 }
 
 // audio input
-pub struct AudioIn {
-    receiver: mpsc::Receiver<Vec<i16>>,
-    new_config_sender: mpsc::Sender<AudioInConfig>,
+pub struct AudioInListener {
+    input_rx: tokio_mpsc::Receiver<Vec<i16>>,
+    new_config_sender: std_mpsc::Sender<AudioInConfig>,
     config: AudioInConfig,
 }
 
-impl AudioIn {
+impl AudioInListener {
     // open audio input
     pub async fn open(config: Option<AudioInConfig>) -> Self {
         // current audio configuration
         let config = config.unwrap_or_default();
 
         // channel for receiving audio samples
-        let (sender, receiver) = mpsc::channel::<Vec<i16>>(CHANNEL_CAPACITY);
+        let (input_tx, input_rx) = tokio_mpsc::channel::<Vec<i16>>(CHANNEL_CAPACITY);
 
         // channel for sending new audio configurations
-        let (new_config_sender, mut new_config_receiver) =
-            mpsc::channel::<AudioInConfig>(CHANNEL_CAPACITY);
+        let (new_config_sender, new_config_receiver) = std_mpsc::channel::<AudioInConfig>();
 
         // send initial configuration
-        if let Err(error) = new_config_sender.send(config.clone()).await {
+        if let Err(error) = new_config_sender.send(config.clone()) {
             log_fatal!("Failed to send initial audio config: {}", error);
         }
 
         // spawn separate task for audio capture loop
-        tokio::task::spawn_blocking({
+        std::thread::spawn({
             move || {
                 // wait for new audio configuration
-                while let Some(config) = new_config_receiver.blocking_recv() {
+                while let Ok(config) = new_config_receiver.recv() {
                     // prepare PulseAudio stream specification and buffer
                     let spec = Spec {
                         format: Format::S16NE,
@@ -96,7 +95,7 @@ impl AudioIn {
                     };
 
                     // reconnect loop
-                    while new_config_receiver.len() == 0 {
+                    while let Err(std_mpsc::TryRecvError::Empty) = new_config_receiver.try_recv() {
                         // connect to PulseAudio
                         let pulse = match Simple::new(
                             None,
@@ -124,7 +123,9 @@ impl AudioIn {
                         };
 
                         // inner loop until new configuration is requested
-                        while new_config_receiver.len() == 0 {
+                        while let Err(std_mpsc::TryRecvError::Empty) =
+                            new_config_receiver.try_recv()
+                        {
                             // wait for next audio chunk
                             match pulse.read(&mut buffer) {
                                 Ok(()) => {
@@ -137,14 +138,13 @@ impl AudioIn {
                                     };
 
                                     // send the sample
-                                    match sender.try_send(slice.to_vec()) {
-                                        Ok(()) => {}
-
-                                        // if channel is full, silently drop the chunk
-                                        Err(mpsc::error::TrySendError::Full(_)) => {}
-
-                                        // if channel is closed, exit everything
-                                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    match input_tx.blocking_send(slice.to_vec()) {
+                                        Ok(_) => {}
+                                        Err(error) => {
+                                            log_error!(
+                                                "Audio input channel disconnected: {}",
+                                                error
+                                            );
                                             return;
                                         }
                                     }
@@ -166,7 +166,7 @@ impl AudioIn {
         });
 
         Self {
-            receiver,
+            input_rx,
             new_config_sender,
             config,
         }
@@ -181,7 +181,6 @@ impl AudioIn {
     pub async fn select(&mut self, config: AudioInConfig) -> Result<(), AudioError> {
         self.new_config_sender
             .send(config.clone())
-            .await
             .map_err(|error| AudioError::Device(error.to_string()))?;
         self.config = config;
         Ok(())
@@ -189,11 +188,11 @@ impl AudioIn {
 
     // capture the next audio chunk
     pub async fn recv(&mut self) -> Option<Vec<i16>> {
-        self.receiver.recv().await
+        self.input_rx.recv().await
     }
 
     pub fn try_recv(&mut self) -> Option<Vec<i16>> {
-        match self.receiver.try_recv() {
+        match self.input_rx.try_recv() {
             Ok(sample) => Some(sample),
             _ => None,
         }

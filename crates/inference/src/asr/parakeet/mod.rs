@@ -1,4 +1,4 @@
 mod parakeet;
-pub use parakeet::Parakeet;
+pub use parakeet::*;
 
 mod tokens;

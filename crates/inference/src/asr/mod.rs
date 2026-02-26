@@ -13,7 +13,6 @@ pub enum Transcription {
 }
 
 pub mod parakeet;
-pub use parakeet::Parakeet;
 
 //pub mod sherpa;
 //pub use sherpa::Sherpa;

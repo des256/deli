@@ -1,4 +1,10 @@
-use {super::tokens::load_tokens, crate::*, base::*, std::sync::Arc, tokio::sync::mpsc};
+use {
+    super::tokens::load_tokens,
+    crate::*,
+    base::*,
+    std::sync::{Arc, mpsc as std_mpsc},
+    tokio::sync::mpsc as tokio_mpsc,
+};
 
 const PARAKEET_ENCODER_PATH: &str = "data/parakeet/encoder.onnx";
 const PARAKEET_DECODER_PATH: &str = "data/parakeet/decoder_joint.onnx";
@@ -27,7 +33,6 @@ const MAX_SYMBOLS_PER_STEP: usize = 16;
 
 const VOCAB_SIZE: usize = 1025; // 1024 tokens + 1 blank
 
-const AUDIO_CHANNEL_CAPACITY: usize = 64;
 const TEXT_CHANNEL_CAPACITY: usize = 64;
 
 // Fallback values if encoder metadata is missing
@@ -204,12 +209,6 @@ fn run_encoder(
     *cache_last_time = outputs.remove(2);
     *cache_last_channel_len = outputs.remove(2);
 
-    log_info!(
-        "encoder: num_frames={}, encoder_out_len={}",
-        num_frames,
-        encoder_out_len
-    );
-
     Ok((encoder_out_data, encoder_out_len))
 }
 
@@ -295,307 +294,271 @@ fn greedy_decode(
     Ok(token_ids)
 }
 
-pub struct Parakeet {
-    input_tx: mpsc::Sender<AsrInput>,
-    output_rx: mpsc::Receiver<AsrOutput>,
+pub struct ParakeetHandle {
+    input_tx: std_mpsc::Sender<AsrInput>,
 }
 
-impl Parakeet {
-    pub fn new(onnx: &Arc<onnx::Onnx>, executor: &onnx::Executor) -> Result<Self, InferError> {
-        // create encoder and decoder_joint sessions
-        let mut encoder = onnx
-            .create_session(
-                executor,
-                &onnx::OptimizationLevel::EnableAll,
-                4,
-                PARAKEET_ENCODER_PATH,
-            )
-            .map_err(|e| InferError::Runtime(format!("Failed to create encoder session: {e}")))?;
-        let mut decoder_joint = onnx
-            .create_session(
-                executor,
-                &onnx::OptimizationLevel::EnableAll,
-                4,
-                PARAKEET_DECODER_PATH,
-            )
-            .map_err(|e| {
-                InferError::Runtime(format!("Failed to create decoder_joint session: {e}"))
-            })?;
+pub struct ParakeetListener {
+    output_rx: tokio_mpsc::Receiver<AsrOutput>,
+}
 
-        // read streaming parameters from encoder metadata
-        let metadata = encoder.metadata().unwrap_or_default();
-        let encoder_window_size: usize = metadata
-            .get("window_size")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_ENCODER_WINDOW_SIZE);
-        let encoder_chunk_shift: usize = metadata
-            .get("chunk_shift")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(DEFAULT_ENCODER_CHUNK_SHIFT);
-        log_info!(
-            "encoder streaming params: window_size={}, chunk_shift={}",
-            encoder_window_size,
-            encoder_chunk_shift
-        );
+pub fn create(
+    onnx: &Arc<onnx::Onnx>,
+    executor: &onnx::Executor,
+) -> Result<(ParakeetHandle, ParakeetListener), InferError> {
+    // create encoder and decoder_joint sessions
+    let mut encoder = onnx
+        .create_session(
+            executor,
+            &onnx::OptimizationLevel::EnableAll,
+            4,
+            PARAKEET_ENCODER_PATH,
+        )
+        .map_err(|e| InferError::Runtime(format!("Failed to create encoder session: {e}")))?;
+    let mut decoder_joint = onnx
+        .create_session(
+            executor,
+            &onnx::OptimizationLevel::EnableAll,
+            4,
+            PARAKEET_DECODER_PATH,
+        )
+        .map_err(|e| InferError::Runtime(format!("Failed to create decoder_joint session: {e}")))?;
 
-        // load mel filterbank
-        let data = std::fs::read(&MEL_FILTERBANK_PATH).map_err(|e| {
-            InferError::Runtime(format!("Failed to read {}: {}", MEL_FILTERBANK_PATH, e))
-        })?;
-        let mel_filterbank: Vec<f32> = data
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
-        if mel_filterbank.len() != NUM_MEL_BINS * SPECTRUM_BINS {
-            return Err(InferError::Runtime(format!(
-                "mel_filterbank.bin: expected {} floats, got {}",
-                NUM_MEL_BINS * SPECTRUM_BINS,
-                mel_filterbank.len()
-            )));
-        }
+    // read streaming parameters from encoder metadata
+    let metadata = encoder.metadata().unwrap_or_default();
+    let encoder_window_size: usize = metadata
+        .get("window_size")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_ENCODER_WINDOW_SIZE);
+    let encoder_chunk_shift: usize = metadata
+        .get("chunk_shift")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_ENCODER_CHUNK_SHIFT);
+    log_info!(
+        "encoder streaming params: window_size={}, chunk_shift={}",
+        encoder_window_size,
+        encoder_chunk_shift
+    );
 
-        // load Hann window
-        let data = std::fs::read(&HANN_WINDOW_PATH).map_err(|e| {
-            InferError::Runtime(format!("Failed to read {}: {}", HANN_WINDOW_PATH, e))
-        })?;
-        let hann_window: Vec<f32> = data
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
-        if hann_window.len() != WINDOW_SIZE {
-            return Err(InferError::Runtime(format!(
-                "hann_window.bin: expected {} floats, got {}",
-                WINDOW_SIZE,
-                hann_window.len()
-            )));
-        }
+    // load mel filterbank
+    let data = std::fs::read(&MEL_FILTERBANK_PATH).map_err(|e| {
+        InferError::Runtime(format!("Failed to read {}: {}", MEL_FILTERBANK_PATH, e))
+    })?;
+    let mel_filterbank: Vec<f32> = data
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    if mel_filterbank.len() != NUM_MEL_BINS * SPECTRUM_BINS {
+        return Err(InferError::Runtime(format!(
+            "mel_filterbank.bin: expected {} floats, got {}",
+            NUM_MEL_BINS * SPECTRUM_BINS,
+            mel_filterbank.len()
+        )));
+    }
 
-        // load tokenizer
-        let tokenizer_tokens = load_tokens(&PARAKEET_TOKENIZER_PATH)?;
+    // load Hann window
+    let data = std::fs::read(&HANN_WINDOW_PATH)
+        .map_err(|e| InferError::Runtime(format!("Failed to read {}: {}", HANN_WINDOW_PATH, e)))?;
+    let hann_window: Vec<f32> = data
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    if hann_window.len() != WINDOW_SIZE {
+        return Err(InferError::Runtime(format!(
+            "hann_window.bin: expected {} floats, got {}",
+            WINDOW_SIZE,
+            hann_window.len()
+        )));
+    }
 
-        // create channels
-        let (input_tx, mut input_rx) = mpsc::channel::<AsrInput>(AUDIO_CHANNEL_CAPACITY);
-        let (output_tx, output_rx) = mpsc::channel::<AsrOutput>(TEXT_CHANNEL_CAPACITY);
+    // load tokenizer
+    let tokenizer_tokens = load_tokens(&PARAKEET_TOKENIZER_PATH)?;
 
-        // spawn processing task
-        tokio::task::spawn_blocking({
-            let onnx = Arc::clone(&onnx);
-            move || {
-                // --- audio -> features state ---
-                let mut audio_tail: Vec<i16> = Vec::new();
-                let mut prev_sample: i16 = 0;
+    // create channels
+    let (input_tx, input_rx) = std_mpsc::channel::<AsrInput>();
+    let (output_tx, output_rx) = tokio_mpsc::channel::<AsrOutput>(TEXT_CHANNEL_CAPACITY);
 
-                // --- feature rolling buffer (frames-first [T, 128]) ---
-                let mut feat_buf: Vec<f32> = Vec::new();
-                let mut feat_buf_frames: usize = 0;
+    // spawn processing task
+    std::thread::spawn({
+        let onnx = Arc::clone(&onnx);
+        move || {
+            // --- audio -> features state ---
+            let mut audio_tail: Vec<i16> = Vec::new();
+            let mut prev_sample: i16 = 0;
 
-                // --- encoder cache ---
-                let mut cache_last_channel = match zeros_f32(
-                    &onnx,
-                    &[
-                        1,
-                        NUM_LAYERS as i64,
-                        CACHE_CHANNEL_CONTEXT as i64,
-                        ENCODER_DIM as i64,
-                    ],
-                ) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log_error!("error creating cache_last_channel: {e}");
-                        return;
-                    }
-                };
-                let mut cache_last_time = match zeros_f32(
-                    &onnx,
-                    &[
-                        1,
-                        NUM_LAYERS as i64,
-                        ENCODER_DIM as i64,
-                        CACHE_TIME_CONTEXT as i64,
-                    ],
-                ) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log_error!("error creating cache_last_time: {e}");
-                        return;
-                    }
-                };
-                let mut cache_last_channel_len = match onnx::Value::from_slice(&onnx, &[1], &[0i64])
-                {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log_error!("error creating cache_last_channel_len: {e}");
-                        return;
-                    }
-                };
+            // --- feature rolling buffer (frames-first [T, 128]) ---
+            let mut feat_buf: Vec<f32> = Vec::new();
+            let mut feat_buf_frames: usize = 0;
 
-                // --- decoder cache ---
-                let mut cache_state1 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log_error!("error creating state1: {e}");
-                        return;
-                    }
-                };
-                let mut cache_state2 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        log_error!("error creating state2: {e}");
-                        return;
-                    }
-                };
-                let mut cache_last_token = BLANK_ID;
+            // --- encoder cache ---
+            let mut cache_last_channel = match zeros_f32(
+                &onnx,
+                &[
+                    1,
+                    NUM_LAYERS as i64,
+                    CACHE_CHANNEL_CONTEXT as i64,
+                    ENCODER_DIM as i64,
+                ],
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    log_error!("error creating cache_last_channel: {e}");
+                    return;
+                }
+            };
+            let mut cache_last_time = match zeros_f32(
+                &onnx,
+                &[
+                    1,
+                    NUM_LAYERS as i64,
+                    ENCODER_DIM as i64,
+                    CACHE_TIME_CONTEXT as i64,
+                ],
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    log_error!("error creating cache_last_time: {e}");
+                    return;
+                }
+            };
+            let mut cache_last_channel_len = match onnx::Value::from_slice(&onnx, &[1], &[0i64]) {
+                Ok(v) => v,
+                Err(e) => {
+                    log_error!("error creating cache_last_channel_len: {e}");
+                    return;
+                }
+            };
 
-                // main audio loop
-                while let Some(chunk) = input_rx.blocking_recv() {
-                    // Level 1: audio -> feature frames (frames-first)
-                    let new_features = audio_to_features(
-                        &chunk.audio,
-                        &mel_filterbank,
-                        &hann_window,
-                        &mut audio_tail,
-                        &mut prev_sample,
-                    );
-                    let new_frames = new_features.len() / NUM_MEL_BINS;
-                    if new_frames == 0 {
-                        continue;
-                    }
+            // --- decoder cache ---
+            let mut cache_state1 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
+                Ok(v) => v,
+                Err(e) => {
+                    log_error!("error creating state1: {e}");
+                    return;
+                }
+            };
+            let mut cache_state2 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
+                Ok(v) => v,
+                Err(e) => {
+                    log_error!("error creating state2: {e}");
+                    return;
+                }
+            };
+            let mut cache_last_token = BLANK_ID;
 
-                    // Append to feature rolling buffer
-                    feat_buf.extend_from_slice(&new_features);
-                    feat_buf_frames += new_frames;
-
-                    // Level 2: feed encoder whenever we have enough frames
-                    while feat_buf_frames >= encoder_window_size {
-                        // Extract window_size frames and transpose to channels-first
-                        let window_data = &feat_buf[..encoder_window_size * NUM_MEL_BINS];
-                        let encoder_input = transpose_features(window_data, encoder_window_size);
-
-                        // Run encoder
-                        let (encoder_out, encoder_out_len) = match run_encoder(
-                            &onnx,
-                            &mut encoder,
-                            &encoder_input,
-                            encoder_window_size,
-                            &mut cache_last_channel,
-                            &mut cache_last_time,
-                            &mut cache_last_channel_len,
-                        ) {
-                            Ok(r) => r,
-                            Err(e) => {
-                                log_error!("error running encoder: {e}");
-                                break;
-                            }
-                        };
-
-                        // Greedy decode
-                        let token_ids = match greedy_decode(
-                            &onnx,
-                            &mut decoder_joint,
-                            &encoder_out,
-                            encoder_out_len,
-                            &mut cache_state1,
-                            &mut cache_state2,
-                            &mut cache_last_token,
-                        ) {
-                            Ok(t) => t,
-                            Err(e) => {
-                                log_error!("error decoding: {e}");
-                                break;
-                            }
-                        };
-
-                        if !token_ids.is_empty() {
-                            log_info!("greedy_decode: {} tokens: {:?}", token_ids.len(), token_ids);
-
-                            let text = token_ids
-                                .iter()
-                                .filter_map(|&id| {
-                                    let idx = id as usize;
-                                    if idx >= tokenizer_tokens.len() {
-                                        None
-                                    } else {
-                                        Some(tokenizer_tokens[idx].replace('▁', " "))
-                                    }
-                                })
-                                .collect::<String>();
-
-                            if let Err(e) = output_tx.blocking_send(AsrOutput { text }) {
-                                log_error!("error sending text: {e}");
-                                return;
-                            }
-                        }
-
-                        // Shift buffer: keep last `feat_overlap` frames, drop chunk_shift
-                        let shift_frames = encoder_chunk_shift.min(feat_buf_frames);
-                        let shift_floats = shift_frames * NUM_MEL_BINS;
-                        feat_buf.drain(..shift_floats);
-                        feat_buf_frames -= shift_frames;
-                    }
+            // main audio loop
+            while let Ok(chunk) = input_rx.recv() {
+                // blocking wait, no timeout
+                // Level 1: audio -> feature frames (frames-first)
+                let new_features = audio_to_features(
+                    &chunk.audio,
+                    &mel_filterbank,
+                    &hann_window,
+                    &mut audio_tail,
+                    &mut prev_sample,
+                );
+                let new_frames = new_features.len() / NUM_MEL_BINS;
+                if new_frames == 0 {
+                    continue;
                 }
 
-                // Process any remaining frames in the buffer (final flush)
-                if feat_buf_frames > 0 {
-                    let encoder_input = transpose_features(&feat_buf, feat_buf_frames);
-                    if let Ok((encoder_out, encoder_out_len)) = run_encoder(
+                // Append to feature rolling buffer
+                feat_buf.extend_from_slice(&new_features);
+                feat_buf_frames += new_frames;
+
+                // Level 2: feed encoder whenever we have enough frames
+                while feat_buf_frames >= encoder_window_size {
+                    // Extract window_size frames and transpose to channels-first
+                    let window_data = &feat_buf[..encoder_window_size * NUM_MEL_BINS];
+                    let encoder_input = transpose_features(window_data, encoder_window_size);
+
+                    // Run encoder
+                    let (encoder_out, encoder_out_len) = match run_encoder(
                         &onnx,
                         &mut encoder,
                         &encoder_input,
-                        feat_buf_frames,
+                        encoder_window_size,
                         &mut cache_last_channel,
                         &mut cache_last_time,
                         &mut cache_last_channel_len,
                     ) {
-                        if let Ok(token_ids) = greedy_decode(
-                            &onnx,
-                            &mut decoder_joint,
-                            &encoder_out,
-                            encoder_out_len,
-                            &mut cache_state1,
-                            &mut cache_state2,
-                            &mut cache_last_token,
-                        ) {
-                            if !token_ids.is_empty() {
-                                let text = token_ids
-                                    .iter()
-                                    .filter_map(|&id| {
-                                        let idx = id as usize;
-                                        if idx >= tokenizer_tokens.len() {
-                                            None
-                                        } else {
-                                            Some(tokenizer_tokens[idx].replace('▁', " "))
-                                        }
-                                    })
-                                    .collect::<String>();
-                                let _ = output_tx.blocking_send(AsrOutput { text });
-                            }
+                        Ok(r) => r,
+                        Err(e) => {
+                            log_error!("error running encoder: {e}");
+                            break;
+                        }
+                    };
+
+                    // Greedy decode
+                    let token_ids = match greedy_decode(
+                        &onnx,
+                        &mut decoder_joint,
+                        &encoder_out,
+                        encoder_out_len,
+                        &mut cache_state1,
+                        &mut cache_state2,
+                        &mut cache_last_token,
+                    ) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            log_error!("error decoding: {e}");
+                            break;
+                        }
+                    };
+
+                    if !token_ids.is_empty() {
+                        let text = token_ids
+                            .iter()
+                            .filter_map(|&id| {
+                                let idx = id as usize;
+                                if idx >= tokenizer_tokens.len() {
+                                    None
+                                } else {
+                                    Some(tokenizer_tokens[idx].replace('▁', " "))
+                                }
+                            })
+                            .collect::<String>();
+
+                        if let Err(e) = output_tx.blocking_send(AsrOutput { text }) {
+                            log_error!("error sending text: {e}");
+                            return;
+                        }
+                    } else {
+                        if let Err(e) = output_tx.blocking_send(AsrOutput {
+                            text: String::new(),
+                        }) {
+                            log_error!("error sending empty text: {e}");
+                            return;
                         }
                     }
+
+                    // Shift buffer: keep last `feat_overlap` frames, drop chunk_shift
+                    let shift_frames = encoder_chunk_shift.min(feat_buf_frames);
+                    let shift_floats = shift_frames * NUM_MEL_BINS;
+                    feat_buf.drain(..shift_floats);
+                    feat_buf_frames -= shift_frames;
                 }
             }
-        });
+        }
+    });
 
-        Ok(Self {
-            input_tx,
-            output_rx,
-        })
+    Ok((ParakeetHandle { input_tx }, ParakeetListener { output_rx }))
+}
+
+impl ParakeetHandle {
+    // send audio chunk to ASR
+    pub fn send(&self, input: AsrInput) -> Result<(), std_mpsc::SendError<AsrInput>> {
+        self.input_tx.send(input)
     }
+}
 
-    pub fn input_tx(&self) -> mpsc::Sender<AsrInput> {
-        self.input_tx.clone()
-    }
-
-    pub async fn send(&self, input: AsrInput) -> Result<(), InferError> {
-        self.input_tx
-            .send(input)
-            .await
-            .map_err(|error| InferError::Runtime(format!("Failed to send audio chunk: {}", error)))
-    }
-
+impl ParakeetListener {
+    // receive transcription chunk from ASR
     pub async fn recv(&mut self) -> Option<AsrOutput> {
         self.output_rx.recv().await
     }
 
+    // try-receive transcription chunk from ASR
     pub fn try_recv(&mut self) -> Option<AsrOutput> {
         match self.output_rx.try_recv() {
             Ok(output) => Some(output),

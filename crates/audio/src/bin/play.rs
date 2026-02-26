@@ -35,14 +35,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let duration_secs = sample_count as f64 / spec.sample_rate as f64;
 
     // open audio output
-    let audioout = AudioOut::open(Some(AudioOutConfig {
+    let audioout = AudioOutHandle::open(Some(AudioOutConfig {
         sample_rate: spec.sample_rate as usize,
         ..Default::default()
     }))
     .await;
 
     // play sample
-    audioout.send(mono_samples).await;
+    if let Err(error) = audioout.send(mono_samples) {
+        log_error!("AudioOut send failed: {}", error);
+    }
 
     // wait for playback to complete
     let duration_ms = (duration_secs * 1000.0) as u64 + 500;

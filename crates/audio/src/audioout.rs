@@ -17,13 +17,10 @@ use {
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
+            mpsc as std_mpsc,
         },
     },
-    tokio::sync::mpsc,
 };
-
-// capacity of the audio output channel
-const CHANNEL_CAPACITY: usize = 1024;
 
 // number of seconds to wait before reconnecting to PulseAudio
 const RECONNECT_SEC: u64 = 1;
@@ -60,37 +57,30 @@ impl Default for AudioOutConfig {
     }
 }
 
-// audio output
-pub struct AudioOut {
-    sender: mpsc::Sender<Vec<i16>>,
-    new_config_sender: mpsc::Sender<AudioOutConfig>,
+pub struct AudioOutHandle {
+    output_tx: std_mpsc::Sender<Vec<i16>>,
+    new_config_sender: std_mpsc::Sender<AudioOutConfig>,
     cancel: Arc<AtomicBool>,
     config: AudioOutConfig,
 }
 
-impl AudioOut {
+impl AudioOutHandle {
     // open audio output
     pub async fn open(config: Option<AudioOutConfig>) -> Self {
         // current audio configuration
         let config = config.unwrap_or_default();
 
-        // channel for sending audio samples
-        let (sender, mut receiver) = mpsc::channel::<Vec<i16>>(CHANNEL_CAPACITY);
-
-        // channel for sending new audio configurations
-        let (new_config_sender, mut new_config_receiver) =
-            mpsc::channel::<AudioOutConfig>(CHANNEL_CAPACITY);
-
-        // canceling flag
+        let (output_tx, output_rx) = std_mpsc::channel::<Vec<i16>>();
+        let (new_config_sender, new_config_receiver) = std_mpsc::channel::<AudioOutConfig>();
         let cancel = Arc::new(AtomicBool::new(false));
 
         // send initial configuration
-        if let Err(error) = new_config_sender.send(config.clone()).await {
+        if let Err(error) = new_config_sender.send(config.clone()) {
             log_fatal!("Failed to send initial audio config: {}", error);
         }
 
         // spawn separate task for audio playback loop
-        tokio::task::spawn_blocking({
+        std::thread::spawn({
             let cancel = Arc::clone(&cancel);
             move || {
                 // initialize audio ring buffer
@@ -98,7 +88,7 @@ impl AudioOut {
                 let mut chunk = [0i16; CHUNK_SIZE];
 
                 // wait for new audio configuration
-                while let Some(config) = new_config_receiver.blocking_recv() {
+                while let Ok(config) = new_config_receiver.recv() {
                     // prepare PulseAudio stream specification
                     let spec = Spec {
                         format: Format::S16NE,
@@ -107,7 +97,7 @@ impl AudioOut {
                     };
 
                     // reconnect loop
-                    while new_config_receiver.len() == 0 {
+                    while let Err(std_mpsc::TryRecvError::Empty) = new_config_receiver.try_recv() {
                         // connect to PulseAudio
                         let pulse = match Simple::new(
                             None,
@@ -135,30 +125,21 @@ impl AudioOut {
                         };
 
                         // inner loop until new configuration is requested
-                        while new_config_receiver.len() == 0 {
+                        while let Err(std_mpsc::TryRecvError::Empty) =
+                            new_config_receiver.try_recv()
+                        {
                             // if canceling, clear out the channel and ring buffer
                             if cancel.swap(false, Ordering::Relaxed) {
                                 ring_buffer.clear();
-                                loop {
-                                    match receiver.try_recv() {
-                                        Ok(_) => {}
-                                        Err(mpsc::error::TryRecvError::Empty) => {
-                                            break;
-                                        }
-                                        Err(mpsc::error::TryRecvError::Disconnected) => {
-                                            log_error!("Audio output channel disconnected");
-                                            return;
-                                        }
-                                    }
-                                }
+                                while let Ok(_) = output_rx.try_recv() {}
                             }
 
                             // drain all available samples from the channel into the ring buffer
                             loop {
-                                match receiver.try_recv() {
+                                match output_rx.try_recv() {
                                     Ok(sample) => ring_buffer.extend(sample.iter()),
-                                    Err(mpsc::error::TryRecvError::Empty) => break,
-                                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                                    Err(std_mpsc::TryRecvError::Empty) => break,
+                                    Err(std_mpsc::TryRecvError::Disconnected) => {
                                         log_error!("Audio output channel disconnected");
                                         return;
                                     }
@@ -201,7 +182,7 @@ impl AudioOut {
         });
 
         Self {
-            sender,
+            output_tx,
             new_config_sender,
             cancel,
             config,
@@ -215,17 +196,15 @@ impl AudioOut {
 
     // select a new audio configuration
     pub async fn select(&mut self, config: AudioOutConfig) {
-        if let Err(error) = self.new_config_sender.send(config.clone()).await {
+        if let Err(error) = self.new_config_sender.send(config.clone()) {
             log_error!("Failed to send new audio config: {}", error);
         }
         self.config = config;
     }
 
-    pub async fn send(&self, sample: Vec<i16>) -> Result<(), AudioError> {
-        self.sender
-            .send(sample)
-            .await
-            .map_err(|error| AudioError::Device(error.to_string()))
+    // send audio sample to audio output
+    pub fn send(&self, sample: Vec<i16>) -> Result<(), std_mpsc::SendError<Vec<i16>>> {
+        self.output_tx.send(sample)
     }
 
     // cancel audio playback

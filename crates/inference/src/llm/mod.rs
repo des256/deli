@@ -3,10 +3,7 @@ pub enum LlmToken {
     Eos,
 }
 
-mod phi3;
-pub use phi3::*;
-
-pub(crate) mod generate;
+pub mod phi3;
 
 /*
 pub(crate) mod generate;

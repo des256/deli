@@ -1,7 +1,5 @@
 # TODO
 
-- add ASR side to chat
-- implement VAD-based turn detection
 - add Qwen 2.5 3B for better complex prompts, A/B testing with Llama 3.2 3B
 - look at latishab/turnsense, tiny model for turn detection
 - make LLM and TTS cancelable
