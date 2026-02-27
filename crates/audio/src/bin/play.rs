@@ -1,4 +1,4 @@
-use {audio::*, base::*, hound, std::time::Duration};
+use {audio::*, base::*, hound};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,24 +31,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
     };
-    let sample_count = mono_samples.len();
-    let duration_secs = sample_count as f64 / spec.sample_rate as f64;
 
     // open audio output
-    let audioout = AudioOutHandle::open(Some(AudioOutConfig {
+    let (audioout_handle, mut audioout_listener) = create_audioout(Some(AudioOutConfig {
         sample_rate: spec.sample_rate as usize,
         ..Default::default()
-    }))
-    .await;
+    }));
 
-    // play sample
-    if let Err(error) = audioout.send(mono_samples) {
+    // send chunk to audio output
+    if let Err(error) = audioout_handle.send(AudioOutChunk {
+        id: 0,
+        data: mono_samples,
+    }) {
         log_error!("AudioOut send failed: {}", error);
     }
 
     // wait for playback to complete
-    let duration_ms = (duration_secs * 1000.0) as u64 + 500;
-    tokio::time::sleep(Duration::from_millis(duration_ms)).await;
+    while let Some(status) = audioout_listener.recv().await {
+        match status {
+            AudioOutStatus::Started(id) => {
+                log_info!("playback started: {}", id);
+            }
+            AudioOutStatus::Finished { id, index } => {
+                log_info!("playback finished: {} ({} samples)", id, index);
+                break;
+            }
+            AudioOutStatus::Canceled { id, index } => {
+                log_info!("playback canceled: {} ({} samples)", id, index);
+                break;
+            }
+        }
+    }
 
     Ok(())
 }

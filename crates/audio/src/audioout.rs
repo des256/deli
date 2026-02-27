@@ -12,7 +12,6 @@ use {
     libpulse_simple_binding::Simple,
     std::{
         cell::RefCell,
-        collections::VecDeque,
         rc::Rc,
         sync::{
             Arc,
@@ -20,6 +19,7 @@ use {
             mpsc as std_mpsc,
         },
     },
+    tokio::sync::mpsc as tokio_mpsc,
 };
 
 // number of seconds to wait before reconnecting to PulseAudio
@@ -28,11 +28,11 @@ const RECONNECT_SEC: u64 = 1;
 // number of audio frames to be played at once
 const CHUNK_SIZE: usize = 256;
 
-// size of the audio ring buffer
-const RING_BUFFER_SIZE: usize = 1024 * 1024;
-
 // number of mainloop iterations to wait for connection to be ready
 const MAX_MAINLOOP_ITERATIONS: usize = 100;
+
+// capacity of the audio output status channel
+const STATUS_CHANNEL_CAPACITY: usize = 16;
 
 // audio output device with description
 #[derive(Clone, Debug)]
@@ -57,158 +57,221 @@ impl Default for AudioOutConfig {
     }
 }
 
+pub struct AudioOutChunk {
+    pub id: u64,
+    pub data: Vec<i16>,
+}
+
+pub enum AudioOutStatus {
+    Started(u64),
+    Finished { id: u64, index: usize },
+    Canceled { id: u64, index: usize },
+}
+
 pub struct AudioOutHandle {
-    output_tx: std_mpsc::Sender<Vec<i16>>,
+    output_tx: std_mpsc::Sender<AudioOutChunk>,
     new_config_sender: std_mpsc::Sender<AudioOutConfig>,
     cancel: Arc<AtomicBool>,
     config: AudioOutConfig,
 }
 
-impl AudioOutHandle {
-    // open audio output
-    pub async fn open(config: Option<AudioOutConfig>) -> Self {
-        // current audio configuration
-        let config = config.unwrap_or_default();
+pub struct AudioOutListener {
+    status_rx: tokio_mpsc::Receiver<AudioOutStatus>,
+}
 
-        let (output_tx, output_rx) = std_mpsc::channel::<Vec<i16>>();
-        let (new_config_sender, new_config_receiver) = std_mpsc::channel::<AudioOutConfig>();
-        let cancel = Arc::new(AtomicBool::new(false));
+pub fn create_audioout(config: Option<AudioOutConfig>) -> (AudioOutHandle, AudioOutListener) {
+    // current audio configuration
+    let config = config.unwrap_or_default();
 
-        // send initial configuration
-        if let Err(error) = new_config_sender.send(config.clone()) {
-            log_fatal!("Failed to send initial audio config: {}", error);
-        }
+    let (output_tx, output_rx) = std_mpsc::channel::<AudioOutChunk>();
+    let (new_config_sender, new_config_receiver) = std_mpsc::channel::<AudioOutConfig>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (status_tx, status_rx) = tokio_mpsc::channel::<AudioOutStatus>(STATUS_CHANNEL_CAPACITY);
 
-        // spawn separate task for audio playback loop
-        std::thread::spawn({
-            let cancel = Arc::clone(&cancel);
-            move || {
-                // initialize audio ring buffer
-                let mut ring_buffer = VecDeque::<i16>::with_capacity(RING_BUFFER_SIZE);
-                let mut chunk = [0i16; CHUNK_SIZE];
+    // send initial configuration
+    if let Err(error) = new_config_sender.send(config.clone()) {
+        log_fatal!("Failed to send initial audio config: {}", error);
+    }
 
-                // wait for new audio configuration
-                while let Ok(config) = new_config_receiver.recv() {
-                    // prepare PulseAudio stream specification
-                    let spec = Spec {
-                        format: Format::S16NE,
-                        channels: 1,
-                        rate: config.sample_rate as u32,
+    // spawn separate task for audio playback loop
+    std::thread::spawn({
+        let cancel = Arc::clone(&cancel);
+        move || {
+            // initialize current chunk
+            let mut current_chunk: Option<AudioOutChunk> = None;
+            let mut current_index = 0usize;
+            let mut buffer = [0i16; CHUNK_SIZE];
+
+            // wait for new audio configuration
+            while let Ok(config) = new_config_receiver.recv() {
+                // prepare PulseAudio stream specification
+                let spec = Spec {
+                    format: Format::S16NE,
+                    channels: 1,
+                    rate: config.sample_rate as u32,
+                };
+
+                // reconnect loop
+                while let Err(std_mpsc::TryRecvError::Empty) = new_config_receiver.try_recv() {
+                    // connect to PulseAudio
+                    let pulse = match Simple::new(
+                        None,
+                        "deli-audio",
+                        Direction::Playback,
+                        if let Some(ref name) = config.device_name {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        },
+                        "audio-playback",
+                        &spec,
+                        None,
+                        None,
+                    ) {
+                        Ok(pulse) => pulse,
+                        Err(error) => {
+                            log_warn!(
+                                "Failed to connect to PulseAudio, reconnecting...: {}",
+                                error
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
+                            continue;
+                        }
                     };
 
-                    // reconnect loop
+                    // inner loop until new configuration is requested
                     while let Err(std_mpsc::TryRecvError::Empty) = new_config_receiver.try_recv() {
-                        // connect to PulseAudio
-                        let pulse = match Simple::new(
-                            None,
-                            "deli-audio",
-                            Direction::Playback,
-                            if let Some(ref name) = config.device_name {
-                                Some(name.as_str())
+                        // handle cancellation
+                        if cancel.swap(false, Ordering::Relaxed) {
+                            // stop current chunk
+                            if let Some(chunk) = current_chunk.take() {
+                                if let Err(error) =
+                                    status_tx.blocking_send(AudioOutStatus::Canceled {
+                                        id: chunk.id,
+                                        index: current_index,
+                                    })
+                                {
+                                    log_error!("Failed to send canceled status: {}", error);
+                                    return;
+                                }
+                            }
+                            current_index = 0;
+
+                            // clear channel
+                            while let Ok(chunk) = output_rx.try_recv() {
+                                if let Err(error) =
+                                    status_tx.blocking_send(AudioOutStatus::Canceled {
+                                        id: chunk.id,
+                                        index: 0,
+                                    })
+                                {
+                                    log_error!("Failed to send canceled status: {}", error);
+                                    return;
+                                }
+                            }
+                        }
+
+                        // build buffer for PulseAudio
+                        let mut i = 0usize;
+                        while i < CHUNK_SIZE {
+                            if let Some(chunk) = &current_chunk {
+                                let mut n = chunk.data.len() - current_index;
+                                if n > CHUNK_SIZE - i {
+                                    n = CHUNK_SIZE - i;
+                                }
+                                buffer[i..i + n]
+                                    .copy_from_slice(&chunk.data[current_index..current_index + n]);
+                                current_index += n;
+                                i += n;
+                                if current_index >= chunk.data.len() {
+                                    if let Err(error) =
+                                        status_tx.blocking_send(AudioOutStatus::Finished {
+                                            id: chunk.id,
+                                            index: chunk.data.len(),
+                                        })
+                                    {
+                                        log_error!("Failed to send finished status: {}", error);
+                                        return;
+                                    }
+                                    current_chunk = None;
+                                }
                             } else {
-                                None
-                            },
-                            "audio-playback",
-                            &spec,
-                            None,
-                            None,
-                        ) {
-                            Ok(pulse) => pulse,
-                            Err(error) => {
-                                log_warn!(
-                                    "Failed to connect to PulseAudio, reconnecting...: {}",
-                                    error
-                                );
-                                std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
-                                continue;
-                            }
-                        };
-
-                        // inner loop until new configuration is requested
-                        while let Err(std_mpsc::TryRecvError::Empty) =
-                            new_config_receiver.try_recv()
-                        {
-                            // if canceling, clear out the channel and ring buffer
-                            if cancel.swap(false, Ordering::Relaxed) {
-                                ring_buffer.clear();
-                                while let Ok(_) = output_rx.try_recv() {}
-                            }
-
-                            // drain all available samples from the channel into the ring buffer
-                            loop {
                                 match output_rx.try_recv() {
-                                    Ok(sample) => ring_buffer.extend(sample.iter()),
-                                    Err(std_mpsc::TryRecvError::Empty) => break,
+                                    Ok(new_chunk) => {
+                                        if let Err(error) = status_tx
+                                            .blocking_send(AudioOutStatus::Started(new_chunk.id))
+                                        {
+                                            log_error!("Failed to send started status: {}", error);
+                                            return;
+                                        }
+                                        current_chunk = Some(new_chunk);
+                                        current_index = 0;
+                                    }
+                                    Err(std_mpsc::TryRecvError::Empty) => {
+                                        if i < CHUNK_SIZE {
+                                            buffer[i..].fill(0);
+                                            i = CHUNK_SIZE;
+                                        }
+                                    }
                                     Err(std_mpsc::TryRecvError::Disconnected) => {
                                         log_error!("Audio output channel disconnected");
                                         return;
                                     }
                                 }
                             }
+                        }
 
-                            // when ring buffer is empty, wait for data instead of
-                            // writing silence — avoids injecting zero-sample gaps
-                            // that sound like skipping during streaming playback
-                            if ring_buffer.is_empty() {
-                                std::thread::sleep(std::time::Duration::from_millis(1));
-                                continue;
-                            }
-
-                            // build chunk
-                            let size = ring_buffer.len().min(CHUNK_SIZE);
-                            for i in 0..size {
-                                chunk[i] = ring_buffer.pop_front().unwrap();
-                            }
-                            for i in size..CHUNK_SIZE {
-                                chunk[i] = 0;
-                            }
-
-                            // write to PulseAudio
-                            let slice = unsafe {
-                                std::slice::from_raw_parts(
-                                    chunk.as_ptr() as *const u8,
-                                    chunk.len() * 2,
-                                )
-                            };
-                            if let Err(error) = pulse.write(slice) {
-                                log_warn!("PulseAudio write error: {}", error);
-                                std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
-                                break;
-                            }
+                        // write to PulseAudio
+                        let slice = unsafe {
+                            std::slice::from_raw_parts(
+                                buffer.as_ptr() as *const u8,
+                                buffer.len() * 2,
+                            )
+                        };
+                        if let Err(error) = pulse.write(slice) {
+                            // potentially blocking
+                            log_warn!("PulseAudio write error: {}", error);
+                            std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
+                            break;
                         }
                     }
                 }
             }
-        });
+        }
+    });
 
-        Self {
+    (
+        AudioOutHandle {
             output_tx,
             new_config_sender,
             cancel,
             config,
-        }
-    }
+        },
+        AudioOutListener { status_rx },
+    )
+}
 
+impl AudioOutHandle {
     // get the current audio configuration
     pub fn config(&self) -> AudioOutConfig {
         self.config.clone()
     }
 
     // select a new audio configuration
-    pub async fn select(&mut self, config: AudioOutConfig) {
+    pub fn select(&mut self, config: AudioOutConfig) {
         if let Err(error) = self.new_config_sender.send(config.clone()) {
             log_error!("Failed to send new audio config: {}", error);
         }
         self.config = config;
     }
 
-    // send audio sample to audio output
-    pub fn send(&self, sample: Vec<i16>) -> Result<(), std_mpsc::SendError<Vec<i16>>> {
-        self.output_tx.send(sample)
+    // send audio chunk to audio output
+    pub fn send(&self, chunk: AudioOutChunk) -> Result<(), std_mpsc::SendError<AudioOutChunk>> {
+        self.output_tx.send(chunk)
     }
 
     // cancel audio playback
-    pub async fn cancel(&self) {
+    pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
@@ -291,6 +354,19 @@ impl AudioOutHandle {
                 "Failed to join audio output device enumeration task: {}",
                 error
             ))),
+        }
+    }
+}
+
+impl AudioOutListener {
+    pub async fn recv(&mut self) -> Option<AudioOutStatus> {
+        self.status_rx.recv().await
+    }
+
+    pub fn try_recv(&mut self) -> Option<AudioOutStatus> {
+        match self.status_rx.try_recv() {
+            Ok(status) => Some(status),
+            _ => None,
         }
     }
 }

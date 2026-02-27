@@ -318,8 +318,11 @@ pub fn create(
         move || {
             loop {
                 match input_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(text) => {
-                        // Clear any pending cancel — this is new input, not a stale cancel
+                    Ok(mut text) => {
+                        // Skip stale prompts — always use the latest in the channel
+                        while let Ok(newer) = input_rx.try_recv() {
+                            text = newer;
+                        }
                         cancel.swap(false, Ordering::Relaxed);
 
                         let encoding = match tokenizer.encode(text, false) {
@@ -335,7 +338,7 @@ pub fn create(
                             continue;
                         }
 
-                        if !generate(
+                        generate(
                             &mut session,
                             &cancel,
                             &tokenizer,
@@ -349,16 +352,10 @@ pub fn create(
                             &token_ids,
                             kv_dtype,
                             &output_tx,
-                        ) {
-                            // clear out the channel
-                            while input_rx.try_recv().is_ok() {}
-                        }
+                        );
                     }
                     Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                        if cancel.swap(false, Ordering::Relaxed) {
-                            // clear out the channel
-                            while input_rx.try_recv().is_ok() {}
-                        }
+                        cancel.swap(false, Ordering::Relaxed);
                     }
                     Err(std_mpsc::RecvTimeoutError::Disconnected) => {
                         log_error!("Input channel disconnected");

@@ -592,9 +592,13 @@ pub fn create(
 
                             if cancel.swap(false, Ordering::Relaxed) {
                                 while input_rx.try_recv().is_ok() {}
+                                continue;
                             }
 
-                            if let Err(e) = output_tx.blocking_send(TtsOutput { audio: sample }) {
+                            if let Err(e) = output_tx.blocking_send(TtsOutput {
+                                id: input.id,
+                                audio: sample,
+                            }) {
                                 log_error!("Failed to send audio: {}", e);
                                 break;
                             }
