@@ -37,6 +37,7 @@ pub struct AudioInConfig {
     pub device_name: Option<String>,
     pub sample_rate: usize,
     pub chunk_size: usize,
+    pub boost: usize,
 }
 
 impl Default for AudioInConfig {
@@ -45,6 +46,7 @@ impl Default for AudioInConfig {
             device_name: None,
             sample_rate: 16000,
             chunk_size: 8000,
+            boost: 1,
         }
     }
 }
@@ -56,122 +58,123 @@ pub struct AudioInListener {
     config: AudioInConfig,
 }
 
-impl AudioInListener {
-    // open audio input
-    pub async fn open(config: Option<AudioInConfig>) -> Self {
-        // current audio configuration
-        let config = config.unwrap_or_default();
+// create audio input
+pub async fn create_audioin(config: Option<AudioInConfig>) -> AudioInListener {
+    // current audio configuration
+    let config = config.unwrap_or_default();
 
-        // channel for receiving audio samples
-        let (input_tx, input_rx) = tokio_mpsc::channel::<Vec<i16>>(CHANNEL_CAPACITY);
+    // channel for receiving audio samples
+    let (input_tx, input_rx) = tokio_mpsc::channel::<Vec<i16>>(CHANNEL_CAPACITY);
 
-        // channel for sending new audio configurations
-        let (new_config_sender, new_config_receiver) = std_mpsc::channel::<AudioInConfig>();
+    // channel for sending new audio configurations
+    let (new_config_sender, new_config_receiver) = std_mpsc::channel::<AudioInConfig>();
 
-        // send initial configuration
-        if let Err(error) = new_config_sender.send(config.clone()) {
-            log_fatal!("Failed to send initial audio config: {}", error);
-        }
+    // send initial configuration
+    if let Err(error) = new_config_sender.send(config.clone()) {
+        log_fatal!("Failed to send initial audio config: {}", error);
+    }
 
-        // spawn separate task for audio capture loop
-        std::thread::spawn({
-            move || {
-                // wait for new audio configuration
-                while let Ok(config) = new_config_receiver.recv() {
-                    // prepare PulseAudio stream specification and buffer
-                    let spec = Spec {
-                        format: Format::S16NE,
-                        channels: 1,
-                        rate: config.sample_rate as u32,
+    // spawn separate task for audio capture loop
+    std::thread::spawn({
+        move || {
+            // wait for new audio configuration
+            while let Ok(config) = new_config_receiver.recv() {
+                // prepare PulseAudio stream specification and buffer
+                let spec = Spec {
+                    format: Format::S16NE,
+                    channels: 1,
+                    rate: config.sample_rate as u32,
+                };
+                let bytes_per_chunk = config.chunk_size * 2;
+                let mut buffer = vec![0u8; bytes_per_chunk];
+                let buffer_attr = BufferAttr {
+                    maxlength: bytes_per_chunk as u32 * 16,
+                    tlength: u32::MAX,
+                    prebuf: u32::MAX,
+                    minreq: u32::MAX,
+                    fragsize: bytes_per_chunk as u32,
+                };
+
+                // reconnect loop
+                while let Err(std_mpsc::TryRecvError::Empty) = new_config_receiver.try_recv() {
+                    // connect to PulseAudio
+                    let pulse = match Simple::new(
+                        None,
+                        "deli-audio",
+                        Direction::Record,
+                        if let Some(ref name) = config.device_name {
+                            Some(name.as_str())
+                        } else {
+                            None
+                        },
+                        "audio-capture",
+                        &spec,
+                        None,
+                        Some(&buffer_attr),
+                    ) {
+                        Ok(pulse) => pulse,
+                        Err(error) => {
+                            log_warn!(
+                                "Failed to connect to PulseAudion, reconnecting...: {}",
+                                error
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
+                            continue;
+                        }
                     };
-                    let bytes_per_chunk = config.chunk_size * 2;
-                    let mut buffer = vec![0u8; bytes_per_chunk];
-                    let buffer_attr = BufferAttr {
-                        maxlength: bytes_per_chunk as u32 * 16,
-                        tlength: u32::MAX,
-                        prebuf: u32::MAX,
-                        minreq: u32::MAX,
-                        fragsize: bytes_per_chunk as u32,
-                    };
 
-                    // reconnect loop
+                    // inner loop until new configuration is requested
                     while let Err(std_mpsc::TryRecvError::Empty) = new_config_receiver.try_recv() {
-                        // connect to PulseAudio
-                        let pulse = match Simple::new(
-                            None,
-                            "deli-audio",
-                            Direction::Record,
-                            if let Some(ref name) = config.device_name {
-                                Some(name.as_str())
-                            } else {
-                                None
-                            },
-                            "audio-capture",
-                            &spec,
-                            None,
-                            Some(&buffer_attr),
-                        ) {
-                            Ok(pulse) => pulse,
-                            Err(error) => {
-                                log_warn!(
-                                    "Failed to connect to PulseAudion, reconnecting...: {}",
-                                    error
-                                );
-                                std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
-                                continue;
-                            }
-                        };
+                        // wait for next audio chunk
+                        match pulse.read(&mut buffer) {
+                            Ok(()) => {
+                                // turn the chunk into audio sample and boost
+                                let mut sample = Vec::<i16>::with_capacity(buffer.len() / 2);
+                                for bytes in buffer.as_slice().chunks(2) {
+                                    sample.push(i16::saturating_mul(
+                                        i16::from_le_bytes([bytes[0], bytes[1]]),
+                                        config.boost as i16,
+                                    ));
+                                }
 
-                        // inner loop until new configuration is requested
-                        while let Err(std_mpsc::TryRecvError::Empty) =
-                            new_config_receiver.try_recv()
-                        {
-                            // wait for next audio chunk
-                            match pulse.read(&mut buffer) {
-                                Ok(()) => {
-                                    // turn the chunk into audio sample
-                                    let slice = unsafe {
-                                        std::slice::from_raw_parts(
-                                            buffer.as_ptr() as *const i16,
-                                            buffer.len() / 2,
-                                        )
-                                    };
+                                // print RMS of chunk
+                                let rms = {
+                                    let sum_sq: f64 = sample.iter().map(|&s| (s as f64) * (s as f64)).sum();
+                                    (sum_sq / sample.len() as f64).sqrt()
+                                };
+                                println!("AudioIn: RMS {:.1}", rms);
 
-                                    // send the sample
-                                    match input_tx.blocking_send(slice.to_vec()) {
-                                        Ok(_) => {}
-                                        Err(error) => {
-                                            log_error!(
-                                                "Audio input channel disconnected: {}",
-                                                error
-                                            );
-                                            return;
-                                        }
+                                // send the sample
+                                match input_tx.blocking_send(sample) {
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        log_error!("Audio input channel disconnected: {}", error);
+                                        return;
                                     }
                                 }
+                            }
 
-                                // if read error, break inner loop to reconnect
-                                Err(error) => {
-                                    log_warn!("PulseAudio read error: {}", error);
-                                    std::thread::sleep(std::time::Duration::from_millis(
-                                        RECONNECT_SEC,
-                                    ));
-                                    break;
-                                }
+                            // if read error, break inner loop to reconnect
+                            Err(error) => {
+                                log_warn!("PulseAudio read error: {}", error);
+                                std::thread::sleep(std::time::Duration::from_millis(RECONNECT_SEC));
+                                break;
                             }
                         }
                     }
                 }
             }
-        });
-
-        Self {
-            input_rx,
-            new_config_sender,
-            config,
         }
-    }
+    });
 
+    AudioInListener {
+        input_rx,
+        new_config_sender,
+        config,
+    }
+}
+
+impl AudioInListener {
     // get the current audio configuration
     pub fn config(&self) -> AudioInConfig {
         self.config.clone()

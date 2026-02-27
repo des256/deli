@@ -1,5 +1,5 @@
-pub enum LlmToken {
-    Text(String),
+pub enum LlmOutput {
+    Token(String),
     Eos,
 }
 

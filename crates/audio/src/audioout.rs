@@ -13,11 +13,7 @@ use {
     std::{
         cell::RefCell,
         rc::Rc,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-            mpsc as std_mpsc,
-        },
+        sync::mpsc as std_mpsc,
     },
     tokio::sync::mpsc as tokio_mpsc,
 };
@@ -57,36 +53,39 @@ impl Default for AudioOutConfig {
     }
 }
 
-pub struct AudioOutChunk {
-    pub id: u64,
+#[derive(Clone, Debug)]
+pub struct AudioOutChunk<T: Clone + Send + 'static> {
+    pub payload: T,
     pub data: Vec<i16>,
 }
 
-pub enum AudioOutStatus {
-    Started(u64),
-    Finished { id: u64, index: usize },
-    Canceled { id: u64, index: usize },
+pub enum AudioOutStatus<T: Clone + Send + 'static> {
+    Started(T),
+    Finished { payload: T, index: usize },
+    Canceled { payload: T, index: usize },
 }
 
-pub struct AudioOutHandle {
-    output_tx: std_mpsc::Sender<AudioOutChunk>,
+pub struct AudioOutHandle<T: Clone + Send + 'static> {
+    output_tx: std_mpsc::Sender<Stamped<AudioOutChunk<T>>>,
     new_config_sender: std_mpsc::Sender<AudioOutConfig>,
-    cancel: Arc<AtomicBool>,
+    epoch: Epoch,
     config: AudioOutConfig,
 }
 
-pub struct AudioOutListener {
-    status_rx: tokio_mpsc::Receiver<AudioOutStatus>,
+pub struct AudioOutListener<T: Clone + Send + 'static> {
+    status_rx: tokio_mpsc::Receiver<AudioOutStatus<T>>,
 }
 
-pub fn create_audioout(config: Option<AudioOutConfig>) -> (AudioOutHandle, AudioOutListener) {
+pub fn create_audioout<T: Clone + Send + 'static>(
+    config: Option<AudioOutConfig>,
+    epoch: Epoch,
+) -> (AudioOutHandle<T>, AudioOutListener<T>) {
     // current audio configuration
     let config = config.unwrap_or_default();
 
-    let (output_tx, output_rx) = std_mpsc::channel::<AudioOutChunk>();
+    let (output_tx, output_rx) = std_mpsc::channel::<Stamped<AudioOutChunk<T>>>();
     let (new_config_sender, new_config_receiver) = std_mpsc::channel::<AudioOutConfig>();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let (status_tx, status_rx) = tokio_mpsc::channel::<AudioOutStatus>(STATUS_CHANNEL_CAPACITY);
+    let (status_tx, status_rx) = tokio_mpsc::channel::<AudioOutStatus<T>>(STATUS_CHANNEL_CAPACITY);
 
     // send initial configuration
     if let Err(error) = new_config_sender.send(config.clone()) {
@@ -95,10 +94,16 @@ pub fn create_audioout(config: Option<AudioOutConfig>) -> (AudioOutHandle, Audio
 
     // spawn separate task for audio playback loop
     std::thread::spawn({
-        let cancel = Arc::clone(&cancel);
+        let epoch = epoch.clone();
         move || {
-            // initialize current chunk
-            let mut current_chunk: Option<AudioOutChunk> = None;
+            // active chunk being played
+            struct ActiveChunk<T> {
+                payload: T,
+                data: Vec<i16>,
+                epoch: u64,
+            }
+
+            let mut current_chunk: Option<ActiveChunk<T>> = None;
             let mut current_index = 0usize;
             let mut buffer = [0i16; CHUNK_SIZE];
 
@@ -141,33 +146,20 @@ pub fn create_audioout(config: Option<AudioOutConfig>) -> (AudioOutHandle, Audio
 
                     // inner loop until new configuration is requested
                     while let Err(std_mpsc::TryRecvError::Empty) = new_config_receiver.try_recv() {
-                        // handle cancellation
-                        if cancel.swap(false, Ordering::Relaxed) {
-                            // stop current chunk
-                            if let Some(chunk) = current_chunk.take() {
-                                if let Err(error) =
-                                    status_tx.blocking_send(AudioOutStatus::Canceled {
-                                        id: chunk.id,
+                        // check if current chunk is stale
+                        if let Some(chunk) = &current_chunk {
+                            if !epoch.is_current(chunk.epoch) {
+                                let chunk = current_chunk.take().unwrap();
+                                if let Err(error) = status_tx.blocking_send(
+                                    AudioOutStatus::Canceled {
+                                        payload: chunk.payload,
                                         index: current_index,
-                                    })
-                                {
+                                    },
+                                ) {
                                     log_error!("Failed to send canceled status: {}", error);
                                     return;
                                 }
-                            }
-                            current_index = 0;
-
-                            // clear channel
-                            while let Ok(chunk) = output_rx.try_recv() {
-                                if let Err(error) =
-                                    status_tx.blocking_send(AudioOutStatus::Canceled {
-                                        id: chunk.id,
-                                        index: 0,
-                                    })
-                                {
-                                    log_error!("Failed to send canceled status: {}", error);
-                                    return;
-                                }
+                                current_index = 0;
                             }
                         }
 
@@ -186,7 +178,7 @@ pub fn create_audioout(config: Option<AudioOutConfig>) -> (AudioOutHandle, Audio
                                 if current_index >= chunk.data.len() {
                                     if let Err(error) =
                                         status_tx.blocking_send(AudioOutStatus::Finished {
-                                            id: chunk.id,
+                                            payload: chunk.payload.clone(),
                                             index: chunk.data.len(),
                                         })
                                     {
@@ -197,14 +189,26 @@ pub fn create_audioout(config: Option<AudioOutConfig>) -> (AudioOutHandle, Audio
                                 }
                             } else {
                                 match output_rx.try_recv() {
-                                    Ok(new_chunk) => {
-                                        if let Err(error) = status_tx
-                                            .blocking_send(AudioOutStatus::Started(new_chunk.id))
-                                        {
-                                            log_error!("Failed to send started status: {}", error);
+                                    Ok(stamped) => {
+                                        // drop stale chunks
+                                        if !epoch.is_current(stamped.epoch) {
+                                            continue;
+                                        }
+                                        let chunk = stamped.inner;
+                                        if let Err(error) = status_tx.blocking_send(
+                                            AudioOutStatus::Started(chunk.payload.clone()),
+                                        ) {
+                                            log_error!(
+                                                "Failed to send started status: {}",
+                                                error
+                                            );
                                             return;
                                         }
-                                        current_chunk = Some(new_chunk);
+                                        current_chunk = Some(ActiveChunk {
+                                            payload: chunk.payload,
+                                            data: chunk.data,
+                                            epoch: stamped.epoch,
+                                        });
                                         current_index = 0;
                                     }
                                     Err(std_mpsc::TryRecvError::Empty) => {
@@ -244,14 +248,14 @@ pub fn create_audioout(config: Option<AudioOutConfig>) -> (AudioOutHandle, Audio
         AudioOutHandle {
             output_tx,
             new_config_sender,
-            cancel,
+            epoch,
             config,
         },
         AudioOutListener { status_rx },
     )
 }
 
-impl AudioOutHandle {
+impl<T: Clone + Send + 'static> AudioOutHandle<T> {
     // get the current audio configuration
     pub fn config(&self) -> AudioOutConfig {
         self.config.clone()
@@ -265,14 +269,15 @@ impl AudioOutHandle {
         self.config = config;
     }
 
-    // send audio chunk to audio output
-    pub fn send(&self, chunk: AudioOutChunk) -> Result<(), std_mpsc::SendError<AudioOutChunk>> {
-        self.output_tx.send(chunk)
-    }
-
-    // cancel audio playback
-    pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+    // send audio chunk to audio output (stamped with current epoch)
+    pub fn send(
+        &self,
+        chunk: AudioOutChunk<T>,
+    ) -> Result<(), std_mpsc::SendError<Stamped<AudioOutChunk<T>>>> {
+        self.output_tx.send(Stamped {
+            epoch: self.epoch.current(),
+            inner: chunk,
+        })
     }
 
     // get list of available audio output devices
@@ -358,12 +363,12 @@ impl AudioOutHandle {
     }
 }
 
-impl AudioOutListener {
-    pub async fn recv(&mut self) -> Option<AudioOutStatus> {
+impl<T: Clone + Send + 'static> AudioOutListener<T> {
+    pub async fn recv(&mut self) -> Option<AudioOutStatus<T>> {
         self.status_rx.recv().await
     }
 
-    pub fn try_recv(&mut self) -> Option<AudioOutStatus> {
+    pub fn try_recv(&mut self) -> Option<AudioOutStatus<T>> {
         match self.status_rx.try_recv() {
             Ok(status) => Some(status),
             _ => None,

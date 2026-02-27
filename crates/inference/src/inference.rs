@@ -1,5 +1,6 @@
 use {
     crate::*,
+    base::*,
     std::{path::Path, sync::Arc},
 };
 
@@ -19,38 +20,40 @@ impl Inference {
         Ok(Self { onnx })
     }
 
-    pub fn use_parakeet(
+    pub fn use_parakeet<T: Clone + Send + 'static>(
         &self,
         executor: &onnx::Executor,
     ) -> Result<
         (
-            crate::asr::parakeet::ParakeetHandle,
-            crate::asr::parakeet::ParakeetListener,
+            crate::asr::parakeet::ParakeetHandle<T>,
+            crate::asr::parakeet::ParakeetListener<T>,
         ),
         InferError,
     > {
         crate::asr::parakeet::create(&self.onnx, &executor)
     }
 
-    pub fn use_pocket(
+    pub fn use_pocket<T: Clone + Send + 'static>(
         &self,
         executor: &onnx::Executor,
         voice_path: impl AsRef<Path>,
+        epoch: Epoch,
     ) -> Result<
         (
-            crate::tts::pocket::PocketHandle,
-            crate::tts::pocket::PocketListener,
+            crate::tts::pocket::PocketHandle<T>,
+            crate::tts::pocket::PocketListener<T>,
         ),
         InferError,
     > {
-        crate::tts::pocket::create(&self.onnx, &executor, voice_path.as_ref())
+        crate::tts::pocket::create(&self.onnx, &executor, voice_path.as_ref(), epoch)
     }
 
     pub fn use_phi3(
         &self,
         executor: &onnx::Executor,
+        epoch: Epoch,
     ) -> Result<(crate::llm::phi3::Phi3Handle, crate::llm::phi3::Phi3Listener), InferError> {
-        crate::llm::phi3::create(&self.onnx, executor)
+        crate::llm::phi3::create(&self.onnx, executor, epoch)
     }
 
     pub fn use_silero(

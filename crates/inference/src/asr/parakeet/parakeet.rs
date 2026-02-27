@@ -294,18 +294,18 @@ fn greedy_decode(
     Ok(token_ids)
 }
 
-pub struct ParakeetHandle {
-    input_tx: std_mpsc::Sender<AsrInput>,
+pub struct ParakeetHandle<T: Clone + Send + 'static> {
+    input_tx: std_mpsc::Sender<AsrInput<T>>,
 }
 
-pub struct ParakeetListener {
-    output_rx: tokio_mpsc::Receiver<AsrOutput>,
+pub struct ParakeetListener<T: Clone + Send + 'static> {
+    output_rx: tokio_mpsc::Receiver<AsrOutput<T>>,
 }
 
-pub fn create(
+pub fn create<T: Clone + Send + 'static>(
     onnx: &Arc<onnx::Onnx>,
     executor: &onnx::Executor,
-) -> Result<(ParakeetHandle, ParakeetListener), InferError> {
+) -> Result<(ParakeetHandle<T>, ParakeetListener<T>), InferError> {
     // create encoder and decoder_joint sessions
     let mut encoder = onnx
         .create_session(
@@ -375,8 +375,8 @@ pub fn create(
     let tokenizer_tokens = load_tokens(&PARAKEET_TOKENIZER_PATH)?;
 
     // create channels
-    let (input_tx, input_rx) = std_mpsc::channel::<AsrInput>();
-    let (output_tx, output_rx) = tokio_mpsc::channel::<AsrOutput>(TEXT_CHANNEL_CAPACITY);
+    let (input_tx, input_rx) = std_mpsc::channel::<AsrInput<T>>();
+    let (output_tx, output_rx) = tokio_mpsc::channel::<AsrOutput<T>>(TEXT_CHANNEL_CAPACITY);
 
     // spawn processing task
     std::thread::spawn({
@@ -519,14 +519,20 @@ pub fn create(
                             })
                             .collect::<String>();
 
-                        if let Err(e) = output_tx.blocking_send(AsrOutput { text }) {
+                        let output = AsrOutput::<T> {
+                            payload: chunk.payload.clone(),
+                            text,
+                        };
+                        if let Err(e) = output_tx.blocking_send(output) {
                             log_error!("error sending text: {e}");
                             return;
                         }
                     } else {
-                        if let Err(e) = output_tx.blocking_send(AsrOutput {
+                        let output = AsrOutput::<T> {
+                            payload: chunk.payload.clone(),
                             text: String::new(),
-                        }) {
+                        };
+                        if let Err(e) = output_tx.blocking_send(output) {
                             log_error!("error sending empty text: {e}");
                             return;
                         }
@@ -545,21 +551,21 @@ pub fn create(
     Ok((ParakeetHandle { input_tx }, ParakeetListener { output_rx }))
 }
 
-impl ParakeetHandle {
+impl<T: Clone + Send + 'static> ParakeetHandle<T> {
     // send audio chunk to ASR
-    pub fn send(&self, input: AsrInput) -> Result<(), std_mpsc::SendError<AsrInput>> {
+    pub fn send(&self, input: AsrInput<T>) -> Result<(), std_mpsc::SendError<AsrInput<T>>> {
         self.input_tx.send(input)
     }
 }
 
-impl ParakeetListener {
+impl<T: Clone + Send + 'static> ParakeetListener<T> {
     // receive transcription chunk from ASR
-    pub async fn recv(&mut self) -> Option<AsrOutput> {
+    pub async fn recv(&mut self) -> Option<AsrOutput<T>> {
         self.output_rx.recv().await
     }
 
     // try-receive transcription chunk from ASR
-    pub fn try_recv(&mut self) -> Option<AsrOutput> {
+    pub fn try_recv(&mut self) -> Option<AsrOutput<T>> {
         match self.output_rx.try_recv() {
             Ok(output) => Some(output),
             _ => None,

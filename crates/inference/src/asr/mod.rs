@@ -1,8 +1,12 @@
-pub struct AsrInput {
+#[derive(Clone, Debug)]
+pub struct AsrInput<T: Clone + Send + 'static> {
+    pub payload: T,
     pub audio: Vec<i16>,
 }
 
-pub struct AsrOutput {
+#[derive(Clone, Debug)]
+pub struct AsrOutput<T: Clone + Send + 'static> {
+    pub payload: T,
     pub text: String,
 }
 

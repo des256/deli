@@ -75,36 +75,31 @@ async fn main() -> Result<(), InferError> {
     let inference = Inference::new()?;
 
     // load ASR model
-    let mut asr = inference.use_parakeet(&Executor::Cpu)?;
+    let (asr_handle, mut asr_listener) = inference.use_parakeet::<()>(&Executor::Cpu)?;
 
     // spawn off task to feed ASR
     tokio::spawn({
-        let asr_input_tx = asr.input_tx();
         async move {
             for chunk in samples.chunks(CHUNK_SIZE) {
-                if let Err(error) = asr_input_tx
-                    .send(AsrInput {
-                        audio: chunk.to_vec(),
-                    })
-                    .await
-                {
+                if let Err(error) = asr_handle.send(AsrInput {
+                    payload: (),
+                    audio: chunk.to_vec(),
+                }) {
                     log_error!("file -> asr: {}", error);
                     break;
                 }
             }
-            if let Err(error) = asr_input_tx
-                .send(AsrInput {
-                    audio: vec![0i16; 2 * CHUNK_SIZE],
-                })
-                .await
-            {
+            if let Err(error) = asr_handle.send(AsrInput {
+                payload: (),
+                audio: vec![0i16; 2 * CHUNK_SIZE],
+            }) {
                 log_error!("file -> asr: {}", error);
             }
         }
     });
 
     // Collect transcription results
-    while let Some(output) = asr.recv().await {
+    while let Some(output) = asr_listener.recv().await {
         println!("{}", output.text);
     }
 

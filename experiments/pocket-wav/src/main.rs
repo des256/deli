@@ -18,14 +18,23 @@ async fn main() -> Result<(), InferError> {
 
     let inference = Inference::new()?;
 
-    let mut tts = inference.use_pocket(&onnx::Executor::Cpu, &POCKET_VOICE_PATH)?;
+    let epoch = Epoch::new();
+    let (tts_handle, mut tts_listener) =
+        inference.use_pocket::<()>(&onnx::Executor::Cpu, &POCKET_VOICE_PATH, epoch)?;
 
-    tts.send(SENTENCE.to_string()).await?;
+    tts_handle
+        .send(TtsInput {
+            payload: (),
+            text: SENTENCE.to_string(),
+        })
+        .map_err(|e| InferError::Runtime(e.to_string()))?;
 
     let mut samples: Vec<i16> = Vec::new();
-    while let Ok(Some(sample)) = tokio::time::timeout(Duration::from_secs(1), tts.recv()).await {
-        log_info!("adding {} samples", sample.len());
-        samples.extend_from_slice(&sample);
+    while let Ok(Some(stamped)) =
+        tokio::time::timeout(Duration::from_secs(1), tts_listener.recv()).await
+    {
+        log_info!("adding {} samples", stamped.inner.data.len());
+        samples.extend_from_slice(&stamped.inner.data);
     }
 
     let spec = hound::WavSpec {

@@ -6,12 +6,7 @@ use {
         collections::HashMap,
         io::Read,
         path::Path,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-            mpsc as std_mpsc,
-        },
-        time::Duration,
+        sync::{Arc, mpsc as std_mpsc},
     },
     tokio::sync::mpsc as tokio_mpsc,
 };
@@ -397,20 +392,21 @@ fn decode_audio(
         .collect())
 }
 
-pub struct PocketHandle {
-    input_tx: std_mpsc::Sender<TtsInput>,
-    cancel: Arc<AtomicBool>,
+pub struct PocketHandle<T: Clone + Send + 'static> {
+    input_tx: std_mpsc::Sender<Stamped<TtsInput<T>>>,
+    epoch: Epoch,
 }
 
-pub struct PocketListener {
-    output_rx: tokio_mpsc::Receiver<TtsOutput>,
+pub struct PocketListener<T: Clone + Send + 'static> {
+    output_rx: tokio_mpsc::Receiver<Stamped<TtsOutput<T>>>,
 }
 
-pub fn create(
+pub fn create<T: Clone + Send + 'static>(
     onnx: &Arc<onnx::Onnx>,
     executor: &onnx::Executor,
     voice_path: &Path,
-) -> Result<(PocketHandle, PocketListener), InferError> {
+    epoch: Epoch,
+) -> Result<(PocketHandle<T>, PocketListener<T>), InferError> {
     // load the things
     let mut conditioner = onnx
         .create_session(
@@ -507,18 +503,29 @@ pub fn create(
         })?;
 
     // create channels
-    let (input_tx, input_rx) = std_mpsc::channel::<TtsInput>();
-    let (output_tx, output_rx) = tokio_mpsc::channel::<TtsOutput>(32);
-    let cancel = Arc::new(AtomicBool::new(false));
+    let (input_tx, input_rx) = std_mpsc::channel::<Stamped<TtsInput<T>>>();
+    let (output_tx, output_rx) = tokio_mpsc::channel::<Stamped<TtsOutput<T>>>(32);
 
     // spawn it
     std::thread::spawn({
-        let cancel = Arc::clone(&cancel);
+        let epoch = epoch.clone();
         move || {
             loop {
-                match input_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(input) => {
+                match input_rx.recv() {
+                    Ok(stamped) => {
+                        // skip stale input
+                        if !epoch.is_current(stamped.epoch) {
+                            continue;
+                        }
+
+                        let my_epoch = stamped.epoch;
+                        let input = stamped.inner;
+
+                        let t_total = std::time::Instant::now();
+
+                        let mut current_id = 0u64;
                         let mut cache_latent = vec![f32::NAN; LATENT_DIM];
+                        let t0 = std::time::Instant::now();
                         let mut cache_flow_state = match reset_flow_states
                             .iter()
                             .map(|v| v.deepclone())
@@ -551,8 +558,11 @@ pub fn create(
                             log_error!("Failed to condition text: {}", error);
                             continue;
                         }
+                        let conditioning_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
                         let mut eos_countdown: Option<usize> = None;
+                        let mut step_count = 0usize;
+                        let t_gen = std::time::Instant::now();
                         for _ in 0..MAX_TOKENS {
                             let is_eos = match step(
                                 &mut flow_main,
@@ -590,18 +600,26 @@ pub fn create(
                                 }
                             };
 
-                            if cancel.swap(false, Ordering::Relaxed) {
-                                while input_rx.try_recv().is_ok() {}
-                                continue;
+                            // check if epoch has advanced (cancellation)
+                            if !epoch.is_current(my_epoch) {
+                                break;
                             }
 
-                            if let Err(e) = output_tx.blocking_send(TtsOutput {
-                                id: input.id,
-                                audio: sample,
+                            if let Err(e) = output_tx.blocking_send(Stamped {
+                                epoch: my_epoch,
+                                inner: TtsOutput {
+                                    payload: TtsPayload {
+                                        payload: input.payload.clone(),
+                                        id: current_id,
+                                    },
+                                    data: sample,
+                                },
                             }) {
                                 log_error!("Failed to send audio: {}", e);
                                 break;
                             }
+                            current_id += 1;
+                            step_count += 1;
                             if let Some(ref mut remaining) = eos_countdown {
                                 if *remaining == 0 {
                                     break;
@@ -611,13 +629,20 @@ pub fn create(
                                 eos_countdown = Some(frames_after);
                             }
                         }
+
+                        let gen_ms = t_gen.elapsed().as_secs_f64() * 1000.0;
+                        let total_ms = t_total.elapsed().as_secs_f64() * 1000.0;
+                        let per_step = if step_count > 0 {
+                            gen_ms / step_count as f64
+                        } else {
+                            0.0
+                        };
+                        println!(
+                            "TTS: cond {:.1}ms + gen {:.1}ms ({} steps, {:.1}ms/step) = {:.1}ms total",
+                            conditioning_ms, gen_ms, step_count, per_step, total_ms
+                        );
                     }
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                        if cancel.swap(false, Ordering::Relaxed) {
-                            while input_rx.try_recv().is_ok() {}
-                        }
-                    }
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    Err(_) => {
                         log_error!("Input channel disconnected");
                         break;
                     }
@@ -627,31 +652,29 @@ pub fn create(
     });
 
     Ok((
-        PocketHandle { input_tx, cancel },
+        PocketHandle { input_tx, epoch },
         PocketListener { output_rx },
     ))
 }
 
-impl PocketHandle {
-    // send text to TTS, starts TTS audio generation
-    pub fn send(&self, input: TtsInput) -> Result<(), std_mpsc::SendError<TtsInput>> {
-        self.input_tx.send(input) // note: blocks if input channel is full
-    }
-
-    // cancel TTS audio generation, flush input channel
-    pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+impl<T: Clone + Send + 'static> PocketHandle<T> {
+    // send text to TTS (stamped with current epoch)
+    pub fn send(&self, input: TtsInput<T>) -> Result<(), std_mpsc::SendError<Stamped<TtsInput<T>>>> {
+        self.input_tx.send(Stamped {
+            epoch: self.epoch.current(),
+            inner: input,
+        })
     }
 }
 
-impl PocketListener {
+impl<T: Clone + Send + 'static> PocketListener<T> {
     // receive audio from TTS
-    pub async fn recv(&mut self) -> Option<TtsOutput> {
+    pub async fn recv(&mut self) -> Option<Stamped<TtsOutput<T>>> {
         self.output_rx.recv().await
     }
 
     // try-receive audio from TTS
-    pub fn try_recv(&mut self) -> Option<TtsOutput> {
+    pub fn try_recv(&mut self) -> Option<Stamped<TtsOutput<T>>> {
         match self.output_rx.try_recv() {
             Ok(output) => Some(output),
             _ => None,

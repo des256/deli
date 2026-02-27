@@ -33,14 +33,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // open audio output
-    let (audioout_handle, mut audioout_listener) = create_audioout(Some(AudioOutConfig {
-        sample_rate: spec.sample_rate as usize,
-        ..Default::default()
-    }));
+    let epoch = Epoch::new();
+    let (audioout_handle, mut audioout_listener) = create_audioout::<u64>(
+        Some(AudioOutConfig {
+            sample_rate: spec.sample_rate as usize,
+            ..Default::default()
+        }),
+        epoch,
+    );
 
     // send chunk to audio output
     if let Err(error) = audioout_handle.send(AudioOutChunk {
-        id: 0,
+        payload: 0u64,
         data: mono_samples,
     }) {
         log_error!("AudioOut send failed: {}", error);
@@ -49,15 +53,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // wait for playback to complete
     while let Some(status) = audioout_listener.recv().await {
         match status {
-            AudioOutStatus::Started(id) => {
-                log_info!("playback started: {}", id);
+            AudioOutStatus::Started(payload) => {
+                log_info!("playback started: {}", payload);
             }
-            AudioOutStatus::Finished { id, index } => {
-                log_info!("playback finished: {} ({} samples)", id, index);
+            AudioOutStatus::Finished { payload, index } => {
+                log_info!("playback finished: {} ({} samples)", payload, index);
                 break;
             }
-            AudioOutStatus::Canceled { id, index } => {
-                log_info!("playback canceled: {} ({} samples)", id, index);
+            AudioOutStatus::Canceled { payload, index } => {
+                log_info!("playback canceled: {} ({} samples)", payload, index);
                 break;
             }
         }

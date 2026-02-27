@@ -1,14 +1,7 @@
 use {
     crate::*,
     base::*,
-    std::{
-        sync::{
-            Arc,
-            atomic::{AtomicBool, Ordering},
-            mpsc as std_mpsc,
-        },
-        time::Duration,
-    },
+    std::sync::{Arc, mpsc as std_mpsc},
     tokenizers::Tokenizer,
     tokio::sync::mpsc as tokio_mpsc,
 };
@@ -23,7 +16,8 @@ const HEAD_DIM: usize = 96;
 
 pub(crate) fn generate(
     session: &mut onnx::Session,
-    cancel: &AtomicBool,
+    epoch: &Epoch,
+    my_epoch: u64,
     tokenizer: &Tokenizer,
     eos_token_ids: &[u32],
     max_tokens: usize,
@@ -34,7 +28,7 @@ pub(crate) fn generate(
     head_dim: usize,
     token_ids: &[u32],
     kv_dtype: onnx::ffi::ONNXTensorElementDataType,
-    tx: &tokio_mpsc::Sender<LlmToken>,
+    tx: &tokio_mpsc::Sender<Stamped<LlmOutput>>,
 ) -> bool {
     // Initial state: convert token IDs to i64
     let mut input_ids: Vec<i64> = token_ids.iter().map(|&id| id as i64).collect();
@@ -125,8 +119,8 @@ pub(crate) fn generate(
             }
         };
 
-        // exit right away if cancellation requested
-        if cancel.swap(false, Ordering::Relaxed) {
+        // exit right away if epoch has advanced (cancellation)
+        if !epoch.is_current(my_epoch) {
             return false;
         }
 
@@ -181,7 +175,10 @@ pub(crate) fn generate(
         };
 
         if eos_token_ids.contains(&(next_token_id as u32)) {
-            tx.blocking_send(LlmToken::Eos).unwrap();
+            let _ = tx.blocking_send(Stamped {
+                epoch: my_epoch,
+                inner: LlmOutput::Eos,
+            });
             return true;
         }
 
@@ -200,7 +197,13 @@ pub(crate) fn generate(
         if full_decoded.len() > prev_decoded_len {
             let delta = &full_decoded[prev_decoded_len..];
             prev_decoded_len = full_decoded.len();
-            if tx.blocking_send(LlmToken::Text(delta.to_string())).is_err() {
+            if tx
+                .blocking_send(Stamped {
+                    epoch: my_epoch,
+                    inner: LlmOutput::Token(delta.to_string()),
+                })
+                .is_err()
+            {
                 return true;
             }
         }
@@ -242,17 +245,18 @@ fn parse_kv_cache_index(name: &str) -> Option<usize> {
 }
 
 pub struct Phi3Handle {
-    input_tx: std_mpsc::Sender<String>,
-    cancel: Arc<AtomicBool>,
+    input_tx: std_mpsc::Sender<Stamped<String>>,
+    epoch: Epoch,
 }
 
 pub struct Phi3Listener {
-    output_rx: tokio_mpsc::Receiver<LlmToken>,
+    output_rx: tokio_mpsc::Receiver<Stamped<LlmOutput>>,
 }
 
 pub fn create(
     onnx: &Arc<onnx::Onnx>,
     executor: &onnx::Executor,
+    epoch: Epoch,
 ) -> Result<(Phi3Handle, Phi3Listener), InferError> {
     let mut session = onnx
         .create_session(
@@ -309,21 +313,30 @@ pub fn create(
         .input_element_type(first_kv_idx)
         .map_err(|e| InferError::Onnx(e.to_string()))?;
 
-    let (input_tx, input_rx) = std_mpsc::channel::<String>();
-    let (output_tx, output_rx) = tokio_mpsc::channel::<LlmToken>(32);
-    let cancel = Arc::new(AtomicBool::new(false));
+    let (input_tx, input_rx) = std_mpsc::channel::<Stamped<String>>();
+    let (output_tx, output_rx) = tokio_mpsc::channel::<Stamped<LlmOutput>>(32);
 
     std::thread::spawn({
-        let cancel = Arc::clone(&cancel);
+        let epoch = epoch.clone();
         move || {
             loop {
-                match input_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(mut text) => {
-                        // Skip stale prompts — always use the latest in the channel
-                        while let Ok(newer) = input_rx.try_recv() {
-                            text = newer;
+                match input_rx.recv() {
+                    Ok(mut stamped) => {
+                        // Skip stale prompts — always use the latest prompt in the channel
+                        loop {
+                            match input_rx.try_recv() {
+                                Ok(newer) => stamped = newer,
+                                Err(_) => break,
+                            }
                         }
-                        cancel.swap(false, Ordering::Relaxed);
+
+                        // Skip if already stale
+                        if !epoch.is_current(stamped.epoch) {
+                            continue;
+                        }
+
+                        let my_epoch = stamped.epoch;
+                        let text = stamped.inner;
 
                         let encoding = match tokenizer.encode(text, false) {
                             Ok(encoding) => encoding,
@@ -340,7 +353,8 @@ pub fn create(
 
                         generate(
                             &mut session,
-                            &cancel,
+                            &epoch,
+                            my_epoch,
                             &tokenizer,
                             &EOS_TOKEN_IDS.to_vec(),
                             DEFAULT_MAX_TOKENS,
@@ -354,10 +368,7 @@ pub fn create(
                             &output_tx,
                         );
                     }
-                    Err(std_mpsc::RecvTimeoutError::Timeout) => {
-                        cancel.swap(false, Ordering::Relaxed);
-                    }
-                    Err(std_mpsc::RecvTimeoutError::Disconnected) => {
+                    Err(_) => {
                         log_error!("Input channel disconnected");
                         break;
                     }
@@ -366,31 +377,29 @@ pub fn create(
         }
     });
 
-    Ok((Phi3Handle { input_tx, cancel }, Phi3Listener { output_rx }))
+    Ok((Phi3Handle { input_tx, epoch }, Phi3Listener { output_rx }))
 }
 
 impl Phi3Handle {
-    // send prompt to LLM, starts LLM generation
-    pub fn send(&self, text: &str) -> Result<(), std_mpsc::SendError<String>> {
-        self.input_tx.send(text.to_string()) // note: blocks if input channel is full
-    }
-
-    // cancel LLM generation, flush input channel
-    pub fn cancel(&self) {
-        self.cancel.store(true, Ordering::Relaxed);
+    // send prompt to LLM (stamped with current epoch)
+    pub fn send(&self, text: &str) -> Result<(), std_mpsc::SendError<Stamped<String>>> {
+        self.input_tx.send(Stamped {
+            epoch: self.epoch.current(),
+            inner: text.to_string(),
+        })
     }
 }
 
 impl Phi3Listener {
-    // receive tokens from LLM
-    pub async fn recv(&mut self) -> Option<LlmToken> {
+    // receive output from LLM
+    pub async fn recv(&mut self) -> Option<Stamped<LlmOutput>> {
         self.output_rx.recv().await
     }
 
-    // try-receive tokens from LLM
-    pub fn try_recv(&mut self) -> Option<LlmToken> {
+    // try-receive output from LLM
+    pub fn try_recv(&mut self) -> Option<Stamped<LlmOutput>> {
         match self.output_rx.try_recv() {
-            Ok(token) => Some(token),
+            Ok(output) => Some(output),
             _ => None,
         }
     }
