@@ -6,8 +6,7 @@ pub use asr::*;
 mod tts;
 pub use tts::*;
 
-//mod diar;
-//pub use diar::*;
+pub mod diar;
 
 mod inference;
 pub use inference::*;

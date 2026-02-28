@@ -1,4 +1,4 @@
-use crate::error::{InferError, Result};
+use crate::InferError;
 use std::f32::consts::PI;
 
 const SAMPLE_RATE: usize = 16000;
@@ -27,7 +27,7 @@ fn mel_to_hz(mel: f32) -> f32 {
 /// - Use time-first layout [T, 128] not channels-first [128, T]
 /// - Do NOT apply per-feature normalization
 /// - Use LOG_ZERO_GUARD = 5.96e-8 instead of 1e-10
-pub fn compute_mel_features(audio: &[f32], sample_rate: usize) -> Result<(Vec<f32>, usize)> {
+pub fn compute_mel_features(audio: &[f32], sample_rate: usize) -> Result<(Vec<f32>, usize), InferError> {
     if sample_rate != SAMPLE_RATE {
         return Err(InferError::Runtime(format!(
             "compute_mel_features requires {} Hz audio, got {} Hz",

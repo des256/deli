@@ -104,8 +104,12 @@ impl Inference {
         crate::asr::sherpa::Sherpa::new(&self.onnx, &executor)
     }
 
-    pub fn use_parakeet_diar(&self) -> Result<crate::diar::parakeet::Sortformer, InferError> {
-        crate::diar::parakeet::Sortformer::new(session, config)
-    }
     */
+
+    pub fn use_parakeet_diar(
+        &self,
+        executor: &onnx::Executor,
+    ) -> Result<crate::diar::parakeet::Sortformer, InferError> {
+        crate::diar::parakeet::Sortformer::new(&self.onnx, executor)
+    }
 }

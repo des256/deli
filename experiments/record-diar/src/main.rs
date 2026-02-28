@@ -1,27 +1,35 @@
 use {
-    audio::{AudioData, AudioIn},
+    audio::*,
     base::*,
-    inference::{Inference, diar::parakeet::SpeakerSegment},
+    inference::*,
     std::io::Write,
     tokio::sync::mpsc,
 };
 
+const SAMPLE_RATE: usize = 16000;
+const CHUNK_SIZE: usize = 16000; // 1 second of audio at 16kHz
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), InferError> {
     base::init_stdout_logger();
 
     log_info!("Streaming Speaker Diarization (Sortformer v2)");
 
-    #[cfg(feature = "cuda")]
-    let inference = Inference::cuda(0)?;
-    #[cfg(not(feature = "cuda"))]
-    let inference = Inference::cpu()?;
-    let diar = inference.use_parakeet_diar()?;
+    let inference = Inference::new().map_err(|e| InferError::Runtime(e.to_string()))?;
+    let diar = inference.use_parakeet_diar(&onnx::Executor::Cpu)?;
     log_info!("Model loaded — listening...");
+
+    let mut audioin_listener = create_audioin(Some(AudioInConfig {
+        sample_rate: SAMPLE_RATE,
+        chunk_size: CHUNK_SIZE,
+        boost: 1,
+        ..Default::default()
+    }))
+    .await;
 
     // Channels: audio → processing thread, segments → main loop
     let (audio_tx, mut audio_rx) = mpsc::channel::<Vec<f32>>(16);
-    let (seg_tx, mut seg_rx) = mpsc::channel::<Vec<SpeakerSegment>>(16);
+    let (seg_tx, mut seg_rx) = mpsc::channel::<Vec<diar::parakeet::SpeakerSegment>>(16);
 
     // Diarization runs on a dedicated thread so it never blocks audio capture
     std::thread::spawn(move || {
@@ -34,15 +42,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Diarization error: {}", e);
+                    log_error!("Diarization error: {}", e);
                 }
             }
         }
     });
-
-    let mut audioin = AudioIn::open(None).await;
-    let mut audio_buf: Vec<f32> = Vec::new();
-    let chunk_size: usize = 16000; // ~1 second at 16kHz
 
     loop {
         tokio::select! {
@@ -51,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(segments) = seg_rx.recv() => {
                 for seg in &segments {
                     print!(
-                        "[spk{}] {:.2}s - {:.2}s  ",
+                        "[spk{}] {:.2}s-{:.2}s  ",
                         seg.speaker_id, seg.start, seg.end
                     );
                 }
@@ -61,43 +65,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            chunk = audioin.capture() => {
-                match chunk {
-                    Ok(sample) => {
-                        let AudioData::Pcm(ref tensor) = sample.data;
-                        for &s in &tensor.data {
-                            audio_buf.push(s as f32 / 32768.0);
-                        }
-
-                        while audio_buf.len() >= chunk_size {
-                            let chunk: Vec<f32> = audio_buf.drain(..chunk_size).collect();
-                            if audio_tx.send(chunk).await.is_err() {
-                                break;
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        log_error!("Audio capture error: {}", error);
-                        break;
-                    }
+            Some(audio) = audioin_listener.recv() => {
+                // Convert i16 audio to f32 normalized [-1, 1]
+                let audio_f32: Vec<f32> = audio.iter().map(|&s| s as f32 / 32768.0).collect();
+                if audio_tx.send(audio_f32).await.is_err() {
+                    break;
                 }
             }
 
-            _ = tokio::signal::ctrl_c() => {
-                log_info!("Shutting down...");
-                // Send remaining audio
-                if !audio_buf.is_empty() {
-                    let _ = audio_tx.send(audio_buf.split_off(0)).await;
-                }
-                drop(audio_tx);
-                // Drain remaining results
-                while let Some(segments) = seg_rx.recv().await {
-                    for seg in &segments {
-                        println!("[spk{}] {:.2}s - {:.2}s", seg.speaker_id, seg.start, seg.end);
-                    }
-                }
-                break;
-            }
+            else => break,
         }
     }
 

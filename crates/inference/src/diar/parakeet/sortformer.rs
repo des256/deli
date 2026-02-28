@@ -1,4 +1,8 @@
-use {crate::*, std::sync::Arc};
+use {
+    crate::InferError,
+    super::{features::compute_mel_features, compression, postprocess, DiarizationConfig, SpeakerSegment},
+    std::sync::Arc,
+};
 
 const PARAKEET_DIAR_MODEL_PATH: &str = "data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx";
 
@@ -14,7 +18,7 @@ const SPKCACHE_SIL_FRAMES_PER_SPK: usize = 3;
 
 /// Sortformer streaming speaker diarization.
 pub struct Sortformer {
-    session: Session,
+    session: onnx::Session,
     config: DiarizationConfig,
     // Streaming constants
     chunk_len: usize,
@@ -31,8 +35,15 @@ pub struct Sortformer {
 
 impl Sortformer {
     /// Create a new Sortformer with zero-initialized streaming state.
-    pub fn new(onnx: &Arc<onnx::Onnx>, executor: &onnx::Executor) -> Result<Self> {
-        let session = onnx.create_session(executor, PARAKEET_DIAR_MODEL_PATH)?;
+    pub fn new(onnx: &Arc<onnx::Onnx>, executor: &onnx::Executor) -> Result<Self, InferError> {
+        let session = onnx
+            .create_session(
+                executor,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                PARAKEET_DIAR_MODEL_PATH,
+            )
+            .map_err(|e| InferError::Runtime(format!("Failed to create Sortformer session: {e}")))?;
         Ok(Self {
             session,
             config: DiarizationConfig::default(),
@@ -49,14 +60,13 @@ impl Sortformer {
     }
 
     /// Reset all streaming state to zero.
-    pub fn reset(&mut self) -> Result<()> {
+    pub fn reset(&mut self) {
         self.spkcache.clear();
         self.fifo.clear();
         self.fifo_preds.clear();
         self.spkcache_preds = None;
         self.mean_sil_emb.fill(0.0);
         self.n_sil_frames = 0;
-        Ok(())
     }
 
     /// Process a chunk of mel features through the streaming Sortformer model.
@@ -73,7 +83,7 @@ impl Sortformer {
         chunk_feat: &[f32],
         chunk_feat_frames: usize,
         actual_len: usize,
-    ) -> Result<Vec<f32>> {
+    ) -> Result<Vec<f32>, InferError> {
         if chunk_feat.len() != chunk_feat_frames * 128 {
             return Err(InferError::Runtime(format!(
                 "Chunk features length {} does not match frames {} * 128",
@@ -82,45 +92,47 @@ impl Sortformer {
             )));
         }
 
+        let onnx_ref = &self.session.onnx;
+
         // Valid output frames after model subsampling
         let valid_chunk_frames = actual_len.div_ceil(SUBSAMPLING);
 
         // Prepare ONNX inputs
         let chunk_lengths = vec![actual_len as i64];
 
-        let chunk = onnx::Value::from_slice(&[1, chunk_feat_frames, 128], chunk_feat)
+        let chunk = onnx::Value::from_slice(onnx_ref, &[1, chunk_feat_frames, 128], chunk_feat)
             .map_err(|e| InferError::Runtime(format!("Failed to create chunk tensor: {}", e)))?;
 
-        let chunk_lengths_tensor = onnx::Value::from_slice(&[1], &chunk_lengths)
+        let chunk_lengths_tensor = onnx::Value::from_slice(onnx_ref, &[1], &chunk_lengths)
             .map_err(|e| InferError::Runtime(format!("Failed to create chunk_lengths: {}", e)))?;
 
         let spkcache_frames = self.spkcache.len() / EMB_DIM;
         let spkcache = if spkcache_frames > 0 {
-            onnx::Value::from_slice(&[1, spkcache_frames, EMB_DIM], &self.spkcache)
+            onnx::Value::from_slice(onnx_ref, &[1, spkcache_frames, EMB_DIM], &self.spkcache)
                 .map_err(|e| InferError::Runtime(format!("Failed to create spkcache: {}", e)))?
         } else {
-            onnx::Value::zeros::<f32>(&[1, 0, EMB_DIM as i64]).map_err(|e| {
+            onnx::Value::zeros::<f32>(onnx_ref, &[1, 0, EMB_DIM as i64]).map_err(|e| {
                 InferError::Runtime(format!("Failed to create empty spkcache: {}", e))
             })?
         };
 
         let spkcache_lengths = vec![spkcache_frames as i64];
         let spkcache_lengths_tensor =
-            onnx::Value::from_slice(&[1], &spkcache_lengths).map_err(|e| {
+            onnx::Value::from_slice(onnx_ref, &[1], &spkcache_lengths).map_err(|e| {
                 InferError::Runtime(format!("Failed to create spkcache_lengths: {}", e))
             })?;
 
         let fifo_frames = self.fifo.len() / EMB_DIM;
         let fifo = if fifo_frames > 0 {
-            onnx::Value::from_slice(&[1, fifo_frames, EMB_DIM], &self.fifo)
+            onnx::Value::from_slice(onnx_ref, &[1, fifo_frames, EMB_DIM], &self.fifo)
                 .map_err(|e| InferError::Runtime(format!("Failed to create fifo: {}", e)))?
         } else {
-            onnx::Value::zeros::<f32>(&[1, 0, EMB_DIM as i64])
+            onnx::Value::zeros::<f32>(onnx_ref, &[1, 0, EMB_DIM as i64])
                 .map_err(|e| InferError::Runtime(format!("Failed to create empty fifo: {}", e)))?
         };
 
         let fifo_lengths = vec![fifo_frames as i64];
-        let fifo_lengths_tensor = onnx::Value::from_slice(&[1], &fifo_lengths)
+        let fifo_lengths_tensor = onnx::Value::from_slice(onnx_ref, &[1], &fifo_lengths)
             .map_err(|e| InferError::Runtime(format!("Failed to create fifo_lengths: {}", e)))?;
 
         // Run ONNX model
@@ -314,7 +326,7 @@ impl Sortformer {
     /// # Returns
     /// (predictions, num_diar_frames) where predictions is [num_diar_frames, NUM_SPEAKERS] flattened.
     /// Each diar frame covers SUBSAMPLING (8) mel feature frames.
-    pub fn diarize_chunk_preds(&mut self, audio_16k_mono: &[f32]) -> Result<(Vec<f32>, usize)> {
+    pub fn diarize_chunk_preds(&mut self, audio_16k_mono: &[f32]) -> Result<(Vec<f32>, usize), InferError> {
         if audio_16k_mono.is_empty() {
             return Ok((vec![], 0));
         }
@@ -360,7 +372,7 @@ impl Sortformer {
     ///
     /// # Returns
     /// Vec of SpeakerSegments with start/end times in seconds and speaker IDs
-    pub fn diarize_chunk(&mut self, audio_16k_mono: &[f32]) -> Result<Vec<SpeakerSegment>> {
+    pub fn diarize_chunk(&mut self, audio_16k_mono: &[f32]) -> Result<Vec<SpeakerSegment>, InferError> {
         let (all_preds, total_out_frames) = self.diarize_chunk_preds(audio_16k_mono)?;
         if total_out_frames == 0 {
             return Ok(vec![]);
