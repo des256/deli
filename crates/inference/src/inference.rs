@@ -48,11 +48,17 @@ impl Inference {
         crate::tts::pocket::create(&self.onnx, &executor, voice_path.as_ref(), epoch)
     }
 
-    pub fn use_phi3(
+    pub fn use_phi3<T: Clone + Send + 'static>(
         &self,
         executor: &onnx::Executor,
         epoch: Epoch,
-    ) -> Result<(crate::llm::phi3::Phi3Handle, crate::llm::phi3::Phi3Listener), InferError> {
+    ) -> Result<
+        (
+            crate::llm::phi3::Phi3Handle<T>,
+            crate::llm::phi3::Phi3Listener<T>,
+        ),
+        InferError,
+    > {
         crate::llm::phi3::create(&self.onnx, executor, epoch)
     }
 

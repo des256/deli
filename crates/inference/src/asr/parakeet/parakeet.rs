@@ -294,8 +294,13 @@ fn greedy_decode(
     Ok(token_ids)
 }
 
+enum ParakeetCommand<T: Clone + Send + 'static> {
+    Audio(AsrInput<T>),
+    Flush { payload: T },
+}
+
 pub struct ParakeetHandle<T: Clone + Send + 'static> {
-    input_tx: std_mpsc::Sender<AsrInput<T>>,
+    input_tx: std_mpsc::Sender<ParakeetCommand<T>>,
 }
 
 pub struct ParakeetListener<T: Clone + Send + 'static> {
@@ -375,7 +380,7 @@ pub fn create<T: Clone + Send + 'static>(
     let tokenizer_tokens = load_tokens(&PARAKEET_TOKENIZER_PATH)?;
 
     // create channels
-    let (input_tx, input_rx) = std_mpsc::channel::<AsrInput<T>>();
+    let (input_tx, input_rx) = std_mpsc::channel::<ParakeetCommand<T>>();
     let (output_tx, output_rx) = tokio_mpsc::channel::<AsrOutput<T>>(TEXT_CHANNEL_CAPACITY);
 
     // spawn processing task
@@ -447,24 +452,34 @@ pub fn create<T: Clone + Send + 'static>(
             let mut cache_last_token = BLANK_ID;
 
             // main audio loop
-            while let Ok(chunk) = input_rx.recv() {
-                // blocking wait, no timeout
+            while let Ok(command) = input_rx.recv() {
+                let (audio, payload, is_flush) = match command {
+                    ParakeetCommand::Audio(chunk) => (chunk.audio, chunk.payload, false),
+                    ParakeetCommand::Flush { payload } => (Vec::new(), payload, true),
+                };
+
                 // Level 1: audio -> feature frames (frames-first)
-                let new_features = audio_to_features(
-                    &chunk.audio,
-                    &mel_filterbank,
-                    &hann_window,
-                    &mut audio_tail,
-                    &mut prev_sample,
-                );
-                let new_frames = new_features.len() / NUM_MEL_BINS;
-                if new_frames == 0 {
-                    continue;
+                if !audio.is_empty() {
+                    let new_features = audio_to_features(
+                        &audio,
+                        &mel_filterbank,
+                        &hann_window,
+                        &mut audio_tail,
+                        &mut prev_sample,
+                    );
+                    let new_frames = new_features.len() / NUM_MEL_BINS;
+                    if new_frames > 0 {
+                        feat_buf.extend_from_slice(&new_features);
+                        feat_buf_frames += new_frames;
+                    }
                 }
 
-                // Append to feature rolling buffer
-                feat_buf.extend_from_slice(&new_features);
-                feat_buf_frames += new_frames;
+                // On flush: pad remaining features to encoder_window_size
+                if is_flush && feat_buf_frames > 0 && feat_buf_frames < encoder_window_size {
+                    let pad_frames = encoder_window_size - feat_buf_frames;
+                    feat_buf.resize(feat_buf.len() + pad_frames * NUM_MEL_BINS, 0.0);
+                    feat_buf_frames = encoder_window_size;
+                }
 
                 // Level 2: feed encoder whenever we have enough frames
                 while feat_buf_frames >= encoder_window_size {
@@ -506,8 +521,8 @@ pub fn create<T: Clone + Send + 'static>(
                         }
                     };
 
-                    if !token_ids.is_empty() {
-                        let text = token_ids
+                    let text = if !token_ids.is_empty() {
+                        token_ids
                             .iter()
                             .filter_map(|&id| {
                                 let idx = id as usize;
@@ -517,23 +532,21 @@ pub fn create<T: Clone + Send + 'static>(
                                     Some(tokenizer_tokens[idx].replace('▁', " "))
                                 }
                             })
-                            .collect::<String>();
+                            .collect::<String>()
+                    } else {
+                        String::new()
+                    };
 
+                    // only send non-flush outputs if they have text (reduces noise)
+                    let should_send = is_flush || !text.is_empty();
+                    if should_send {
                         let output = AsrOutput::<T> {
-                            payload: chunk.payload.clone(),
+                            payload: payload.clone(),
                             text,
+                            is_flush: false, // per-window output, not the final flush
                         };
                         if let Err(e) = output_tx.blocking_send(output) {
                             log_error!("error sending text: {e}");
-                            return;
-                        }
-                    } else {
-                        let output = AsrOutput::<T> {
-                            payload: chunk.payload.clone(),
-                            text: String::new(),
-                        };
-                        if let Err(e) = output_tx.blocking_send(output) {
-                            log_error!("error sending empty text: {e}");
                             return;
                         }
                     }
@@ -544,6 +557,57 @@ pub fn create<T: Clone + Send + 'static>(
                     feat_buf.drain(..shift_floats);
                     feat_buf_frames -= shift_frames;
                 }
+
+                // After flush: send the flush marker and reset all state
+                if is_flush {
+                    let output = AsrOutput::<T> {
+                        payload: payload.clone(),
+                        text: String::new(),
+                        is_flush: true,
+                    };
+                    if let Err(e) = output_tx.blocking_send(output) {
+                        log_error!("error sending flush marker: {e}");
+                        return;
+                    }
+
+                    // Reset state for next utterance
+                    audio_tail.clear();
+                    prev_sample = 0;
+                    feat_buf.clear();
+                    feat_buf_frames = 0;
+                    cache_last_channel = match zeros_f32(
+                        &onnx,
+                        &[1, NUM_LAYERS as i64, CACHE_CHANNEL_CONTEXT as i64, ENCODER_DIM as i64],
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => { log_error!("error resetting cache_last_channel: {e}"); return; }
+                    };
+                    cache_last_time = match zeros_f32(
+                        &onnx,
+                        &[1, NUM_LAYERS as i64, ENCODER_DIM as i64, CACHE_TIME_CONTEXT as i64],
+                    ) {
+                        Ok(v) => v,
+                        Err(e) => { log_error!("error resetting cache_last_time: {e}"); return; }
+                    };
+                    cache_last_channel_len = match onnx::Value::from_slice(&onnx, &[1], &[0i64]) {
+                        Ok(v) => v,
+                        Err(e) => { log_error!("error resetting cache_last_channel_len: {e}"); return; }
+                    };
+                    cache_state1 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
+                        Ok(v) => v,
+                        Err(e) => { log_error!("error resetting state1: {e}"); return; }
+                    };
+                    cache_state2 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
+                        Ok(v) => v,
+                        Err(e) => { log_error!("error resetting state2: {e}"); return; }
+                    };
+                    cache_last_token = BLANK_ID;
+                }
+
+                // Skip sending output for non-flush commands with no new features
+                if !is_flush && audio.is_empty() {
+                    continue;
+                }
             }
         }
     });
@@ -552,9 +616,19 @@ pub fn create<T: Clone + Send + 'static>(
 }
 
 impl<T: Clone + Send + 'static> ParakeetHandle<T> {
-    // send audio chunk to ASR
-    pub fn send(&self, input: AsrInput<T>) -> Result<(), std_mpsc::SendError<AsrInput<T>>> {
-        self.input_tx.send(input)
+    /// Send audio chunk to ASR for streaming processing.
+    pub fn send(&self, input: AsrInput<T>) -> Result<(), InferError> {
+        self.input_tx
+            .send(ParakeetCommand::Audio(input))
+            .map_err(|_| InferError::Runtime("ASR channel closed".to_string()))
+    }
+
+    /// Flush remaining buffered audio through the encoder, producing any final text.
+    /// Resets all ASR state for the next utterance.
+    pub fn flush(&self, payload: T) -> Result<(), InferError> {
+        self.input_tx
+            .send(ParakeetCommand::Flush { payload })
+            .map_err(|_| InferError::Runtime("ASR channel closed".to_string()))
     }
 }
 

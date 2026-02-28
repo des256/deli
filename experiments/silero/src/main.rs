@@ -7,7 +7,7 @@ const SPEECH_THRESHOLD: f32 = 0.5;
 #[tokio::main]
 async fn main() -> Result<(), InferError> {
     base::init_stdout_logger();
-    let mut audioin = AudioIn::open(None).await;
+    let mut audioin = create_audioin(None).await;
     let inference = Inference::new()?;
     let mut vad = inference.use_silero(&onnx::Executor::Cpu, SAMPLE_RATE)?;
     let mut buffer: Vec<i16> = Vec::new();

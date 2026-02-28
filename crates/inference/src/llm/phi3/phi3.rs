@@ -14,11 +14,12 @@ const DEFAULT_MAX_TOKENS: usize = 512;
 const NUM_KV_HEADS: usize = 32;
 const HEAD_DIM: usize = 96;
 
-pub(crate) fn generate(
+pub(crate) fn generate<T: Clone + Send + 'static>(
     session: &mut onnx::Session,
     epoch: &Epoch,
     my_epoch: u64,
     tokenizer: &Tokenizer,
+    payload: T,
     eos_token_ids: &[u32],
     max_tokens: usize,
     input_names: &[String],
@@ -28,7 +29,7 @@ pub(crate) fn generate(
     head_dim: usize,
     token_ids: &[u32],
     kv_dtype: onnx::ffi::ONNXTensorElementDataType,
-    tx: &tokio_mpsc::Sender<Stamped<LlmOutput>>,
+    tx: &tokio_mpsc::Sender<Stamped<LlmOutput<T>>>,
 ) -> bool {
     // Initial state: convert token IDs to i64
     let mut input_ids: Vec<i64> = token_ids.iter().map(|&id| id as i64).collect();
@@ -177,7 +178,9 @@ pub(crate) fn generate(
         if eos_token_ids.contains(&(next_token_id as u32)) {
             let _ = tx.blocking_send(Stamped {
                 epoch: my_epoch,
-                inner: LlmOutput::Eos,
+                inner: LlmOutput::Eos {
+                    payload: payload.clone(),
+                },
             });
             return true;
         }
@@ -200,7 +203,10 @@ pub(crate) fn generate(
             if tx
                 .blocking_send(Stamped {
                     epoch: my_epoch,
-                    inner: LlmOutput::Token(delta.to_string()),
+                    inner: LlmOutput::Token {
+                        payload: payload.clone(),
+                        token: delta.to_string(),
+                    },
                 })
                 .is_err()
             {
@@ -244,20 +250,20 @@ fn parse_kv_cache_index(name: &str) -> Option<usize> {
     }
 }
 
-pub struct Phi3Handle {
-    input_tx: std_mpsc::Sender<Stamped<String>>,
+pub struct Phi3Handle<T: Clone + Send + 'static> {
+    input_tx: std_mpsc::Sender<Stamped<LlmInput<T>>>,
     epoch: Epoch,
 }
 
-pub struct Phi3Listener {
-    output_rx: tokio_mpsc::Receiver<Stamped<LlmOutput>>,
+pub struct Phi3Listener<T: Clone + Send + 'static> {
+    output_rx: tokio_mpsc::Receiver<Stamped<LlmOutput<T>>>,
 }
 
-pub fn create(
+pub fn create<T: Clone + Send + 'static>(
     onnx: &Arc<onnx::Onnx>,
     executor: &onnx::Executor,
     epoch: Epoch,
-) -> Result<(Phi3Handle, Phi3Listener), InferError> {
+) -> Result<(Phi3Handle<T>, Phi3Listener<T>), InferError> {
     let mut session = onnx
         .create_session(
             executor,
@@ -313,8 +319,8 @@ pub fn create(
         .input_element_type(first_kv_idx)
         .map_err(|e| InferError::Onnx(e.to_string()))?;
 
-    let (input_tx, input_rx) = std_mpsc::channel::<Stamped<String>>();
-    let (output_tx, output_rx) = tokio_mpsc::channel::<Stamped<LlmOutput>>(32);
+    let (input_tx, input_rx) = std_mpsc::channel::<Stamped<LlmInput<T>>>();
+    let (output_tx, output_rx) = tokio_mpsc::channel::<Stamped<LlmOutput<T>>>(32);
 
     std::thread::spawn({
         let epoch = epoch.clone();
@@ -336,9 +342,10 @@ pub fn create(
                         }
 
                         let my_epoch = stamped.epoch;
-                        let text = stamped.inner;
+                        let prompt = stamped.inner.prompt;
+                        let payload = stamped.inner.payload;
 
-                        let encoding = match tokenizer.encode(text, false) {
+                        let encoding = match tokenizer.encode(prompt.as_str(), false) {
                             Ok(encoding) => encoding,
                             Err(e) => {
                                 log_error!("Tokenization failed: {}", e);
@@ -356,6 +363,7 @@ pub fn create(
                             &epoch,
                             my_epoch,
                             &tokenizer,
+                            payload.clone(),
                             &EOS_TOKEN_IDS.to_vec(),
                             DEFAULT_MAX_TOKENS,
                             &input_names,
@@ -380,24 +388,27 @@ pub fn create(
     Ok((Phi3Handle { input_tx, epoch }, Phi3Listener { output_rx }))
 }
 
-impl Phi3Handle {
+impl<T: Clone + Send + 'static> Phi3Handle<T> {
     // send prompt to LLM (stamped with current epoch)
-    pub fn send(&self, text: &str) -> Result<(), std_mpsc::SendError<Stamped<String>>> {
+    pub fn send(
+        &self,
+        input: LlmInput<T>,
+    ) -> Result<(), std_mpsc::SendError<Stamped<LlmInput<T>>>> {
         self.input_tx.send(Stamped {
             epoch: self.epoch.current(),
-            inner: text.to_string(),
+            inner: input,
         })
     }
 }
 
-impl Phi3Listener {
+impl<T: Clone + Send + 'static> Phi3Listener<T> {
     // receive output from LLM
-    pub async fn recv(&mut self) -> Option<Stamped<LlmOutput>> {
+    pub async fn recv(&mut self) -> Option<Stamped<LlmOutput<T>>> {
         self.output_rx.recv().await
     }
 
     // try-receive output from LLM
-    pub fn try_recv(&mut self) -> Option<Stamped<LlmOutput>> {
+    pub fn try_recv(&mut self) -> Option<Stamped<LlmOutput<T>>> {
         match self.output_rx.try_recv() {
             Ok(output) => Some(output),
             _ => None,

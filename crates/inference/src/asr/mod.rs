@@ -8,6 +8,7 @@ pub struct AsrInput<T: Clone + Send + 'static> {
 pub struct AsrOutput<T: Clone + Send + 'static> {
     pub payload: T,
     pub text: String,
+    pub is_flush: bool,
 }
 
 pub enum Transcription {

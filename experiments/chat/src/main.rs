@@ -4,18 +4,33 @@ use {
     inference::*,
     std::{
         io::Write,
-        sync::{
-            Arc,
-            atomic::{AtomicBool, AtomicU64, Ordering},
-        },
-        time::Duration,
+        sync::Arc,
+        time::{Duration, Instant},
     },
-    tokio::sync::RwLock,
 };
 
 const VOICE_PATH: &str = "data/pocket/voices/desmond.bin";
+const VAD_FRAME_SIZE: usize = 512;
 const ASR_SAMPLE_RATE: usize = 16000;
 const TTS_SAMPLE_RATE: usize = 24000;
+
+// VAD tuning
+const VAD_THRESHOLD: f32 = 0.5;
+const VAD_COOLDOWN_FRAMES: u32 = 15; // ~480ms of silence before utterance ends
+
+// Smaller chunks = lower latency for VAD detection.
+// 512 * 4 = 2048 samples = 128ms at 16kHz, giving 4 clean VAD frames per chunk.
+const AUDIOIN_CHUNK_SIZE: usize = VAD_FRAME_SIZE * 4;
+
+/// VAD state machine for speech segmentation.
+enum VadPhase {
+    /// No speech detected. Waiting for speech to start.
+    Idle,
+    /// Speech is active. Audio is being accumulated for ASR.
+    Speaking,
+    /// Speech may have ended. Counting down silence frames before confirming.
+    Cooldown(u32),
+}
 
 #[tokio::main]
 async fn main() -> Result<(), InferError> {
@@ -24,11 +39,11 @@ async fn main() -> Result<(), InferError> {
     // initialize inference
     let inference = Inference::new().map_err(|e| InferError::Runtime(e.to_string()))?;
 
-    // initialize AudioIn
+    // initialize AudioIn (smaller chunks for lower VAD latency)
     log_info!("Opening audio input...");
     let mut audioin_listener = create_audioin(Some(AudioInConfig {
         sample_rate: ASR_SAMPLE_RATE,
-        chunk_size: 8000,
+        chunk_size: AUDIOIN_CHUNK_SIZE,
         boost: 4,
         ..Default::default()
     }))
@@ -48,15 +63,19 @@ async fn main() -> Result<(), InferError> {
     );
     let audioout_handle = Arc::new(audioout_handle);
 
+    // load VAD
+    log_info!("Loading VAD...");
+    let mut vad = inference.use_silero(&onnx::Executor::Cpu, ASR_SAMPLE_RATE)?;
+
     // load ASR
     log_info!("Loading ASR...");
-    let (asr_handle, mut asr_listener) = inference.use_parakeet::<()>(&onnx::Executor::Cuda(0))?;
+    let (asr_handle, mut asr_listener) = inference.use_parakeet::<u64>(&onnx::Executor::Cuda(0))?;
     let asr_handle = Arc::new(asr_handle);
 
     // load LLM
     log_info!("Loading LLM...");
     let (llm_handle, mut llm_listener) =
-        inference.use_phi3(&onnx::Executor::Cuda(0), epoch.clone())?;
+        inference.use_phi3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
     let llm_handle = Arc::new(llm_handle);
 
     // load TTS
@@ -65,46 +84,121 @@ async fn main() -> Result<(), InferError> {
         inference.use_pocket::<u64>(&onnx::Executor::Cpu, &VOICE_PATH, epoch.clone())?;
     let tts_handle = Arc::new(tts_handle);
 
-    // state
-    let input_accumulator: Arc<RwLock<String>> = Arc::new(RwLock::new(String::new()));
-    let gate = Arc::new(AtomicBool::new(false));
-    let output_sentences: Arc<RwLock<Vec<String>>> = Arc::new(RwLock::new(Vec::new()));
-    let current_id = Arc::new(AtomicU64::new(1));
+    // global clock
+    let global_start = Instant::now();
 
-    // task: AudioIn pump
-    log_info!("Spawning AudioIn->ASR pump...");
+    // task: AudioIn + VAD pump
+    // Sends all audio to ASR for streaming processing.
+    // VAD state machine controls epoch advancement (on speech start) and ASR flush (on speech end).
+    log_info!("Spawning AudioIn+VAD pump...");
     tokio::spawn({
         let asr_handle = Arc::clone(&asr_handle);
+        let epoch = epoch.clone();
         async move {
+            let mut source_audio_id = 0u64;
+            let mut phase = VadPhase::Idle;
+
             while let Some(audio) = audioin_listener.recv().await {
-                if let Err(error) = asr_handle.send(AsrInput { payload: (), audio }) {
+                let now = global_start.elapsed();
+
+                // Always send audio to ASR for streaming feature extraction
+                if let Err(error) = asr_handle.send(AsrInput {
+                    payload: source_audio_id,
+                    audio: audio.clone(),
+                }) {
                     log_error!("ASR send failed: {}", error);
                 }
+
+                // Process VAD on each frame within this chunk
+                for chunk in audio.chunks_exact(VAD_FRAME_SIZE) {
+                    let prob = vad.process(chunk).unwrap_or(0.0);
+
+                    match &mut phase {
+                        VadPhase::Idle => {
+                            if prob > VAD_THRESHOLD {
+                                // Speech started — cancel any playing response, start new utterance
+                                let new_epoch = epoch.advance();
+                                println!(
+                                    "[{:010}ms] VAD SA{:04}: speech start (prob={:.2}%, epoch={})",
+                                    now.as_millis(),
+                                    source_audio_id,
+                                    prob * 100.0,
+                                    new_epoch,
+                                );
+                                phase = VadPhase::Speaking;
+                            }
+                        }
+                        VadPhase::Speaking => {
+                            if prob < VAD_THRESHOLD {
+                                // Silence detected — start cooldown
+                                phase = VadPhase::Cooldown(VAD_COOLDOWN_FRAMES);
+                            }
+                        }
+                        VadPhase::Cooldown(remaining) => {
+                            if prob > VAD_THRESHOLD {
+                                // Speech resumed — back to speaking (same utterance)
+                                phase = VadPhase::Speaking;
+                            } else {
+                                *remaining -= 1;
+                                if *remaining == 0 {
+                                    // Cooldown expired — utterance complete, flush ASR
+                                    println!(
+                                        "[{:010}ms] VAD SA{:04}: speech end, flushing ASR",
+                                        now.as_millis(),
+                                        source_audio_id,
+                                    );
+                                    if let Err(error) = asr_handle.flush(source_audio_id) {
+                                        log_error!("ASR flush failed: {}", error);
+                                    }
+                                    phase = VadPhase::Idle;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                source_audio_id += 1;
             }
         }
     });
 
-    // task: TTS pump
+    // task: TTS -> AudioOut pump
+    // Forwards TTS audio directly to AudioOut. Epoch checking drops stale audio.
+    // No gate needed — during speech, LLM/TTS are idle (no output to buffer).
+    // When user interrupts mid-response, epoch advance cancels playback.
     log_info!("Spawning TTS->AudioOut pump...");
     tokio::spawn({
         let audioout_handle = Arc::clone(&audioout_handle);
+        let epoch = epoch.clone();
         async move {
             while let Some(stamped) = tts_listener.recv().await {
+                // drop stale chunks
+                if !epoch.is_current(stamped.epoch) {
+                    continue;
+                }
+
+                let now = global_start.elapsed();
                 let output = stamped.inner;
-                if let Err(error) = audioout_handle.send(AudioOutChunk {
+                let chunk = AudioOutChunk {
                     payload: output.payload,
                     data: output.data,
-                }) {
+                };
+                println!(
+                    "[{:010}ms] TTS LL{:04}({:04}): -> AudioOut",
+                    now.as_millis(),
+                    chunk.payload.payload,
+                    chunk.payload.id,
+                );
+                if let Err(error) = audioout_handle.send(chunk) {
                     log_error!("AudioOut send failed: {}", error);
                 }
             }
         }
     });
 
-    // task: AudioOut pump
+    // task: AudioOut status pump
     log_info!("Spawning AudioOut pump...");
     tokio::spawn({
-        let input_accumulator = Arc::clone(&input_accumulator);
         async move {
             let mut current_index = 0usize;
             let mut current_sentence_id = 0u64;
@@ -112,31 +206,24 @@ async fn main() -> Result<(), InferError> {
                 match status {
                     AudioOutStatus::Started(payload) => {
                         if current_sentence_id != payload.payload {
-                            // new sentence started
                             current_sentence_id = payload.payload;
                             current_index = 0;
-
-                            // clear input accumulator (maybe not for all sentences, but only the first one in a set)
-                            input_accumulator.write().await.clear();
                         }
                     }
                     AudioOutStatus::Finished { payload, index } => {
-                        //println!("AudioOut: finished {} ({} samples)", id, index);
                         if current_sentence_id == payload.payload {
-                            // a chunk of our current sentence finished
                             current_index += index;
                         }
                     }
                     AudioOutStatus::Canceled { payload, index } => {
-                        // a chunk of our current sentence was canceled
                         if current_sentence_id == payload.payload {
                             current_index += index;
                             println!(
-                                "AudioOut: canceled ({}:{}) at {}: {:.2}%",
+                                "AudioOut: canceled ({}:{}) at {}: {:.2}s",
                                 current_sentence_id,
                                 payload.id,
                                 current_index,
-                                current_index as f64 / TTS_SAMPLE_RATE as f64 * 100.0
+                                current_index as f64 / TTS_SAMPLE_RATE as f64,
                             );
                         }
                     }
@@ -146,68 +233,73 @@ async fn main() -> Result<(), InferError> {
     });
 
     // task: ASR pump
+    // Accumulates ASR text during an utterance. On flush (speech end), sends the
+    // complete utterance to LLM as a single prompt. Uses epoch to detect new
+    // utterances and discard stale text.
     log_info!("Spawning ASR pump...");
     tokio::spawn({
         let llm_handle = Arc::clone(&llm_handle);
-        let input_accumulator = Arc::clone(&input_accumulator);
-        let gate = Arc::clone(&gate);
-        let output_sentences = Arc::clone(&output_sentences);
-        let current_id = Arc::clone(&current_id);
-        let tts_handle_asr = Arc::clone(&tts_handle);
         let epoch = epoch.clone();
         async move {
+            let mut accumulator = String::new();
+            let mut current_epoch = epoch.current();
+            let mut utterance_id = 0u64;
+
             while let Some(chunk) = asr_listener.recv().await {
-                // ignore ASR output that contains no alphanumeric characters
-                let has_text = chunk.text.chars().any(|c| c.is_alphanumeric());
-                println!("=====>> ASR: \"{}\" ({}) <<=====", chunk.text, if has_text { "text" } else { "empty" });
+                let now = global_start.elapsed();
 
-                if !has_text {
-                    println!("ASR:    empty, opening gate, flushing output sentences to TTS:");
+                // Detect new utterance (epoch advanced by VAD pump)
+                let now_epoch = epoch.current();
+                if now_epoch != current_epoch {
+                    accumulator.clear();
+                    current_epoch = now_epoch;
+                    utterance_id += 1;
+                }
 
-                    // open gate
-                    gate.store(true, Ordering::Relaxed);
-
-                    // flush output sentences to TTS
-                    {
-                        let mut write = output_sentences.write().await;
-                        for sentence in write.drain(..) {
-                            let id = current_id.load(Ordering::Relaxed);
-                            println!("ASR:        {}: \"{}\"", id, sentence);
-                            if let Err(error) = tts_handle_asr.send(TtsInput {
-                                payload: id,
-                                text: sentence,
-                            }) {
-                                log_error!("TTS send failed: {}", error);
-                            }
-                            current_id.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                } else {
-                    // add to input accumulator
-                    {
-                        let mut write = input_accumulator.write().await;
-                        write.push_str(&chunk.text);
-                        println!("ASR:    \"{}\"", write);
-                    }
-
-                    // close gate, advance epoch to cancel entire pipeline
-                    println!("ASR:    closing gate, advancing epoch");
-                    gate.store(false, Ordering::Relaxed);
-                    epoch.advance();
-
-                    // clear output sentences
-                    {
-                        let mut write = output_sentences.write().await;
-                        write.clear();
-                    }
-
-                    // restart LLM with new prompt
-                    println!("ASR:    restarting LLM with new prompt");
-                    let prompt = format!(
-                        "<|system|>\nYou are a helpful assistant.<|end|>\n<|user|>\n{}<|end|>\n<|assistant|>\n",
-                        input_accumulator.read().await
+                // Log ASR output
+                if !chunk.text.is_empty() {
+                    println!(
+                        "[{:010}ms] ASR SA{:04}: \"{}\"{}",
+                        now.as_millis(),
+                        chunk.payload,
+                        chunk.text,
+                        if chunk.is_flush { " (flush)" } else { "" },
                     );
-                    if let Err(error) = llm_handle.send(&prompt) {
+                }
+
+                // Accumulate text
+                if chunk.text.chars().any(|c| c.is_alphanumeric()) {
+                    accumulator.push_str(&chunk.text);
+                }
+
+                // On flush: send accumulated text to LLM
+                if chunk.is_flush {
+                    let text = accumulator.trim().to_string();
+                    accumulator.clear();
+
+                    if text.is_empty() {
+                        println!(
+                            "[{:010}ms] ASR flush: empty utterance, skipping LLM",
+                            now.as_millis(),
+                        );
+                        continue;
+                    }
+
+                    println!(
+                        "[{:010}ms] ASR flush UT{:04}: \"{}\" -> LLM",
+                        now.as_millis(),
+                        utterance_id,
+                        text,
+                    );
+
+                    let prompt = format!(
+                        "<|system|>\nYou are a helpful assistant. Keep responses concise.<|end|>\n<|user|>\n{}<|end|>\n<|assistant|>\n",
+                        text,
+                    );
+                    if let Err(error) = llm_handle.send(LlmInput {
+                        payload: utterance_id,
+                        prompt,
+                    }) {
                         log_error!("LLM send failed: {}", error);
                     }
                 }
@@ -216,21 +308,21 @@ async fn main() -> Result<(), InferError> {
     });
 
     // task: LLM pump
+    // Splits LLM token stream into sentences and sends each to TTS immediately.
     log_info!("Spawning LLM pump...");
     tokio::spawn({
         let tts_handle = Arc::clone(&tts_handle);
-        let gate = Arc::clone(&gate);
-        let output_sentences = Arc::clone(&output_sentences);
-        let current_id = Arc::clone(&current_id);
         let epoch = epoch.clone();
         async move {
             let mut sentence = String::new();
             let mut current_epoch = 0u64;
+            let mut llm_id = 0u64;
             while let Some(stamped) = llm_listener.recv().await {
+                let now = global_start.elapsed();
+
                 // epoch changed — clear stale sentence buffer
                 if stamped.epoch != current_epoch {
                     sentence.clear();
-                    output_sentences.write().await.clear();
                     current_epoch = stamped.epoch;
                 }
 
@@ -240,62 +332,48 @@ async fn main() -> Result<(), InferError> {
                 }
 
                 match stamped.inner {
-                    LlmOutput::Token(token) => {
+                    LlmOutput::Token { payload, token } => {
                         sentence.push_str(&token);
                         if ends_with_sentence_boundary(&sentence) {
-                            println!("LLM: \"{}\"", sentence.trim());
-                            // push to output sentences
-                            {
-                                let mut write = output_sentences.write().await;
-                                write.push(sentence.trim().to_string());
-
-                                // if gate open, flush output sentences to TTS
-                                if gate.load(Ordering::Relaxed) {
-                                    println!(
-                                        "LLM:    gate open, flushing output sentences to TTS:"
-                                    );
-                                    for sentence in write.drain(..) {
-                                        let id = current_id.load(Ordering::Relaxed);
-                                        println!("LLM:        {}: \"{}\"", id, sentence);
-                                        if let Err(error) = tts_handle.send(TtsInput {
-                                            payload: id,
-                                            text: sentence,
-                                        }) {
-                                            log_error!("TTS send failed: {}", error);
-                                        }
-                                        current_id.fetch_add(1, Ordering::Relaxed);
-                                    }
+                            let trimmed = sentence.trim().to_string();
+                            if !trimmed.is_empty() {
+                                println!(
+                                    "[{:010}ms] LLM UT{:04}: \"{}\" -> TTS LL{:04}",
+                                    now.as_millis(),
+                                    payload,
+                                    trimmed,
+                                    llm_id,
+                                );
+                                if let Err(error) = tts_handle.send(TtsInput {
+                                    payload: llm_id,
+                                    text: trimmed,
+                                }) {
+                                    log_error!("TTS send failed: {}", error);
                                 }
+                                llm_id += 1;
                             }
                             sentence.clear();
                         }
                     }
-                    LlmOutput::Eos => {
-                        println!("LLM: EOS");
-
-                        // push whatever is left to output sentences
-                        {
-                            let trimmed = sentence.trim().to_string();
-                            if !trimmed.is_empty() {
-                                let mut write = output_sentences.write().await;
-                                write.push(trimmed);
-
-                                // if gate open, flush output sentences to TTS
-                                if gate.load(Ordering::Relaxed) {
-                                    println!("LLM: gate open: flushing output sentences to TTS:");
-                                    for sentence in write.drain(..) {
-                                        let id = current_id.load(Ordering::Relaxed);
-                                        println!("    {}: \"{}\"", id, sentence);
-                                        if let Err(error) = tts_handle.send(TtsInput {
-                                            payload: id,
-                                            text: sentence,
-                                        }) {
-                                            log_error!("TTS send failed: {}", error);
-                                        }
-                                        current_id.fetch_add(1, Ordering::Relaxed);
-                                    }
-                                }
+                    LlmOutput::Eos { payload } => {
+                        let trimmed = sentence.trim().to_string();
+                        if !trimmed.is_empty() {
+                            println!(
+                                "[{:010}ms] LLM UT{:04}: \"{}\" -> TTS LL{:04} (EOS)",
+                                now.as_millis(),
+                                payload,
+                                trimmed,
+                                llm_id,
+                            );
+                            if let Err(error) = tts_handle.send(TtsInput {
+                                payload: llm_id,
+                                text: trimmed,
+                            }) {
+                                log_error!("TTS send failed: {}", error);
                             }
+                            llm_id += 1;
+                        } else {
+                            println!("[{:010}ms] LLM: EOS", now.as_millis());
                         }
                         sentence.clear();
                     }
@@ -304,7 +382,7 @@ async fn main() -> Result<(), InferError> {
         }
     });
 
-    log_info!("Chat loop: (empty line to exit)");
+    log_info!("Chat ready. Ctrl+D to exit.");
     loop {
         print!("> ");
         std::io::stdout()
@@ -319,99 +397,6 @@ async fn main() -> Result<(), InferError> {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-
-    /*
-    // chat loop
-    loop {
-        // print prompt
-        print!("> ");
-        io::stdout()
-            .flush()
-            .map_err(|e| InferError::Runtime(e.to_string()))?;
-
-        // read user input
-        let mut user_input = String::new();
-        io::stdin()
-            .read_line(&mut user_input)
-            .map_err(|e| InferError::Runtime(e.to_string()))?;
-        let user_input = user_input.trim();
-
-        // exit on empty input
-        if user_input.is_empty() {
-            break;
-        }
-
-        // truncate history if needed (before building prompt to limit context size)
-        if history.len() >= MAX_HISTORY_TURNS {
-            log_info!("truncating history");
-            history.drain(0..(history.len() - MAX_HISTORY_TURNS + 1));
-        }
-
-        // build prompt
-        let mut prompt = String::new();
-        prompt.push_str("<|system|>\nYou are in a really bad mood.<|end|>\n");
-        for (source, message) in &history {
-            prompt.push_str(&format!("<|{}|>\n{}<|end|>\n", source, message));
-        }
-        history.push(("user".to_string(), user_input.to_string()));
-        prompt.push_str(&format!("<|user|>\n{}<|end|>\n", user_input));
-        prompt.push_str("<|assistant|>\n");
-
-        // generate LLM response
-        if let Err(e) = llm.send(&prompt).await {
-            log_error!("LLM forward failed: {}", e);
-            continue;
-        }
-
-        // receive LLM response
-        let mut response = String::new();
-        let mut sentence_buf = String::new();
-        loop {
-            match llm.recv().await {
-                Some(LlmToken::Text(token)) => {
-                    print!("{}", token);
-                    io::stdout().flush().ok();
-                    response.push_str(&token);
-                    sentence_buf.push_str(&token);
-
-                    // check if the buffer ends with sentence-ending punctuation
-                    if ends_with_sentence_boundary(&sentence_buf) {
-                        let sentence = sentence_buf.trim().to_string();
-                        sentence_buf.clear();
-                        if !sentence.is_empty() {
-                            if let Err(e) = tts_input_tx.send(TtsInput { text: sentence }).await {
-                                log_error!("TTS send failed: {}", e);
-                            }
-                        }
-                    }
-                }
-                Some(LlmToken::Eos) => {
-                    break;
-                }
-                None => {
-                    log_error!("LLM stream ended");
-                    break;
-                }
-            }
-        }
-        println!();
-
-        if response.is_empty() {
-            continue;
-        }
-
-        // flush any remaining text
-        let remaining = sentence_buf.trim().to_string();
-        if !remaining.is_empty() {
-            if let Err(e) = tts_input_tx.send(TtsInput { text: remaining }).await {
-                log_error!("TTS send failed: {}", e);
-            }
-        }
-
-        // add to history
-        history.push(("assistant".to_string(), response.clone()));
-    }
-    */
 
     Ok(())
 }
