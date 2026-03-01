@@ -1,18 +1,24 @@
-use crate::{Inference, llm::Gemma3};
+use crate::{Inference, llm::{Gemma3Handle, LlmInput, LlmOutput}, base::Epoch};
 
 #[test]
-fn test_gemma3_is_send() {
+fn test_gemma3_handle_is_send() {
     fn assert_send<T: Send>() {}
-    assert_send::<Gemma3>();
+    assert_send::<Gemma3Handle<u64>>();
 }
 
 #[test]
 #[ignore] // Requires ONNX model
 fn test_gemma3_model_io_verification() {
     // Verify the ONNX model has the expected input/output structure
-    let inference = Inference::cpu().unwrap();
-    let session = inference
-        .onnx_session("../../data/gemma3/model_int8.onnx")
+    let inference = Inference::new().unwrap();
+    let onnx = std::sync::Arc::new(onnx::Onnx::new(24).unwrap());
+    let session = onnx
+        .create_session(
+            &onnx::Executor::Cpu,
+            &onnx::OptimizationLevel::EnableAll,
+            4,
+            "data/gemma3/model_int8.onnx",
+        )
         .unwrap();
 
     // Gemma 3 1B int8: 2 base inputs + 52 KV cache (26 layers * 2) = 54 total
@@ -70,23 +76,36 @@ fn test_gemma3_model_io_verification() {
 #[tokio::test]
 #[ignore] // Requires ONNX model
 async fn test_gemma3_integration() {
-    // Integration test for forward/recv generation
-    let inference = Inference::cpu().unwrap();
-    let mut model = inference.use_gemma3().unwrap().with_max_tokens(20);
+    // Integration test for handle/listener generation
+    let inference = Inference::new().unwrap();
+    let epoch = Epoch::new();
+    let (handle, mut listener) = inference.use_gemma3::<u64>(&onnx::Executor::Cpu, epoch).unwrap();
 
-    // Start generation
-    model.forward("Hello").unwrap();
+    // Send prompt
+    handle.send(LlmInput {
+        payload: 0,
+        prompt: "Hello".to_string(),
+    }).unwrap();
 
     // Collect generated tokens
     let mut tokens = Vec::new();
+    let mut token_count = 0;
     loop {
-        match model.recv().await {
-            Some(Ok(token)) => {
-                eprint!("{}", token); // Print for visibility
-                tokens.push(token);
-            }
-            Some(Err(e)) => {
-                panic!("Generation error: {}", e);
+        match listener.recv().await {
+            Some(stamped) => {
+                match stamped.inner {
+                    LlmOutput::Token { token, .. } => {
+                        eprint!("{}", token); // Print for visibility
+                        tokens.push(token);
+                        token_count += 1;
+                        if token_count >= 20 {
+                            break;
+                        }
+                    }
+                    LlmOutput::Eos { .. } => {
+                        break;
+                    }
+                }
             }
             None => break,
         }
@@ -107,11 +126,5 @@ async fn test_gemma3_integration() {
         output.len() >= 5,
         "Generated output is too short: {} chars, expected >= 5",
         output.len()
-    );
-
-    // Verify recv() returns None after generation completes
-    assert!(
-        model.recv().await.is_none(),
-        "recv() should return None after generation completes"
     );
 }

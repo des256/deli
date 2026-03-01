@@ -1,10 +1,9 @@
-use crate::diar::parakeet::{DiarizationConfig, Sortformer};
 use crate::Inference;
 
 #[test]
 #[ignore] // Requires ONNX model file
 fn test_sortformer_new_initializes_zero_state() {
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -15,12 +14,7 @@ fn test_sortformer_new_initializes_zero_state() {
         return;
     }
 
-    let session = inference
-        .onnx_session(&model_path)
-        .expect("Failed to load model");
-    let config = DiarizationConfig::callhome();
-
-    let sortformer = Sortformer::new(session, config).expect("Failed to create Sortformer");
+    let sortformer = inference.use_parakeet_diar(&onnx::Executor::Cpu).expect("Failed to create Sortformer");
 
     // Verify it was created successfully
     // (Internal state is private, so we can only verify construction succeeds)
@@ -32,7 +26,7 @@ fn test_sortformer_new_initializes_zero_state() {
 fn test_first_streaming_update_with_empty_cache() {
     // This test verifies that the first streaming_update call succeeds with zero-length
     // spkcache/fifo (empty tensors [1, 0, DIM]).
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -43,12 +37,7 @@ fn test_first_streaming_update_with_empty_cache() {
         return;
     }
 
-    let session = inference
-        .onnx_session(&model_path)
-        .expect("Failed to load model");
-    let config = DiarizationConfig::callhome();
-
-    let mut sortformer = Sortformer::new(session, config).expect("Failed to create Sortformer");
+    let mut sortformer = inference.use_parakeet_diar(&onnx::Executor::Cpu).expect("Failed to create Sortformer");
 
     // Generate synthetic features: 124 frames x 128 dims (CHUNK_LEN = 124)
     let chunk_feat_frames = 124;
@@ -73,7 +62,7 @@ fn test_first_streaming_update_with_empty_cache() {
 #[test]
 #[ignore] // Requires ONNX model file
 fn test_reset_zeros_state() {
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -84,12 +73,7 @@ fn test_reset_zeros_state() {
         return;
     }
 
-    let session = inference
-        .onnx_session(&model_path)
-        .expect("Failed to load model");
-    let config = DiarizationConfig::callhome();
-
-    let mut sortformer = Sortformer::new(session, config).expect("Failed to create Sortformer");
+    let mut sortformer = inference.use_parakeet_diar(&onnx::Executor::Cpu).expect("Failed to create Sortformer");
 
     // Process a chunk to build up state
     let chunk_feat_frames = 124;
@@ -97,7 +81,7 @@ fn test_reset_zeros_state() {
     let _ = sortformer.streaming_update(&chunk_feat, chunk_feat_frames, chunk_feat_frames);
 
     // Reset
-    sortformer.reset().expect("Reset should succeed");
+    sortformer.reset();
 
     // Process another chunk - should behave like first chunk again
     let result2 = sortformer.streaming_update(&chunk_feat, chunk_feat_frames, chunk_feat_frames);
@@ -108,7 +92,7 @@ fn test_reset_zeros_state() {
 #[ignore] // Requires ONNX model file
 fn test_streaming_update_state_persistence() {
     // Verify that FIFO and cache grow over multiple calls
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -119,12 +103,7 @@ fn test_streaming_update_state_persistence() {
         return;
     }
 
-    let session = inference
-        .onnx_session(&model_path)
-        .expect("Failed to load model");
-    let config = DiarizationConfig::callhome();
-
-    let mut sortformer = Sortformer::new(session, config).expect("Failed to create Sortformer");
+    let mut sortformer = inference.use_parakeet_diar(&onnx::Executor::Cpu).expect("Failed to create Sortformer");
 
     let chunk_feat_frames = 124;
     let chunk_feat: Vec<f32> = vec![0.0; chunk_feat_frames * 128];
@@ -150,7 +129,7 @@ fn test_streaming_update_state_persistence() {
 fn test_cache_compression_triggers() {
     // Process many chunks to fill the cache and trigger compression
     // Verify cache doesn't grow unbounded
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -161,12 +140,7 @@ fn test_cache_compression_triggers() {
         return;
     }
 
-    let session = inference
-        .onnx_session(&model_path)
-        .expect("Failed to load model");
-    let config = DiarizationConfig::callhome();
-
-    let mut sortformer = Sortformer::new(session, config).expect("Failed to create Sortformer");
+    let mut sortformer = inference.use_parakeet_diar(&onnx::Executor::Cpu).expect("Failed to create Sortformer");
 
     let chunk_feat_frames = 124;
     let chunk_feat: Vec<f32> = vec![0.1; chunk_feat_frames * 128];

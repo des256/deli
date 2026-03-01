@@ -138,11 +138,11 @@ pub async fn create_audioin(config: Option<AudioInConfig>) -> AudioInListener {
                                 }
 
                                 // print RMS of chunk
-                                let rms = {
-                                    let sum_sq: f64 = sample.iter().map(|&s| (s as f64) * (s as f64)).sum();
-                                    (sum_sq / sample.len() as f64).sqrt()
-                                };
-                                println!("AudioIn: RMS {:.1}", rms);
+                                //let rms = {
+                                //    let sum_sq: f64 = sample.iter().map(|&s| (s as f64) * (s as f64)).sum();
+                                //    (sum_sq / sample.len() as f64).sqrt()
+                                //};
+                                //println!("AudioIn: RMS {:.1}", rms);
 
                                 // send the sample
                                 match input_tx.blocking_send(sample) {

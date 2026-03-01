@@ -4,10 +4,10 @@ use crate::Inference;
 #[ignore] // Requires ONNX model file
 fn test_inference_use_parakeet_diar() {
     // Test that Inference::use_parakeet_diar creates a Sortformer instance
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
 
     let sortformer = inference
-        .use_parakeet_diar()
+        .use_parakeet_diar(&onnx::Executor::Cpu)
         .expect("Failed to create Sortformer via Inference API");
 
     // Verify it was created successfully
@@ -18,7 +18,7 @@ fn test_inference_use_parakeet_diar() {
 #[ignore] // Requires ONNX model file
 fn test_diarize_silence_returns_empty_segments() {
     // Test that silence audio (all zeros) produces no speaker segments
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -30,7 +30,7 @@ fn test_diarize_silence_returns_empty_segments() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar()
+        .use_parakeet_diar(&onnx::Executor::Cpu)
         .expect("Failed to create Sortformer");
 
     // 1 second of silence at 16kHz
@@ -53,7 +53,7 @@ fn test_diarize_silence_returns_empty_segments() {
 #[ignore] // Requires ONNX model file
 fn test_diarize_test_audio_produces_valid_segments() {
     // Test that non-silence audio produces valid speaker segments
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -65,7 +65,7 @@ fn test_diarize_test_audio_produces_valid_segments() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar()
+        .use_parakeet_diar(&onnx::Executor::Cpu)
         .expect("Failed to create Sortformer");
 
     // Generate synthetic audio: 440Hz sine wave (simulates speech)
@@ -109,7 +109,7 @@ fn test_diarize_test_audio_produces_valid_segments() {
 #[ignore] // Requires ONNX model file
 fn test_multi_chunk_streaming_state_persistence() {
     // Call diarize_chunk multiple times and verify state persists
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -121,7 +121,7 @@ fn test_multi_chunk_streaming_state_persistence() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar()
+        .use_parakeet_diar(&onnx::Executor::Cpu)
         .expect("Failed to create Sortformer");
 
     // Generate 3 seconds of audio
@@ -158,7 +158,7 @@ fn test_multi_chunk_streaming_state_persistence() {
 #[ignore] // Requires ONNX model file
 fn test_short_audio_no_panic() {
     // Test that short audio (0.5s) succeeds without panic (partial chunk handling)
-    let inference = Inference::cpu().expect("Failed to create inference");
+    let inference = Inference::new().expect("Failed to create inference");
     let model_path = format!(
         "{}/../../data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx",
         env!("CARGO_MANIFEST_DIR")
@@ -170,7 +170,7 @@ fn test_short_audio_no_panic() {
     }
 
     let mut sortformer = inference
-        .use_parakeet_diar()
+        .use_parakeet_diar(&onnx::Executor::Cpu)
         .expect("Failed to create Sortformer");
 
     // 0.5 seconds = 8000 samples at 16kHz

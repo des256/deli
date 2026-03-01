@@ -62,6 +62,34 @@ impl Inference {
         crate::llm::phi3::create(&self.onnx, executor, epoch)
     }
 
+    pub fn use_llama32<T: Clone + Send + 'static>(
+        &self,
+        executor: &onnx::Executor,
+        epoch: Epoch,
+    ) -> Result<
+        (
+            crate::llm::llama32::Llama32Handle<T>,
+            crate::llm::llama32::Llama32Listener<T>,
+        ),
+        InferError,
+    > {
+        crate::llm::llama32::create(&self.onnx, executor, epoch)
+    }
+
+    pub fn use_gemma3<T: Clone + Send + 'static>(
+        &self,
+        executor: &onnx::Executor,
+        epoch: Epoch,
+    ) -> Result<
+        (
+            crate::llm::gemma3::Gemma3Handle<T>,
+            crate::llm::gemma3::Gemma3Listener<T>,
+        ),
+        InferError,
+    > {
+        crate::llm::gemma3::create(&self.onnx, executor, epoch)
+    }
+
     pub fn use_silero(
         &self,
         executor: &onnx::Executor,
@@ -70,46 +98,25 @@ impl Inference {
         crate::vad::Silero::new(&self.onnx, &executor, sample_rate)
     }
 
-    /*
-    pub fn use_smollm3(
-        &self,
-        executor: &onnx::Executor,
-    ) -> Result<crate::llm::Smollm3, InferError> {
-        crate::llm::Smollm3::new(&self.onnx, executor)
-    }
-
-    pub fn use_llama32(
-        &self,
-        executor: &onnx::Executor,
-    ) -> Result<crate::llm::Llama32, InferError> {
-        crate::llm::Llama32::new(&self.onnx, executor)
-    }
-
-    pub fn use_gemma3(&self, executor: &onnx::Executor) -> Result<crate::llm::Gemma3, InferError> {
-        crate::llm::Gemma3::new(&self.onnx, executor)
-    }
-
-    pub fn use_kokoro(
-        &self,
-        executor: &onnx::Executor,
-        voice_path: impl AsRef<Path>,
-    ) -> Result<crate::tts::Kokoro, InferError> {
-        crate::tts::Kokoro::new(&self.onnx, &executor, voice_path)
-    }
-
-    pub fn use_sherpa(
-        &self,
-        executor: &onnx::Executor,
-    ) -> Result<crate::asr::sherpa::Sherpa, InferError> {
-        crate::asr::sherpa::Sherpa::new(&self.onnx, &executor)
-    }
-
-    */
-
     pub fn use_parakeet_diar(
         &self,
         executor: &onnx::Executor,
     ) -> Result<crate::diar::parakeet::Sortformer, InferError> {
         crate::diar::parakeet::Sortformer::new(&self.onnx, executor)
+    }
+
+    pub fn onnx_session(&self, model_path: impl AsRef<Path>) -> Result<onnx::Session, InferError> {
+        self.onnx
+            .create_session(
+                &onnx::Executor::Cpu,
+                &onnx::OptimizationLevel::EnableAll,
+                4,
+                model_path.as_ref(),
+            )
+            .map_err(|e| InferError::Onnx(e.to_string()))
+    }
+
+    pub fn device(&self) -> &onnx::Executor {
+        &onnx::Executor::Cpu
     }
 }

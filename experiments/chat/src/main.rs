@@ -4,12 +4,15 @@ use {
     inference::*,
     std::{
         io::Write,
-        sync::Arc,
+        sync::{
+            atomic::{AtomicU64, Ordering},
+            Arc,
+        },
         time::{Duration, Instant},
     },
 };
 
-const VOICE_PATH: &str = "data/pocket/voices/desmond.bin";
+const VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
 const VAD_FRAME_SIZE: usize = 512;
 const ASR_SAMPLE_RATE: usize = 16000;
 const TTS_SAMPLE_RATE: usize = 24000;
@@ -75,7 +78,9 @@ async fn main() -> Result<(), InferError> {
     // load LLM
     log_info!("Loading LLM...");
     let (llm_handle, mut llm_listener) =
-        inference.use_phi3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        //inference.use_phi3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        inference.use_gemma3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
+    //inference.use_llama32::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
     let llm_handle = Arc::new(llm_handle);
 
     // load TTS
@@ -87,6 +92,9 @@ async fn main() -> Result<(), InferError> {
     // global clock
     let global_start = Instant::now();
 
+    // shared timestamp: when VAD last signaled speech end (ms from global_start, 0 = unset)
+    let speech_end_ms = Arc::new(AtomicU64::new(0));
+
     // task: AudioIn + VAD pump
     // Sends all audio to ASR for streaming processing.
     // VAD state machine controls epoch advancement (on speech start) and ASR flush (on speech end).
@@ -94,6 +102,7 @@ async fn main() -> Result<(), InferError> {
     tokio::spawn({
         let asr_handle = Arc::clone(&asr_handle);
         let epoch = epoch.clone();
+        let speech_end_ms = Arc::clone(&speech_end_ms);
         async move {
             let mut source_audio_id = 0u64;
             let mut phase = VadPhase::Idle;
@@ -147,6 +156,8 @@ async fn main() -> Result<(), InferError> {
                                         now.as_millis(),
                                         source_audio_id,
                                     );
+                                    speech_end_ms
+                                        .store(now.as_millis() as u64, Ordering::Release);
                                     if let Err(error) = asr_handle.flush(source_audio_id) {
                                         log_error!("ASR flush failed: {}", error);
                                     }
@@ -177,18 +188,18 @@ async fn main() -> Result<(), InferError> {
                     continue;
                 }
 
-                let now = global_start.elapsed();
+                let _now = global_start.elapsed();
                 let output = stamped.inner;
                 let chunk = AudioOutChunk {
                     payload: output.payload,
                     data: output.data,
                 };
-                println!(
-                    "[{:010}ms] TTS LL{:04}({:04}): -> AudioOut",
-                    now.as_millis(),
-                    chunk.payload.payload,
-                    chunk.payload.id,
-                );
+                //println!(
+                //    "[{:010}ms] TTS LL{:04}({:04}): -> AudioOut",
+                //    now.as_millis(),
+                //    chunk.payload.payload,
+                //    chunk.payload.id,
+                //);
                 if let Err(error) = audioout_handle.send(chunk) {
                     log_error!("AudioOut send failed: {}", error);
                 }
@@ -199,15 +210,28 @@ async fn main() -> Result<(), InferError> {
     // task: AudioOut status pump
     log_info!("Spawning AudioOut pump...");
     tokio::spawn({
+        let speech_end_ms = Arc::clone(&speech_end_ms);
+        let global_start = global_start;
         async move {
             let mut current_index = 0usize;
             let mut current_sentence_id = 0u64;
+            let mut thinking_reported_for_ms = 0u64;
             while let Some(status) = audioout_listener.recv().await {
                 match status {
                     AudioOutStatus::Started(payload) => {
                         if current_sentence_id != payload.payload {
                             current_sentence_id = payload.payload;
                             current_index = 0;
+                        }
+                        // Report thinking time on the first audio chunk after each speech end
+                        let end_ms = speech_end_ms.load(Ordering::Acquire);
+                        if end_ms > 0 && end_ms != thinking_reported_for_ms {
+                            let now_ms = global_start.elapsed().as_millis() as u64;
+                            println!(
+                                ">> thinking time: {}ms",
+                                now_ms.saturating_sub(end_ms),
+                            );
+                            thinking_reported_for_ms = end_ms;
                         }
                     }
                     AudioOutStatus::Finished { payload, index } => {
@@ -292,10 +316,21 @@ async fn main() -> Result<(), InferError> {
                         text,
                     );
 
+                    // Llama 3.2 chat template
+                    //let prompt = format!(
+                    //    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant. Keep responses concise.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+                    //    text,
+                    //);
+                    // Gemma 3 chat template
                     let prompt = format!(
-                        "<|system|>\nYou are a helpful assistant. Keep responses concise.<|end|>\n<|user|>\n{}<|end|>\n<|assistant|>\n",
+                        "<start_of_turn>user\n{}<end_of_turn>\n<start_of_turn>model\n",
                         text,
                     );
+                    // Phi-3 chat template
+                    // let prompt = format!(
+                    //     "<|system|>\nYou are a helpful assistant. Keep responses concise.<|end|>\n<|user|>\n{}<|end|>\n<|assistant|>\n",
+                    //     text,
+                    // );
                     if let Err(error) = llm_handle.send(LlmInput {
                         payload: utterance_id,
                         prompt,
