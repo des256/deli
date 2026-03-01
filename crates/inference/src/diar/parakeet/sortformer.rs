@@ -4,7 +4,7 @@ use {
     std::sync::Arc,
 };
 
-const PARAKEET_DIAR_MODEL_PATH: &str = "data/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx";
+const PARAKEET_DIAR_MODEL_PATH: &str = "data/asr/parakeet/diar_streaming_sortformer_4spk-v2.1.onnx";
 
 // Constants from reference implementation
 const CHUNK_LEN: usize = 124;

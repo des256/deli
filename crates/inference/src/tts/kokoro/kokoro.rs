@@ -20,8 +20,8 @@ use {
     },
 };
 
-const KOKORO_MODEL_PATH: &str = "data/kokoro/kokoro-v1.0.onnx";
-const KOKORO_VOICE_PATH: &str = "data/kokoro/bf_nicole.npy";
+const KOKORO_MODEL_PATH: &str = "data/tts/kokoro/kokoro-v1.0.onnx";
+const KOKORO_VOICE_PATH: &str = "data/tts/kokoro/bf_nicole.npy";
 const KOKORO_ESPEAK_DATA_PATH: &str = "/usr/lib/x86_64-linux-gnu/espeak-ng-data";
 
 const SAMPLE_RATE: usize = 24000;

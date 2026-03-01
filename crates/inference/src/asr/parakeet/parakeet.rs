@@ -6,11 +6,11 @@ use {
     tokio::sync::mpsc as tokio_mpsc,
 };
 
-const PARAKEET_ENCODER_PATH: &str = "data/parakeet/encoder.onnx";
-const PARAKEET_DECODER_PATH: &str = "data/parakeet/decoder_joint.onnx";
-const PARAKEET_TOKENIZER_PATH: &str = "data/parakeet/tokenizer.model";
-const MEL_FILTERBANK_PATH: &str = "data/parakeet/mel_filterbank.bin";
-const HANN_WINDOW_PATH: &str = "data/parakeet/hann_window.bin";
+const PARAKEET_ENCODER_PATH: &str = "data/asr/parakeet/encoder.onnx";
+const PARAKEET_DECODER_PATH: &str = "data/asr/parakeet/decoder_joint.onnx";
+const PARAKEET_TOKENIZER_PATH: &str = "data/asr/parakeet/tokenizer.model";
+const MEL_FILTERBANK_PATH: &str = "data/asr/parakeet/mel_filterbank.bin";
+const HANN_WINDOW_PATH: &str = "data/asr/parakeet/hann_window.bin";
 
 const NUM_MEL_BINS: usize = 128; // 128 mel filterbank bins
 const FFT_SIZE: usize = 512; // size of FFT
@@ -577,29 +577,54 @@ pub fn create<T: Clone + Send + 'static>(
                     feat_buf_frames = 0;
                     cache_last_channel = match zeros_f32(
                         &onnx,
-                        &[1, NUM_LAYERS as i64, CACHE_CHANNEL_CONTEXT as i64, ENCODER_DIM as i64],
+                        &[
+                            1,
+                            NUM_LAYERS as i64,
+                            CACHE_CHANNEL_CONTEXT as i64,
+                            ENCODER_DIM as i64,
+                        ],
                     ) {
                         Ok(v) => v,
-                        Err(e) => { log_error!("error resetting cache_last_channel: {e}"); return; }
+                        Err(e) => {
+                            log_error!("error resetting cache_last_channel: {e}");
+                            return;
+                        }
                     };
                     cache_last_time = match zeros_f32(
                         &onnx,
-                        &[1, NUM_LAYERS as i64, ENCODER_DIM as i64, CACHE_TIME_CONTEXT as i64],
+                        &[
+                            1,
+                            NUM_LAYERS as i64,
+                            ENCODER_DIM as i64,
+                            CACHE_TIME_CONTEXT as i64,
+                        ],
                     ) {
                         Ok(v) => v,
-                        Err(e) => { log_error!("error resetting cache_last_time: {e}"); return; }
+                        Err(e) => {
+                            log_error!("error resetting cache_last_time: {e}");
+                            return;
+                        }
                     };
                     cache_last_channel_len = match onnx::Value::from_slice(&onnx, &[1], &[0i64]) {
                         Ok(v) => v,
-                        Err(e) => { log_error!("error resetting cache_last_channel_len: {e}"); return; }
+                        Err(e) => {
+                            log_error!("error resetting cache_last_channel_len: {e}");
+                            return;
+                        }
                     };
                     cache_state1 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
                         Ok(v) => v,
-                        Err(e) => { log_error!("error resetting state1: {e}"); return; }
+                        Err(e) => {
+                            log_error!("error resetting state1: {e}");
+                            return;
+                        }
                     };
                     cache_state2 = match zeros_f32(&onnx, &[2, 1, DECODER_STATE_DIM as i64]) {
                         Ok(v) => v,
-                        Err(e) => { log_error!("error resetting state2: {e}"); return; }
+                        Err(e) => {
+                            log_error!("error resetting state2: {e}");
+                            return;
+                        }
                     };
                     cache_last_token = BLANK_ID;
                 }

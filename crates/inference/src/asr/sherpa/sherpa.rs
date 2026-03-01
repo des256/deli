@@ -16,10 +16,10 @@ use std::{
 
 use super::asrcore::AsrCore;
 
-const SHERPA_ENCODER_PATH: &str = "data/sherpa/encoder-epoch-99-avg-1-chunk-16-left-128";
-const SHERPA_DECODER_PATH: &str = "data/sherpa/decoder-epoch-99-avg-1-chunk-16-left-128.onnx";
-const SHERPA_JOINER_PATH: &str = "data/sherpa/joiner-epoch-99-avg-1-chunk-16-left-128.onnx";
-const SHERPA_TOKENS_PATH: &str = "data/sherpa/tokens.txt";
+const SHERPA_ENCODER_PATH: &str = "data/asr/sherpa/encoder-epoch-99-avg-1-chunk-16-left-128";
+const SHERPA_DECODER_PATH: &str = "data/asr/sherpa/decoder-epoch-99-avg-1-chunk-16-left-128.onnx";
+const SHERPA_JOINER_PATH: &str = "data/asr/sherpa/joiner-epoch-99-avg-1-chunk-16-left-128.onnx";
+const SHERPA_TOKENS_PATH: &str = "data/asr/sherpa/tokens.txt";
 
 const REQUIRED_SAMPLE_RATE: usize = 16000;
 const HOP_SIZE: usize = 160; // 10ms hop at 16kHz

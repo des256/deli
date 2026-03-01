@@ -27,7 +27,7 @@ fn test_pocket_tts_integration() -> Result<()> {
     let inference = Inference::cpu()?;
 
     // Create PocketTts via factory method
-    let mut tts = inference.use_pocket_tts(Path::new("data/pocket/voices/hannah.bin"))?;
+    let mut tts = inference.use_pocket_tts(Path::new("data/tts/pocket/voices/hannah.bin"))?;
 
     // Generate audio (streaming)
     use futures_util::SinkExt;
@@ -108,7 +108,7 @@ fn test_pocket_tts_multiple_utterances() -> Result<()> {
     let inference = Inference::cpu()?;
 
     // Create PocketTts via factory method
-    let mut tts = inference.use_pocket_tts(Path::new("data/pocket/voices/hannah.bin"))?;
+    let mut tts = inference.use_pocket_tts(Path::new("data/tts/pocket/voices/hannah.bin"))?;
 
     // Generate multiple utterances (streaming)
     use futures_util::SinkExt;

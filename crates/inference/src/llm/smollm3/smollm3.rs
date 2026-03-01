@@ -7,8 +7,8 @@ use {
 
 use crate::llm::generate::{self, GenerateParams};
 
-const SMOLLM3_MODEL_PATH: &str = "data/smollm3/model_int8.onnx";
-const SMOLLM3_TOKENIZER_PATH: &str = "data/smollm3/tokenizer.json";
+const SMOLLM3_MODEL_PATH: &str = "data/llm/smollm3/model_q4f16.onnx";
+const SMOLLM3_TOKENIZER_PATH: &str = "data/llm/smollm3/tokenizer.json";
 
 const EOS_TOKEN_ID: u32 = 128012;
 

@@ -8,6 +8,6 @@ pub enum LlmOutput<T: Clone + Send + 'static> {
     Eos { payload: T },
 }
 
-pub mod phi3;
-pub mod llama32;
 pub mod gemma3;
+pub mod llama3;
+pub mod phi3;

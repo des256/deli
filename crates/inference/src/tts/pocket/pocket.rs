@@ -11,11 +11,11 @@ use {
     tokio::sync::mpsc as tokio_mpsc,
 };
 
-const CONDITIONER_PATH: &str = "data/pocket/text_conditioner.onnx";
-const FLOW_MAIN_PATH: &str = "data/pocket/flow_lm_main_int8.onnx";
-const FLOW_STEP_PATH: &str = "data/pocket/flow_lm_flow_int8.onnx";
-const DECODER_PATH: &str = "data/pocket/mimi_decoder_int8.onnx";
-const TOKENIZER_PATH: &str = "data/pocket/tokenizer.json";
+const CONDITIONER_PATH: &str = "data/tts/pocket/text_conditioner.onnx";
+const FLOW_MAIN_PATH: &str = "data/tts/pocket/flow_lm_main_int8.onnx";
+const FLOW_STEP_PATH: &str = "data/tts/pocket/flow_lm_flow_int8.onnx";
+const DECODER_PATH: &str = "data/tts/pocket/mimi_decoder_int8.onnx";
+const TOKENIZER_PATH: &str = "data/tts/pocket/tokenizer.json";
 
 const MAX_TOKENS: usize = 1000;
 const LATENT_DIM: usize = 32;
@@ -659,7 +659,10 @@ pub fn create<T: Clone + Send + 'static>(
 
 impl<T: Clone + Send + 'static> PocketHandle<T> {
     // send text to TTS (stamped with current epoch)
-    pub fn send(&self, input: TtsInput<T>) -> Result<(), std_mpsc::SendError<Stamped<TtsInput<T>>>> {
+    pub fn send(
+        &self,
+        input: TtsInput<T>,
+    ) -> Result<(), std_mpsc::SendError<Stamped<TtsInput<T>>>> {
         self.input_tx.send(Stamped {
             epoch: self.epoch.current(),
             inner: input,

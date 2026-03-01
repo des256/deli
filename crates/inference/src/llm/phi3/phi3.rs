@@ -6,8 +6,8 @@ use {
     tokio::sync::mpsc as tokio_mpsc,
 };
 
-const PHI3_MODEL_PATH: &str = "data/phi3/phi3-mini-4k-instruct-cuda-int4-rtn-block-32.onnx";
-const PHI3_TOKENIZER_PATH: &str = "data/phi3/tokenizer.json";
+const PHI3_MODEL_PATH: &str = "data/llm/phi3/model.onnx";
+const PHI3_TOKENIZER_PATH: &str = "data/llm/phi3/tokenizer.json";
 
 const EOS_TOKEN_IDS: &[u32] = &[32000, 32001, 32007];
 const DEFAULT_MAX_TOKENS: usize = 512;

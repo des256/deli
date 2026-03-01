@@ -1,6 +1,6 @@
 use {crate::*, std::sync::Arc};
 
-const SILERO_VAD_MODEL_PATH: &str = "data/silero/silero_vad.onnx";
+const SILERO_VAD_MODEL_PATH: &str = "data/vad/silero/silero_vad.onnx";
 
 const FRAME_SIZE: usize = 512;
 const CONTEXT_SIZE: usize = 64;

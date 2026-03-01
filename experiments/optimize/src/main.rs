@@ -3,7 +3,7 @@ use {base::*, inference::*, std::time::Duration};
 const SENTENCE: &str = "After days in the shade, sunlight now cut through the rough surface, sending shimmering rays dancing across the rocky bed of the river, and illuminating the patches of bright green algae that carpeted the rocks of deeper, slower pools.";
 const SAMPLE_RATE: u32 = 24000;
 
-const POCKET_VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
+const POCKET_VOICE_PATH: &str = "data/tts/pocket/voices/hannah.bin";
 
 #[tokio::main]
 async fn main() -> Result<(), InferError> {

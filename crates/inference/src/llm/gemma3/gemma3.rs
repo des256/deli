@@ -6,12 +6,12 @@ use {
     tokio::sync::mpsc as tokio_mpsc,
 };
 
-const GEMMA3_MODEL_PATH: &str = "data/gemma3/model_int8.onnx";
-const GEMMA3_TOKENIZER_PATH: &str = "data/gemma3/tokenizer.json";
+const GEMMA3_4B_MODEL_PATH: &str = "data/llm/gemma3/4b/gemma-3-text.onnx";
+const GEMMA3_4B_TOKENIZER_PATH: &str = "data/llm/gemma3/4b/tokenizer.json";
+const GEMMA3_4B_NUM_KV_HEADS: usize = 4;
 
 const EOS_TOKEN_IDS: &[u32] = &[1, 106];
 const DEFAULT_MAX_TOKENS: usize = 512;
-const NUM_KV_HEADS: usize = 1;
 const HEAD_DIM: usize = 256;
 
 pub(crate) fn generate<T: Clone + Send + 'static>(
@@ -82,7 +82,18 @@ pub(crate) fn generate<T: Clone + Send + 'static>(
                 return true;
             }
         };
-
+        // cache_position: 1D tensor [seq_len] with same values as position_ids
+        let cache_position_tensor = match onnx::Value::from_slice::<i64>(
+            &session.onnx,
+            &[position_ids.len()],
+            &position_ids,
+        ) {
+            Ok(t) => t,
+            Err(e) => {
+                log_error!("Failed to create cache position tensor: {}", e);
+                return true;
+            }
+        };
         // Build input list by matching discovered names
         let mut inputs = Vec::with_capacity(3 + kv_cache.len());
         for name in input_names {
@@ -92,6 +103,8 @@ pub(crate) fn generate<T: Clone + Send + 'static>(
                 inputs.push((name.as_str(), &attention_mask_tensor));
             } else if name == "position_ids" {
                 inputs.push((name.as_str(), &position_ids_tensor));
+            } else if name == "cache_position" {
+                inputs.push((name.as_str(), &cache_position_tensor));
             } else if let Some(cache_idx) = parse_kv_cache_index(name) {
                 if cache_idx < kv_cache.len() {
                     inputs.push((name.as_str(), &kv_cache[cache_idx]));
@@ -100,10 +113,16 @@ pub(crate) fn generate<T: Clone + Send + 'static>(
         }
 
         if inputs.len() != input_names.len() {
+            let unmatched: Vec<&str> = input_names
+                .iter()
+                .filter(|n| !inputs.iter().any(|(matched, _)| matched == &n.as_str()))
+                .map(|n| n.as_str())
+                .collect();
             log_error!(
-                "Built {} inputs but model expects {}",
+                "Built {} inputs but model expects {}. Unmatched: {:?}",
                 inputs.len(),
-                input_names.len()
+                input_names.len(),
+                unmatched,
             );
             return true;
         }
@@ -269,10 +288,10 @@ pub fn create<T: Clone + Send + 'static>(
             executor,
             &onnx::OptimizationLevel::EnableAll,
             4,
-            GEMMA3_MODEL_PATH,
+            GEMMA3_4B_MODEL_PATH,
         )
         .map_err(|e| InferError::Onnx(e.to_string()))?;
-    let tokenizer = Tokenizer::from_file(GEMMA3_TOKENIZER_PATH)
+    let tokenizer = Tokenizer::from_file(GEMMA3_4B_TOKENIZER_PATH)
         .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
     let tokenizer = Arc::new(tokenizer);
 
@@ -369,7 +388,7 @@ pub fn create<T: Clone + Send + 'static>(
                             &input_names,
                             &output_names,
                             num_layers,
-                            NUM_KV_HEADS,
+                            GEMMA3_4B_NUM_KV_HEADS,
                             HEAD_DIM,
                             &token_ids,
                             kv_dtype,
@@ -385,7 +404,10 @@ pub fn create<T: Clone + Send + 'static>(
         }
     });
 
-    Ok((Gemma3Handle { input_tx, epoch }, Gemma3Listener { output_rx }))
+    Ok((
+        Gemma3Handle { input_tx, epoch },
+        Gemma3Listener { output_rx },
+    ))
 }
 
 impl<T: Clone + Send + 'static> Gemma3Handle<T> {

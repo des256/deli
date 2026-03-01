@@ -1,8 +1,8 @@
 use {
     base::*,
-    image::{argb_to_u32, jpeg_to_u32, rgb_to_u32, srggb10p_to_u32, yu12_to_u32, yuyv_to_u32, PixelFormat},
-    minifb::{Key, Window, WindowOptions},
-    video::{VideoFrame, VideoIn},
+    image::*,
+    minifb::{Window, WindowOptions},
+    video::*,
 };
 
 fn frame_to_u32(frame: &VideoFrame) -> Vec<u32> {
@@ -23,13 +23,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_stdout_logger();
 
     // Initialize camera
-    let mut videoin = VideoIn::open(None).await?;
+    let mut videoin = v4l2::create(None)?;
     let size = videoin.size();
     log_info!("resolution: {}x{}", size.x, size.y);
-    let format = videoin.format();
-    log_info!("format: {:?}", format);
-    let frame_rate = videoin.frame_rate();
-    log_info!("frame rate: {}", frame_rate);
+    //let format = videoin.format();
+    //log_info!("format: {:?}", format);
+    //let frame_rate = videoin.frame_rate();
+    //log_info!("frame rate: {}", frame_rate);
 
     // Create display window
     let mut window = Window::new(
@@ -39,8 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         WindowOptions::default(),
     )?;
 
-    while window.is_open() && !window.is_key_down(Key::Escape) {
-        let frame = videoin.capture().await?;
+    while let Some(frame) = videoin.recv().await {
         let buf = frame_to_u32(&frame);
         window.update_with_buffer(&buf, frame.color.size.x, frame.color.size.y)?;
     }

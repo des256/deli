@@ -6,13 +6,15 @@ use {
     tokio::sync::mpsc as tokio_mpsc,
 };
 
-const LLAMA32_MODEL_PATH: &str = "data/llama32/model_int8.onnx";
-const LLAMA32_TOKENIZER_PATH: &str = "data/llama32/tokenizer.json";
+const LLAMA3_3B_MODEL_PATH: &str = "data/llm/llama3/3b/model.onnx";
+const LLAMA3_3B_TOKENIZER_PATH: &str = "data/llm/llama3/3b/tokenizer.json";
+const LLAMA3_8B_MODEL_PATH: &str = "data/llm/llama3/8b/model.onnx";
+const LLAMA3_8B_TOKENIZER_PATH: &str = "data/llm/llama3/8b/tokenizer.json";
 
 const EOS_TOKEN_IDS: &[u32] = &[128001, 128008, 128009];
 const DEFAULT_MAX_TOKENS: usize = 512;
 const NUM_KV_HEADS: usize = 8;
-const HEAD_DIM: usize = 64;
+const HEAD_DIM: usize = 128;
 
 pub(crate) fn generate<T: Clone + Send + 'static>(
     session: &mut onnx::Session,
@@ -250,12 +252,17 @@ fn parse_kv_cache_index(name: &str) -> Option<usize> {
     }
 }
 
-pub struct Llama32Handle<T: Clone + Send + 'static> {
+pub enum Llama3Flavor {
+    ThreeB,
+    EightB,
+}
+
+pub struct Llama3Handle<T: Clone + Send + 'static> {
     input_tx: std_mpsc::Sender<Stamped<LlmInput<T>>>,
     epoch: Epoch,
 }
 
-pub struct Llama32Listener<T: Clone + Send + 'static> {
+pub struct Llama3Listener<T: Clone + Send + 'static> {
     output_rx: tokio_mpsc::Receiver<Stamped<LlmOutput<T>>>,
 }
 
@@ -263,16 +270,20 @@ pub fn create<T: Clone + Send + 'static>(
     onnx: &Arc<onnx::Onnx>,
     executor: &onnx::Executor,
     epoch: Epoch,
-) -> Result<(Llama32Handle<T>, Llama32Listener<T>), InferError> {
+    flavor: Llama3Flavor,
+) -> Result<(Llama3Handle<T>, Llama3Listener<T>), InferError> {
+    let model_path = match flavor {
+        Llama3Flavor::ThreeB => LLAMA3_3B_MODEL_PATH,
+        Llama3Flavor::EightB => LLAMA3_8B_MODEL_PATH,
+    };
+    let tokenizer_path = match flavor {
+        Llama3Flavor::ThreeB => LLAMA3_3B_TOKENIZER_PATH,
+        Llama3Flavor::EightB => LLAMA3_8B_TOKENIZER_PATH,
+    };
     let mut session = onnx
-        .create_session(
-            executor,
-            &onnx::OptimizationLevel::EnableAll,
-            4,
-            LLAMA32_MODEL_PATH,
-        )
+        .create_session(executor, &onnx::OptimizationLevel::EnableAll, 4, model_path)
         .map_err(|e| InferError::Onnx(e.to_string()))?;
-    let tokenizer = Tokenizer::from_file(LLAMA32_TOKENIZER_PATH)
+    let tokenizer = Tokenizer::from_file(tokenizer_path)
         .map_err(|e| InferError::Runtime(format!("Failed to load tokenizer: {}", e)))?;
     let tokenizer = Arc::new(tokenizer);
 
@@ -385,10 +396,13 @@ pub fn create<T: Clone + Send + 'static>(
         }
     });
 
-    Ok((Llama32Handle { input_tx, epoch }, Llama32Listener { output_rx }))
+    Ok((
+        Llama3Handle { input_tx, epoch },
+        Llama3Listener { output_rx },
+    ))
 }
 
-impl<T: Clone + Send + 'static> Llama32Handle<T> {
+impl<T: Clone + Send + 'static> Llama3Handle<T> {
     // send prompt to LLM (stamped with current epoch)
     pub fn send(
         &self,
@@ -401,7 +415,7 @@ impl<T: Clone + Send + 'static> Llama32Handle<T> {
     }
 }
 
-impl<T: Clone + Send + 'static> Llama32Listener<T> {
+impl<T: Clone + Send + 'static> Llama3Listener<T> {
     // receive output from LLM
     pub async fn recv(&mut self) -> Option<Stamped<LlmOutput<T>>> {
         self.output_rx.recv().await

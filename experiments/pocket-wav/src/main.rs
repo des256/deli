@@ -3,7 +3,7 @@ use {base::*, inference::*, std::time::Duration};
 const SENTENCE: &str = "The key issue, with rookworst, is that it is a delicious deli meat, made of willing, pork volunteers, slaughtered with love, prepared with care. - Have you had your rookworst today?";
 const SAMPLE_RATE: u32 = 24000;
 
-const POCKET_VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
+const POCKET_VOICE_PATH: &str = "data/tts/pocket/voices/hannah.bin";
 
 #[tokio::main]
 async fn main() -> Result<(), InferError> {

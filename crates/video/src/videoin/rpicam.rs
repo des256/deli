@@ -7,7 +7,10 @@ use {
         PixelFormat, Request, Size, Stream, StreamRole,
     },
     std::sync::{Arc, mpsc},
+    tokio::sync::mpsc as tokio_mpsc,
 };
+
+const CHANNEL_CAPACITY: usize = 4;
 
 #[derive(Debug, Clone, Default)]
 pub struct RpiCamConfig {
@@ -53,27 +56,159 @@ struct PendingFrame {
 }
 
 pub(crate) struct RpiCamera {
-    manager: Option<CameraManager>,
-    camera: Option<Camera>,
-    allocator: Option<FrameBufferAllocator>,
-    buffers: Vec<FrameBuffer>,
-    requests: Vec<Request>,
-    mmaps: Arc<Vec<MmapBuffer>>,
-    stream: Option<Stream>,
-    frame_rx: Option<mpsc::Receiver<PendingFrame>>,
+    frame_rx: Option<tokio_mpsc::Receiver<VideoFrame>>,
+    size: Vec2<usize>,
+    format: ImagePixelFormat,
+    frame_rate: f32,
 }
 
-impl RpiCamera {
-    pub fn new() -> Self {
-        Self {
-            manager: None,
-            camera: None,
-            allocator: None,
-            buffers: Vec::new(),
-            requests: Vec::new(),
-            mmaps: Arc::new(Vec::new()),
-            stream: None,
-            frame_rx: None,
+fn create(config: Option<RpiCamConfig>) -> Result<RpiCamListener, VideoError> {
+    let (frame_tx, frame_rx) = tokio_mpsc::channel::<VideoFrame>(CHANNEL_CAPACITY);
+    let config = config.unwrap_or_default();
+    let manager = CameraManager::new()?;
+    if manager.cameras_count() == 0 {
+        return Err(VideoError::Device("no cameras found".to_string()));
+    }
+    let index = config.index.unwrap_or(0);
+    let mut camera = manager.get_camera(index)?;
+    camera.acquire()?;
+    let mut cam_config = camera.generate_configuration(&[StreamRole::VideoRecording])?;
+    {
+        let mut sc = cam_config.at(0)?;
+        if let Some(format) = &config.format {
+            let fourcc = format.as_fourcc();
+            sc.set_pixel_format(PixelFormat::from_fourcc(fourcc));
+        }
+        if let Some(size) = &config.size {
+            sc.set_size(Size::new(size.x as u32, size.y as u32));
+        }
+    }
+    let validate_status = cam_config.validate()?;
+    match validate_status {
+        ConfigStatus::Invalid => {
+            return Err(VideoError::Device(
+                "Invalid camera configuration".to_string(),
+            ));
+        }
+        _ => {}
+    }
+    camera.configure(&mut cam_config)?;
+    let (format, size, stream) = {
+        let sc = cam_config.at(0)?;
+        let pf = sc.pixel_format();
+        let format = ImagePixelFormat::from_fourcc(pf.fourcc)?;
+        let sz = sc.size();
+        let size = Vec2::new(sz.width as usize, sz.height as usize);
+        let stream = sc
+            .stream()
+            .ok_or(VideoError::Device("No stream available".to_string()))?;
+        (format, size, stream)
+    };
+    let frame_rate = config.frame_rate.unwrap_or(30.0);
+    let allocator = FrameBufferAllocator::new(&camera);
+    let buffer_count = allocator.allocate(&stream)?;
+    let mut buffers = Vec::with_capacity(buffer_count);
+    let mut mmap_buffers = Vec::with_capacity(buffer_count);
+    for i in 0..buffer_count {
+        let buffer = allocator.get_buffer(&stream, i)?;
+        let plane0 = buffer
+            .plane(0)
+            .ok_or(VideoError::Device(format!("Buffer {} has no planes", i)))?;
+        let mut mmap_len = (plane0.offset as usize) + (plane0.length as usize);
+        for p in 1..buffer.planes_count() {
+            if let Some(plane) = buffer.plane(p) {
+                let end = (plane.offset as usize) + (plane.length as usize);
+                if end > mmap_len {
+                    mmap_len = end;
+                }
+            }
+        }
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                mmap_len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                plane0.fd,
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            return Err(VideoError::Device(format!(
+                "Failed to mmap buffer {}: {}",
+                i,
+                std::io::Error::last_os_error(),
+            )));
+        }
+        mmap_buffers.push(MmapBuffer {
+            base: ptr,
+            base_len: mmap_len,
+            data_offset: 0,
+            data_len: mmap_len,
+        });
+        buffers.push(buffer);
+    }
+    let mut requests = Vec::with_capacity(buffer_count);
+    for i in 0..buffer_count {
+        let request = camera.create_request(i as u64)?;
+        request.add_buffer(&stream, &buffers[i])?;
+        requests.push(request);
+    }
+    camera.on_request_completed({
+        move |completed| {
+            let cookie = completed.cookie() as usize;
+            let buffer = completed.find_buffer(&stream)?;
+            if buffer.metadata().status != FrameStatus::Success {
+                return;
+            }
+            if cookie >= mmaps_buffers.len() {
+                return;
+            }
+            let raw_data = mmaps_buffers[cookie].data();
+            let data = match format {
+                ImagePixelFormat::Yuyv => {
+                    let expected = cb_size.x * cb_size.y * 2;
+                    raw_data[..expected.min(raw_data.len())].to_vec()
+                }
+                ImagePixelFormat::Jpeg => raw_data.to_vec(),
+                ImagePixelFormat::Srggb10p => raw_data.to_vec(),
+                ImagePixelFormat::Yu12 => {
+                    let expected = cb_size.x * cb_size.y * 3 / 2;
+                    raw_data[..expected.min(raw_data.len())].to_vec()
+                }
+                _ => return,
+            };
+            if let Err(error) = frame_tx.send(VideoFrame {
+                color: Image::new(size, data, format),
+                depth: None,
+                left: None,
+                right: None,
+            }) {
+                log_error!("failed to send video frame: {}", error);
+            }
+        }
+    });
+    camera.start()?;
+    for request in &requests {
+        camera.queue_request(request)?;
+    }
+    Ok(RpiCamListener {
+        frame_rx,
+        size,
+        format,
+        frame_rate,
+    })
+}
+
+impl RpiCamListener {
+    pub async fn recv(&mut self) -> Option<VideoFrame> {
+        self.frame_rx.recv().await
+    }
+
+    pub fn try_recv(&mut self) -> Option<VideoFrame> {
+        match self.frame_rx.try_recv() {
+            Ok(frame) => Some(frame),
+            _ => None,
         }
     }
 }
@@ -81,178 +216,6 @@ impl RpiCamera {
 impl VideoInDevice for RpiCamera {
     fn open(&mut self, config: &VideoInConfig) -> Result<VideoInConfig, VideoError> {
         self.close();
-
-        #[allow(irrefutable_let_patterns)]
-        let config = if let VideoInConfig::RpiCam(config) = config {
-            config
-        } else {
-            return Err(VideoError::Device(
-                "RpiCamera::open requires VideoInConfig::RpiCam".to_string(),
-            ));
-        };
-
-        // Create camera manager and acquire camera
-        let manager = CameraManager::new()?;
-        if manager.cameras_count() == 0 {
-            return Err(VideoError::Device("No cameras found".to_string()));
-        }
-        let index = config.index.unwrap_or(0);
-        let mut camera = manager.get_camera(index)?;
-        camera.acquire()?;
-
-        // Generate and apply configuration
-        let mut cam_config = camera.generate_configuration(&[StreamRole::VideoRecording])?;
-        {
-            let mut sc = cam_config.at(0)?;
-            if let Some(format) = &config.format {
-                let fourcc = format.as_fourcc();
-                sc.set_pixel_format(PixelFormat::from_fourcc(fourcc));
-            }
-            if let Some(size) = &config.size {
-                sc.set_size(Size::new(size.x as u32, size.y as u32));
-            }
-        }
-
-        let validate_status = cam_config.validate()?;
-        match validate_status {
-            ConfigStatus::Invalid => {
-                return Err(VideoError::Device(
-                    "Invalid camera configuration".to_string(),
-                ));
-            }
-            _ => {}
-        }
-        camera.configure(&mut cam_config)?;
-
-        // Read back the actual (possibly adjusted) configuration
-        let (actual_format, actual_size, stream);
-        {
-            let sc = cam_config.at(0)?;
-            let pf = sc.pixel_format();
-            actual_format = ImagePixelFormat::from_fourcc(pf.fourcc)?;
-            let sz = sc.size();
-            actual_size = Vec2::new(sz.width as usize, sz.height as usize);
-            stream = sc
-                .stream()
-                .ok_or(VideoError::Device("No stream available".to_string()))?;
-        }
-
-        let actual_frame_rate = config.frame_rate.unwrap_or(30.0);
-
-        // Allocate buffers
-        let allocator = FrameBufferAllocator::new(&camera);
-        let buffer_count = allocator.allocate(&stream)?;
-
-        // Get buffer handles and mmap each buffer covering all planes
-        let mut buffers = Vec::with_capacity(buffer_count);
-        let mut mmap_buffers = Vec::with_capacity(buffer_count);
-
-        for i in 0..buffer_count {
-            let buffer = allocator.get_buffer(&stream, i)?;
-            let plane0 = buffer
-                .plane(0)
-                .ok_or(VideoError::Device(format!("Buffer {i} has no planes")))?;
-
-            // Find the total extent across all planes (they share the same fd)
-            let mut mmap_len = (plane0.offset as usize) + (plane0.length as usize);
-            for p in 1..buffer.planes_count() {
-                if let Some(plane) = buffer.plane(p) {
-                    let end = (plane.offset as usize) + (plane.length as usize);
-                    if end > mmap_len {
-                        mmap_len = end;
-                    }
-                }
-            }
-
-            let ptr = unsafe {
-                libc::mmap(
-                    std::ptr::null_mut(),
-                    mmap_len,
-                    libc::PROT_READ,
-                    libc::MAP_SHARED,
-                    plane0.fd,
-                    0,
-                )
-            };
-
-            if ptr == libc::MAP_FAILED {
-                return Err(VideoError::Device(format!(
-                    "Failed to mmap buffer {i}: {}",
-                    std::io::Error::last_os_error(),
-                )));
-            }
-
-            mmap_buffers.push(MmapBuffer {
-                base: ptr,
-                base_len: mmap_len,
-                data_offset: 0,
-                data_len: mmap_len,
-            });
-            buffers.push(buffer);
-        }
-
-        let mmaps = Arc::new(mmap_buffers);
-
-        // Create requests, each bound to one buffer
-        let mut requests = Vec::with_capacity(buffer_count);
-        for i in 0..buffer_count {
-            let request = camera.create_request(i as u64)?;
-            request.add_buffer(&stream, &buffers[i])?;
-            requests.push(request);
-        }
-
-        // Set up frame delivery: callback copies data from mmap and sends through channel
-        let (frame_tx, frame_rx) = mpsc::channel::<PendingFrame>();
-        let mmaps_cb = Arc::clone(&mmaps);
-        let stream_cb = stream.clone();
-        let cb_size = actual_size;
-        let cb_format = actual_format;
-
-        camera.on_request_completed(move |completed| {
-            let cookie = completed.cookie() as usize;
-
-            let frame = (|| -> Option<VideoFrame> {
-                let buffer = completed.find_buffer(&stream_cb)?;
-                if buffer.metadata().status != FrameStatus::Success {
-                    return None;
-                }
-                if cookie >= mmaps_cb.len() {
-                    return None;
-                }
-
-                let raw_data = mmaps_cb[cookie].data();
-
-                let data = match cb_format {
-                    ImagePixelFormat::Yuyv => {
-                        let expected = cb_size.x * cb_size.y * 2;
-                        raw_data[..expected.min(raw_data.len())].to_vec()
-                    }
-                    ImagePixelFormat::Jpeg => raw_data.to_vec(),
-                    ImagePixelFormat::Srggb10p => raw_data.to_vec(),
-                    ImagePixelFormat::Yu12 => {
-                        let expected = cb_size.x * cb_size.y * 3 / 2;
-                        raw_data[..expected.min(raw_data.len())].to_vec()
-                    }
-                    _ => return None,
-                };
-
-                Some(VideoFrame {
-                    color: Image::new(cb_size, data, cb_format),
-                    depth: None,
-                    left: None,
-                    right: None,
-                })
-            })();
-
-            // Always send so the request gets re-queued in blocking_capture
-            let _ = frame_tx.send(PendingFrame { cookie, frame });
-        });
-
-        // Start capturing and queue all requests
-        camera.start()?;
-        for request in &requests {
-            camera.queue_request(request)?;
-        }
 
         // Store state
         self.manager = Some(manager);

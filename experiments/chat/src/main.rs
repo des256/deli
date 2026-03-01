@@ -5,14 +5,14 @@ use {
     std::{
         io::Write,
         sync::{
-            atomic::{AtomicU64, Ordering},
             Arc,
+            atomic::{AtomicU64, Ordering},
         },
         time::{Duration, Instant},
     },
 };
 
-const VOICE_PATH: &str = "data/pocket/voices/hannah.bin";
+const VOICE_PATH: &str = "data/tts/pocket/voices/hannah.bin";
 const VAD_FRAME_SIZE: usize = 512;
 const ASR_SAMPLE_RATE: usize = 16000;
 const TTS_SAMPLE_RATE: usize = 24000;
@@ -65,29 +65,35 @@ async fn main() -> Result<(), InferError> {
         epoch.clone(),
     );
     let audioout_handle = Arc::new(audioout_handle);
+    println!(">> {}", inference.mem_info());
 
     // load VAD
     log_info!("Loading VAD...");
     let mut vad = inference.use_silero(&onnx::Executor::Cpu, ASR_SAMPLE_RATE)?;
+    println!(">> {}", inference.mem_info());
 
     // load ASR
     log_info!("Loading ASR...");
     let (asr_handle, mut asr_listener) = inference.use_parakeet::<u64>(&onnx::Executor::Cuda(0))?;
     let asr_handle = Arc::new(asr_handle);
+    println!(">> {}", inference.mem_info());
 
     // load LLM
     log_info!("Loading LLM...");
     let (llm_handle, mut llm_listener) =
         //inference.use_phi3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
-        inference.use_gemma3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
-    //inference.use_llama32::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        //inference.use_gemma3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        //inference.use_llama3_3b::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        inference.use_llama3_8b::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
     let llm_handle = Arc::new(llm_handle);
+    println!(">> {}", inference.mem_info());
 
     // load TTS
     log_info!("Loading TTS...");
     let (tts_handle, mut tts_listener) =
         inference.use_pocket::<u64>(&onnx::Executor::Cpu, &VOICE_PATH, epoch.clone())?;
     let tts_handle = Arc::new(tts_handle);
+    println!(">> {}", inference.mem_info());
 
     // global clock
     let global_start = Instant::now();
@@ -156,8 +162,7 @@ async fn main() -> Result<(), InferError> {
                                         now.as_millis(),
                                         source_audio_id,
                                     );
-                                    speech_end_ms
-                                        .store(now.as_millis() as u64, Ordering::Release);
+                                    speech_end_ms.store(now.as_millis() as u64, Ordering::Release);
                                     if let Err(error) = asr_handle.flush(source_audio_id) {
                                         log_error!("ASR flush failed: {}", error);
                                     }
@@ -227,10 +232,7 @@ async fn main() -> Result<(), InferError> {
                         let end_ms = speech_end_ms.load(Ordering::Acquire);
                         if end_ms > 0 && end_ms != thinking_reported_for_ms {
                             let now_ms = global_start.elapsed().as_millis() as u64;
-                            println!(
-                                ">> thinking time: {}ms",
-                                now_ms.saturating_sub(end_ms),
-                            );
+                            println!(">> thinking time: {}ms", now_ms.saturating_sub(end_ms),);
                             thinking_reported_for_ms = end_ms;
                         }
                     }

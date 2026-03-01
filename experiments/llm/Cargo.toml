@@ -1,0 +1,17 @@
+[package]
+name = "llm"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "llm"
+path = "src/main.rs"
+
+[features]
+cuda = ["inference/cuda"]
+
+[dependencies]
+inference = { path = "../../crates/inference" }
+base = { path = "../../crates/base" }
+onnx = { path = "../../crates/onnx" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

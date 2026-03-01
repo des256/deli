@@ -9,6 +9,7 @@ codec = { path = "../../../crates/codec" }
 com = { path = "../../../crates/com" }
 image = { path = "../../../crates/image" }
 audio = { path = "../../../crates/audio" }
+onnx = { path = "../../../crates/onnx" }
 video = { path = "../../../crates/video", features = ["realsense"] }
 inference = { path = "../../../crates/inference", features = ["cuda"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
