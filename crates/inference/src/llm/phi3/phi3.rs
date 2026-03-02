@@ -389,11 +389,18 @@ pub fn create<T: Clone + Send + 'static>(
 }
 
 impl<T: Clone + Send + 'static> Phi3Handle<T> {
-    /// Format an utterance into a Phi-3 chat prompt.
-    pub fn format_prompt(&self, utterance: &str) -> String {
-        format!(
-            "<|system|>\nYou are a helpful assistant. Keep responses concise.<|end|>\n<|user|>\n{utterance}<|end|>\n<|assistant|>\n",
-        )
+    pub async fn format_prompt(&self, history: &History, count: usize) -> String {
+        let mut prompt = format!("<|system|>\nKeep responses concise.<|end|>\n");
+        let entries: Vec<Entry> = history.get_most_recent(count).await;
+        for entry in entries.iter() {
+            let speaker = match entry.speaker {
+                Speaker::User => "user",
+                Speaker::Model => "assistant",
+            };
+            prompt.push_str(&format!("<|{}|>\n{}<|end|>\n", speaker, entry.sentence));
+        }
+        prompt.push_str("<|assistant|>\n");
+        prompt
     }
 
     // send prompt to LLM (stamped with current epoch)

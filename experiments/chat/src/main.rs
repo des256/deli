@@ -37,6 +37,7 @@ const VAD_PREROLL_CHUNKS: usize = 3;
 struct ChatPayload {
     id: u64,
     speech_end_ms: u64,
+    text: String,
 }
 
 /// VAD state machine for speech segmentation.
@@ -95,10 +96,10 @@ async fn main() -> Result<(), InferError> {
     // load LLM
     log_info!("Loading LLM...");
     let (llm_handle, mut llm_listener) =
-        //inference.use_phi3::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
-        //inference.use_gemma3::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
-        //inference.use_llama3_3b::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
-        inference.use_llama3_8b::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        inference.use_phi3::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
+    //inference.use_gemma3::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
+    //inference.use_llama3_3b::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
+    //inference.use_llama3_8b::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
     let llm_handle = Arc::new(llm_handle);
     println!(">> {}", inference.mem_info());
 
@@ -114,6 +115,9 @@ async fn main() -> Result<(), InferError> {
 
     // shared timestamp: when VAD last signaled speech end (ms from global_start, 0 = unset)
     let speech_end_ms = Arc::new(AtomicU64::new(0));
+
+    // chat history
+    let history = Arc::new(History::new());
 
     // task: AudioIn + VAD pump
     // VAD gates audio to ASR: only speech segments (plus pre-roll) are sent.
@@ -197,8 +201,8 @@ async fn main() -> Result<(), InferError> {
 
                 // Send audio to ASR only during speech (Speaking, Cooldown, or the
                 // chunk where speech just ended — it still contains trailing speech)
-                let in_speech = matches!(phase, VadPhase::Speaking | VadPhase::Cooldown(_))
-                    || speech_ended;
+                let in_speech =
+                    matches!(phase, VadPhase::Speaking | VadPhase::Cooldown(_)) || speech_ended;
 
                 if in_speech || speech_started {
                     if let Err(error) = asr_handle.send(AsrInput {
@@ -265,21 +269,26 @@ async fn main() -> Result<(), InferError> {
     log_info!("Spawning AudioOut pump...");
     tokio::spawn({
         let global_start = global_start;
+        let history = Arc::clone(&history);
         async move {
             let mut current_index = 0usize;
-            let mut current_sentence_id = 0u64;
+            let mut current_sentence_id = u64::MAX;
+            let mut sentence_text = String::new();
+            let mut samples_per_char = 0.0f64;
             let mut thinking_reported_for_ms = 0u64;
             while let Some(status) = audioout_listener.recv().await {
+                let now = global_start.elapsed();
                 match status {
                     AudioOutStatus::Started(payload) => {
                         if current_sentence_id != payload.payload.id {
                             current_sentence_id = payload.payload.id;
                             current_index = 0;
+                            sentence_text = payload.payload.text.clone();
                         }
                         // Report thinking time on the first audio chunk after each speech end
                         let end_ms = payload.payload.speech_end_ms;
                         if end_ms > 0 && end_ms != thinking_reported_for_ms {
-                            let now_ms = global_start.elapsed().as_millis() as u64;
+                            let now_ms = now.as_millis() as u64;
                             println!(">> thinking time: {}ms", now_ms.saturating_sub(end_ms));
                             thinking_reported_for_ms = end_ms;
                         }
@@ -287,18 +296,38 @@ async fn main() -> Result<(), InferError> {
                     AudioOutStatus::Finished { payload, index } => {
                         if current_sentence_id == payload.payload.id {
                             current_index += index;
+                            if payload.last {
+                                history
+                                    .add_entry(Entry {
+                                        timestamp: now.as_millis() as u64,
+                                        speaker: Speaker::Model,
+                                        sentence: sentence_text.clone(),
+                                    })
+                                    .await;
+                                if sentence_text.len() > 10 {
+                                    samples_per_char =
+                                        current_index as f64 / sentence_text.len() as f64;
+                                }
+                            }
                         }
                     }
                     AudioOutStatus::Canceled { payload, index } => {
                         if current_sentence_id == payload.payload.id {
                             current_index += index;
-                            println!(
-                                "AudioOut: canceled ({}:{}) at {}: {:.2}s",
-                                current_sentence_id,
-                                payload.id,
-                                current_index,
-                                current_index as f64 / TTS_SAMPLE_RATE as f64,
-                            );
+                            let truncated: String = if samples_per_char > 0.0 {
+                                let chars_played =
+                                    (current_index as f64 / samples_per_char).round() as usize;
+                                sentence_text.chars().take(chars_played).collect()
+                            } else {
+                                sentence_text.clone()
+                            };
+                            history
+                                .add_entry(Entry {
+                                    timestamp: now.as_millis() as u64,
+                                    speaker: Speaker::Model,
+                                    sentence: format!("{}...", truncated),
+                                })
+                                .await;
                         }
                     }
                 }
@@ -315,6 +344,7 @@ async fn main() -> Result<(), InferError> {
         let llm_handle = Arc::clone(&llm_handle);
         let epoch = epoch.clone();
         let speech_end_ms = Arc::clone(&speech_end_ms);
+        let history = Arc::clone(&history);
         async move {
             let mut accumulator = String::new();
             let mut current_epoch = epoch.current();
@@ -367,11 +397,21 @@ async fn main() -> Result<(), InferError> {
                         text,
                     );
 
-                    let prompt = llm_handle.format_prompt(&text);
+                    history
+                        .add_entry(Entry {
+                            timestamp: now.as_millis() as u64,
+                            speaker: Speaker::User,
+                            sentence: text.clone(),
+                        })
+                        .await;
+
+                    let prompt = llm_handle.format_prompt(&history, 5).await;
+                    println!(">> prompt: {}", prompt);
                     if let Err(error) = llm_handle.send(LlmInput {
                         payload: ChatPayload {
                             id: utterance_id,
                             speech_end_ms: speech_end_ms.load(Ordering::Acquire),
+                            text: String::new(),
                         },
                         prompt,
                     }) {
@@ -419,13 +459,14 @@ async fn main() -> Result<(), InferError> {
                                     trimmed,
                                     llm_id,
                                 );
-                                let trimmed = format!("   {}     ", trimmed);
+                                let padded = format!("   {}     ", trimmed);
                                 if let Err(error) = tts_handle.send(TtsInput {
                                     payload: ChatPayload {
                                         id: llm_id,
                                         speech_end_ms: payload.speech_end_ms,
+                                        text: trimmed,
                                     },
-                                    text: trimmed,
+                                    text: padded,
                                 }) {
                                     log_error!("TTS send failed: {}", error);
                                 }
@@ -448,6 +489,7 @@ async fn main() -> Result<(), InferError> {
                                 payload: ChatPayload {
                                     id: llm_id,
                                     speech_end_ms: payload.speech_end_ms,
+                                    text: trimmed.clone(),
                                 },
                                 text: trimmed,
                             }) {

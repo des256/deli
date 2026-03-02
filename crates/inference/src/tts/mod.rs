@@ -2,6 +2,7 @@
 pub struct TtsPayload<T: Clone + Send + 'static> {
     pub payload: T,
     pub id: u64,
+    pub last: bool,
 }
 
 #[derive(Clone, Debug)]

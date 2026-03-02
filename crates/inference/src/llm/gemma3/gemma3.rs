@@ -412,8 +412,21 @@ pub fn create<T: Clone + Send + 'static>(
 
 impl<T: Clone + Send + 'static> Gemma3Handle<T> {
     /// Format an utterance into a Gemma 3 chat prompt.
-    pub fn format_prompt(&self, utterance: &str) -> String {
-        format!("<start_of_turn>user\n{utterance}<end_of_turn>\n<start_of_turn>model\n")
+    pub async fn format_prompt(&self, history: &History, count: usize) -> String {
+        let mut prompt = String::new();
+        let entries: Vec<Entry> = history.get_most_recent(count).await;
+        for entry in entries.iter() {
+            let speaker = match entry.speaker {
+                Speaker::User => "user",
+                Speaker::Model => "model",
+            };
+            prompt.push_str(&format!(
+                "<start_of_turn>{}\n{}<end_of_turn>\n",
+                speaker, entry.sentence
+            ));
+        }
+        prompt.push_str("<start_of_turn>model\n");
+        prompt
     }
 
     // send prompt to LLM (stamped with current epoch)

@@ -1,9 +1,7 @@
 # TODO
 
-- at the end of speaking audio, or at cancelation, figure out what was actually said in audio, and add that to the chat history
 - connect up diarization to get speaker embeddings
 - repair realsense code
-- remove ability to select() on AudioIn and AudioOut
 - audio source and sink reset, maybe hardcode in the app
 - settings page in the webui
 
@@ -18,6 +16,10 @@
 - Qwen 3 8b: when conversions become available
 - Llama 4 8b: when conversions become available
 - Deepseek 4 8b: when conversions become available
+
+# REFACTOR
+
+- remove ability to select() on AudioIn and AudioOut
 
 # TESTY
 

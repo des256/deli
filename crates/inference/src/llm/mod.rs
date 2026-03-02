@@ -11,3 +11,6 @@ pub enum LlmOutput<T: Clone + Send + 'static> {
 pub mod gemma3;
 pub mod llama3;
 pub mod phi3;
+
+mod history;
+pub use history::*;

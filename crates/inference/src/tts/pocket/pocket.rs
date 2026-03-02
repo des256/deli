@@ -605,12 +605,14 @@ pub fn create<T: Clone + Send + 'static>(
                                 break;
                             }
 
+                            let is_last = matches!(eos_countdown, Some(0));
                             if let Err(e) = output_tx.blocking_send(Stamped {
                                 epoch: my_epoch,
                                 inner: TtsOutput {
                                     payload: TtsPayload {
                                         payload: input.payload.clone(),
                                         id: current_id,
+                                        last: is_last,
                                     },
                                     data: sample,
                                 },
