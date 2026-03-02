@@ -403,6 +403,13 @@ pub fn create<T: Clone + Send + 'static>(
 }
 
 impl<T: Clone + Send + 'static> Llama3Handle<T> {
+    /// Format an utterance into a Llama 3 chat prompt.
+    pub fn format_prompt(&self, utterance: &str) -> String {
+        format!(
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant. Keep responses concise.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{utterance}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
+        )
+    }
+
     // send prompt to LLM (stamped with current epoch)
     pub fn send(
         &self,

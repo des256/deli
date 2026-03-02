@@ -1,13 +1,15 @@
 # TODO
 
-- TTS output sometimes garbles, maybe because of strange symbols from the LLM
-- TTS also doesn't quite finish the job, might need silence at the end, maybe in formatting (we saw that in another implementation)
-- ASR sometimes doesn't pick up the audio, might be the VAD kicking in too late or need to prepend ASR with silence
-- parameterize minimum thinking time and maybe time between sentences
 - at the end of speaking audio, or at cancelation, figure out what was actually said in audio, and add that to the chat history
 - connect up diarization to get speaker embeddings
 - repair realsense code
 - remove ability to select() on AudioIn and AudioOut
+- audio source and sink reset, maybe hardcode in the app
+- settings page in the webui
+
+# EXPLORING
+
+- parameterize minimum thinking time and maybe time between sentences
 
 # LATER
 

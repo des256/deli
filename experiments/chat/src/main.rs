@@ -3,6 +3,7 @@ use {
     base::*,
     inference::*,
     std::{
+        collections::VecDeque,
         io::Write,
         sync::{
             Arc,
@@ -24,6 +25,19 @@ const VAD_COOLDOWN_FRAMES: u32 = 15; // ~480ms of silence before utterance ends
 // Smaller chunks = lower latency for VAD detection.
 // 512 * 4 = 2048 samples = 128ms at 16kHz, giving 4 clean VAD frames per chunk.
 const AUDIOIN_CHUNK_SIZE: usize = VAD_FRAME_SIZE * 4;
+
+// Number of recent audio chunks to keep as pre-roll.
+// When VAD detects speech start, these are flushed to ASR first to capture the onset
+// that VAD needed to make its decision. 3 chunks = ~384ms at 128ms/chunk.
+const VAD_PREROLL_CHUNKS: usize = 3;
+
+/// Payload that carries the speech-end timestamp through the pipeline.
+/// The `id` field holds different IDs at each stage (utterance_id, sentence_id).
+#[derive(Clone, Debug)]
+struct ChatPayload {
+    id: u64,
+    speech_end_ms: u64,
+}
 
 /// VAD state machine for speech segmentation.
 enum VadPhase {
@@ -57,7 +71,7 @@ async fn main() -> Result<(), InferError> {
 
     // initialize AudioOut
     log_info!("Opening audio output...");
-    let (audioout_handle, mut audioout_listener) = audio::create_audioout::<TtsPayload<u64>>(
+    let (audioout_handle, mut audioout_listener) = audio::create_audioout::<TtsPayload<ChatPayload>>(
         Some(AudioOutConfig {
             sample_rate: TTS_SAMPLE_RATE,
             ..Default::default()
@@ -81,17 +95,17 @@ async fn main() -> Result<(), InferError> {
     // load LLM
     log_info!("Loading LLM...");
     let (llm_handle, mut llm_listener) =
-        //inference.use_phi3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
-        //inference.use_gemma3::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
-        //inference.use_llama3_3b::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
-        inference.use_llama3_8b::<u64>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        //inference.use_phi3::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        //inference.use_gemma3::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        //inference.use_llama3_3b::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
+        inference.use_llama3_8b::<ChatPayload>(&onnx::Executor::Cuda(0), epoch.clone())?;
     let llm_handle = Arc::new(llm_handle);
     println!(">> {}", inference.mem_info());
 
     // load TTS
     log_info!("Loading TTS...");
     let (tts_handle, mut tts_listener) =
-        inference.use_pocket::<u64>(&onnx::Executor::Cpu, &VOICE_PATH, epoch.clone())?;
+        inference.use_pocket::<ChatPayload>(&onnx::Executor::Cpu, &VOICE_PATH, epoch.clone())?;
     let tts_handle = Arc::new(tts_handle);
     println!(">> {}", inference.mem_info());
 
@@ -102,7 +116,7 @@ async fn main() -> Result<(), InferError> {
     let speech_end_ms = Arc::new(AtomicU64::new(0));
 
     // task: AudioIn + VAD pump
-    // Sends all audio to ASR for streaming processing.
+    // VAD gates audio to ASR: only speech segments (plus pre-roll) are sent.
     // VAD state machine controls epoch advancement (on speech start) and ASR flush (on speech end).
     log_info!("Spawning AudioIn+VAD pump...");
     tokio::spawn({
@@ -112,19 +126,15 @@ async fn main() -> Result<(), InferError> {
         async move {
             let mut source_audio_id = 0u64;
             let mut phase = VadPhase::Idle;
+            let mut pre_roll: VecDeque<Vec<i16>> = VecDeque::with_capacity(VAD_PREROLL_CHUNKS + 1);
 
             while let Some(audio) = audioin_listener.recv().await {
                 let now = global_start.elapsed();
 
-                // Always send audio to ASR for streaming feature extraction
-                if let Err(error) = asr_handle.send(AsrInput {
-                    payload: source_audio_id,
-                    audio: audio.clone(),
-                }) {
-                    log_error!("ASR send failed: {}", error);
-                }
+                // Process VAD first to determine whether this chunk should go to ASR
+                let mut speech_started = false;
+                let mut speech_ended = false;
 
-                // Process VAD on each frame within this chunk
                 for chunk in audio.chunks_exact(VAD_FRAME_SIZE) {
                     let prob = vad.process(chunk).unwrap_or(0.0);
 
@@ -141,6 +151,7 @@ async fn main() -> Result<(), InferError> {
                                     new_epoch,
                                 );
                                 phase = VadPhase::Speaking;
+                                speech_started = true;
                             }
                         }
                         VadPhase::Speaking => {
@@ -163,13 +174,51 @@ async fn main() -> Result<(), InferError> {
                                         source_audio_id,
                                     );
                                     speech_end_ms.store(now.as_millis() as u64, Ordering::Release);
-                                    if let Err(error) = asr_handle.flush(source_audio_id) {
-                                        log_error!("ASR flush failed: {}", error);
-                                    }
+                                    speech_ended = true;
                                     phase = VadPhase::Idle;
                                 }
                             }
                         }
+                    }
+                }
+
+                // Send pre-roll buffer to ASR on speech onset (captures the beginning
+                // of the utterance that VAD needed to make its detection decision)
+                if speech_started {
+                    for pre_chunk in pre_roll.drain(..) {
+                        if let Err(error) = asr_handle.send(AsrInput {
+                            payload: source_audio_id,
+                            audio: pre_chunk,
+                        }) {
+                            log_error!("ASR pre-roll send failed: {}", error);
+                        }
+                    }
+                }
+
+                // Send audio to ASR only during speech (Speaking, Cooldown, or the
+                // chunk where speech just ended — it still contains trailing speech)
+                let in_speech = matches!(phase, VadPhase::Speaking | VadPhase::Cooldown(_))
+                    || speech_ended;
+
+                if in_speech || speech_started {
+                    if let Err(error) = asr_handle.send(AsrInput {
+                        payload: source_audio_id,
+                        audio,
+                    }) {
+                        log_error!("ASR send failed: {}", error);
+                    }
+                } else {
+                    // Idle — buffer for pre-roll
+                    if pre_roll.len() >= VAD_PREROLL_CHUNKS {
+                        pre_roll.pop_front();
+                    }
+                    pre_roll.push_back(audio);
+                }
+
+                // Flush ASR after sending the final chunk (so it processes everything first)
+                if speech_ended {
+                    if let Err(error) = asr_handle.flush(source_audio_id) {
+                        log_error!("ASR flush failed: {}", error);
                     }
                 }
 
@@ -215,7 +264,6 @@ async fn main() -> Result<(), InferError> {
     // task: AudioOut status pump
     log_info!("Spawning AudioOut pump...");
     tokio::spawn({
-        let speech_end_ms = Arc::clone(&speech_end_ms);
         let global_start = global_start;
         async move {
             let mut current_index = 0usize;
@@ -224,25 +272,25 @@ async fn main() -> Result<(), InferError> {
             while let Some(status) = audioout_listener.recv().await {
                 match status {
                     AudioOutStatus::Started(payload) => {
-                        if current_sentence_id != payload.payload {
-                            current_sentence_id = payload.payload;
+                        if current_sentence_id != payload.payload.id {
+                            current_sentence_id = payload.payload.id;
                             current_index = 0;
                         }
                         // Report thinking time on the first audio chunk after each speech end
-                        let end_ms = speech_end_ms.load(Ordering::Acquire);
+                        let end_ms = payload.payload.speech_end_ms;
                         if end_ms > 0 && end_ms != thinking_reported_for_ms {
                             let now_ms = global_start.elapsed().as_millis() as u64;
-                            println!(">> thinking time: {}ms", now_ms.saturating_sub(end_ms),);
+                            println!(">> thinking time: {}ms", now_ms.saturating_sub(end_ms));
                             thinking_reported_for_ms = end_ms;
                         }
                     }
                     AudioOutStatus::Finished { payload, index } => {
-                        if current_sentence_id == payload.payload {
+                        if current_sentence_id == payload.payload.id {
                             current_index += index;
                         }
                     }
                     AudioOutStatus::Canceled { payload, index } => {
-                        if current_sentence_id == payload.payload {
+                        if current_sentence_id == payload.payload.id {
                             current_index += index;
                             println!(
                                 "AudioOut: canceled ({}:{}) at {}: {:.2}s",
@@ -266,6 +314,7 @@ async fn main() -> Result<(), InferError> {
     tokio::spawn({
         let llm_handle = Arc::clone(&llm_handle);
         let epoch = epoch.clone();
+        let speech_end_ms = Arc::clone(&speech_end_ms);
         async move {
             let mut accumulator = String::new();
             let mut current_epoch = epoch.current();
@@ -318,23 +367,12 @@ async fn main() -> Result<(), InferError> {
                         text,
                     );
 
-                    // Llama 3.2 chat template
-                    //let prompt = format!(
-                    //    "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\nYou are a helpful assistant. Keep responses concise.<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
-                    //    text,
-                    //);
-                    // Gemma 3 chat template
-                    let prompt = format!(
-                        "<start_of_turn>user\n{}<end_of_turn>\n<start_of_turn>model\n",
-                        text,
-                    );
-                    // Phi-3 chat template
-                    // let prompt = format!(
-                    //     "<|system|>\nYou are a helpful assistant. Keep responses concise.<|end|>\n<|user|>\n{}<|end|>\n<|assistant|>\n",
-                    //     text,
-                    // );
+                    let prompt = llm_handle.format_prompt(&text);
                     if let Err(error) = llm_handle.send(LlmInput {
-                        payload: utterance_id,
+                        payload: ChatPayload {
+                            id: utterance_id,
+                            speech_end_ms: speech_end_ms.load(Ordering::Acquire),
+                        },
                         prompt,
                     }) {
                         log_error!("LLM send failed: {}", error);
@@ -377,12 +415,16 @@ async fn main() -> Result<(), InferError> {
                                 println!(
                                     "[{:010}ms] LLM UT{:04}: \"{}\" -> TTS LL{:04}",
                                     now.as_millis(),
-                                    payload,
+                                    payload.id,
                                     trimmed,
                                     llm_id,
                                 );
+                                let trimmed = format!("   {}     ", trimmed);
                                 if let Err(error) = tts_handle.send(TtsInput {
-                                    payload: llm_id,
+                                    payload: ChatPayload {
+                                        id: llm_id,
+                                        speech_end_ms: payload.speech_end_ms,
+                                    },
                                     text: trimmed,
                                 }) {
                                     log_error!("TTS send failed: {}", error);
@@ -398,12 +440,15 @@ async fn main() -> Result<(), InferError> {
                             println!(
                                 "[{:010}ms] LLM UT{:04}: \"{}\" -> TTS LL{:04} (EOS)",
                                 now.as_millis(),
-                                payload,
+                                payload.id,
                                 trimmed,
                                 llm_id,
                             );
                             if let Err(error) = tts_handle.send(TtsInput {
-                                payload: llm_id,
+                                payload: ChatPayload {
+                                    id: llm_id,
+                                    speech_end_ms: payload.speech_end_ms,
+                                },
                                 text: trimmed,
                             }) {
                                 log_error!("TTS send failed: {}", error);

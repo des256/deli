@@ -411,6 +411,11 @@ pub fn create<T: Clone + Send + 'static>(
 }
 
 impl<T: Clone + Send + 'static> Gemma3Handle<T> {
+    /// Format an utterance into a Gemma 3 chat prompt.
+    pub fn format_prompt(&self, utterance: &str) -> String {
+        format!("<start_of_turn>user\n{utterance}<end_of_turn>\n<start_of_turn>model\n")
+    }
+
     // send prompt to LLM (stamped with current epoch)
     pub fn send(
         &self,

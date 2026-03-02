@@ -389,6 +389,13 @@ pub fn create<T: Clone + Send + 'static>(
 }
 
 impl<T: Clone + Send + 'static> Phi3Handle<T> {
+    /// Format an utterance into a Phi-3 chat prompt.
+    pub fn format_prompt(&self, utterance: &str) -> String {
+        format!(
+            "<|system|>\nYou are a helpful assistant. Keep responses concise.<|end|>\n<|user|>\n{utterance}<|end|>\n<|assistant|>\n",
+        )
+    }
+
     // send prompt to LLM (stamped with current epoch)
     pub fn send(
         &self,
