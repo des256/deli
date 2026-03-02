@@ -13,7 +13,7 @@ use {
     },
 };
 
-const VOICE_PATH: &str = "data/tts/pocket/voices/hannah.bin";
+const VOICE_PATH: &str = "data/tts/pocket/voices/stephen.bin";
 const VAD_FRAME_SIZE: usize = 512;
 const ASR_SAMPLE_RATE: usize = 16000;
 const TTS_SAMPLE_RATE: usize = 24000;
@@ -60,10 +60,12 @@ async fn main() -> Result<(), InferError> {
     // initialize AudioIn (smaller chunks for lower VAD latency)
     log_info!("Opening audio input...");
     let mut audioin_listener = create_audioin(Some(AudioInConfig {
+        device_name: Some(
+            "alsa_input.usb-SEEED_ReSpeaker_4_Mic_Array__UAC1.0_-00.mono-fallback".to_string(),
+        ),
         sample_rate: ASR_SAMPLE_RATE,
         chunk_size: AUDIOIN_CHUNK_SIZE,
         boost: 4,
-        ..Default::default()
     }))
     .await;
 
@@ -74,12 +76,15 @@ async fn main() -> Result<(), InferError> {
     log_info!("Opening audio output...");
     let (audioout_handle, mut audioout_listener) = audio::create_audioout::<TtsPayload<ChatPayload>>(
         Some(AudioOutConfig {
+            device_name: Some(
+                "alsa_output.usb-SEEED_ReSpeaker_4_Mic_Array__UAC1.0_-00.analog-stereo".to_string(),
+            ),
             sample_rate: TTS_SAMPLE_RATE,
-            ..Default::default()
         }),
         epoch.clone(),
     );
     let audioout_handle = Arc::new(audioout_handle);
+
     println!(">> {}", inference.mem_info());
 
     // load VAD

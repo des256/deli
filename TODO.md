@@ -2,7 +2,6 @@
 
 - connect up diarization to get speaker embeddings
 - repair realsense code
-- audio source and sink reset, maybe hardcode in the app
 - settings page in the webui
 
 # EXPLORING
